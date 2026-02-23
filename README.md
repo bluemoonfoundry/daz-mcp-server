@@ -1,6 +1,6 @@
 # vangard-daz-mcp
 
-MCP server wrapping the [DazScriptServer](https://github.com/bluemoonfoundry/vangard-daz-script-server) HTTP API for DAZ Studio.
+MCP server wrapping the [DazScriptServer](https://github.com/bluemoonfoundry/vangard-daz-script-server) HTTP plugin for DAZ Studio.
 
 ## Tools
 
