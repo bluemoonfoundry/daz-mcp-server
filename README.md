@@ -1,5 +1,7 @@
 # vangard-daz-mcp
 
+[![Security Scan](https://img.shields.io/endpoint?url=https://mcpampel.com/badge/bluemoonfoundry/vangard-daz-mcp.json)](https://mcpampel.com/repo/bluemoonfoundry/vangard-daz-mcp)
+
 MCP server wrapping the [DazScriptServer](https://github.com/bluemoonfoundry/vangard-daz-script-server) HTTP plugin for DAZ Studio.
 
 ## Tools
