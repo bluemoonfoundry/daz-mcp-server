@@ -15,6 +15,21 @@ DAZ_TIMEOUT = float(os.environ.get("DAZ_TIMEOUT", "30.0"))
 
 BASE_URL = f"http://{DAZ_HOST}:{DAZ_PORT}"
 
+_TOKEN_FILE = os.path.join(os.path.expanduser("~"), ".daz3d", "dazscriptserver_token.txt")
+
+
+def _load_token_from_file() -> str:
+    """Read the API token written by DazScriptServer, if the file exists."""
+    try:
+        with open(_TOKEN_FILE) as f:
+            return f.read().strip()
+    except OSError:
+        return ""
+
+
+# Prefer an explicit env var; fall back to the token file DazScriptServer writes.
+DAZ_API_TOKEN: str = os.environ.get("DAZ_API_TOKEN") or _load_token_from_file()
+
 # Shared HTTP client; initialised by the lifespan, torn down on exit.
 _http_client: httpx.AsyncClient | None = None
 
@@ -23,8 +38,10 @@ _http_client: httpx.AsyncClient | None = None
 async def lifespan(server: FastMCP):
     """Create and tear down the shared httpx.AsyncClient."""
     global _http_client
-    async with httpx.AsyncClient(base_url=BASE_URL, timeout=DAZ_TIMEOUT) as client:
+    headers = {"X-API-Token": DAZ_API_TOKEN} if DAZ_API_TOKEN else {}
+    async with httpx.AsyncClient(base_url=BASE_URL, timeout=DAZ_TIMEOUT, headers=headers) as client:
         _http_client = client
+        await _register_scripts(client)
         yield
     _http_client = None
 
@@ -57,6 +74,16 @@ def _handle_network_error(exc: Exception) -> None:
     raise exc
 
 
+def _check_response(response: httpx.Response) -> None:
+    """Raise ToolError for known HTTP error statuses, otherwise raise_for_status."""
+    if response.status_code == 401:
+        source = "DAZ_API_TOKEN environment variable" if os.environ.get("DAZ_API_TOKEN") else _TOKEN_FILE
+        raise ToolError(
+            f"Authentication failed (HTTP 401). Verify the API token in: {source}"
+        )
+    response.raise_for_status()
+
+
 async def _execute(
     script: str,
     args: dict[str, Any] | None = None,
@@ -69,9 +96,60 @@ async def _execute(
 
     try:
         response = await client.post("/execute", json=payload)
-        response.raise_for_status()
+        _check_response(response)
     except (httpx.ConnectError, httpx.ConnectTimeout, httpx.TimeoutException) as exc:
         _handle_network_error(exc)
+
+    data = response.json()
+    if not data.get("success", False):
+        output_lines = data.get("output", [])
+        error_msg = data.get("error") or "Script execution failed"
+        detail = error_msg
+        if output_lines:
+            detail += "\n\nCaptured output:\n" + "\n".join(output_lines)
+        raise ToolError(detail)
+
+    return data.get("result")
+
+
+async def _register_scripts(client: httpx.AsyncClient) -> None:
+    """Register all built-in scripts with DazScriptServer.
+
+    Called at startup and automatically on 404 (DAZ Studio restarted and cleared
+    the session registry). Silently skips remaining entries on connection failure.
+    """
+    for script_id, (description, script_text) in _REGISTRY.items():
+        try:
+            await client.post("/scripts/register", json={
+                "name": script_id,
+                "description": description,
+                "script": script_text,
+            })
+        except httpx.RequestError:
+            break  # DAZ Studio not running; remaining registrations skipped
+
+
+async def _execute_by_id(script_id: str, args: dict[str, Any] | None = None) -> Any:
+    """Call a registered script by ID, re-registering once on 404."""
+    client = _get_client()
+    payload: dict[str, Any] = {}
+    if args is not None:
+        payload["args"] = args
+
+    try:
+        response = await client.post(f"/scripts/{script_id}/execute", json=payload)
+    except (httpx.ConnectError, httpx.ConnectTimeout, httpx.TimeoutException) as exc:
+        _handle_network_error(exc)
+
+    # 404 means DAZ Studio restarted and cleared the session registry — re-register and retry.
+    if response.status_code == 404:
+        await _register_scripts(client)
+        try:
+            response = await client.post(f"/scripts/{script_id}/execute", json=payload)
+        except (httpx.ConnectError, httpx.ConnectTimeout, httpx.TimeoutException) as exc:
+            _handle_network_error(exc)
+
+    _check_response(response)
 
     data = response.json()
     if not data.get("success", False):
@@ -194,6 +272,31 @@ _LOAD_FILE_SCRIPT = """\
 })()
 """
 
+# Registry entries: script_id → (description, script_text)
+# Registered with DazScriptServer on startup so high-level tools call by ID.
+_REGISTRY: dict[str, tuple[str, str]] = {
+    "vangard-scene-info": (
+        "Return a snapshot of the current DAZ Studio scene",
+        _SCENE_INFO_SCRIPT,
+    ),
+    "vangard-get-node": (
+        "Return all numeric properties of a scene node by label",
+        _GET_NODE_SCRIPT,
+    ),
+    "vangard-set-property": (
+        "Set a numeric property on a scene node",
+        _SET_PROPERTY_SCRIPT,
+    ),
+    "vangard-render": (
+        "Trigger a render using current DAZ Studio render settings",
+        _RENDER_SCRIPT,
+    ),
+    "vangard-load-file": (
+        "Load a file into the current DAZ Studio scene",
+        _LOAD_FILE_SCRIPT,
+    ),
+}
+
 
 # ---------------------------------------------------------------------------
 # Tools — low-level (raw script execution)
@@ -205,7 +308,7 @@ async def daz_status() -> dict[str, Any]:
     client = _get_client()
     try:
         response = await client.get("/status")
-        response.raise_for_status()
+        _check_response(response)
         return response.json()
     except (httpx.ConnectError, httpx.ConnectTimeout, httpx.TimeoutException) as exc:
         _handle_network_error(exc)
@@ -238,7 +341,7 @@ async def daz_execute(
 
     try:
         response = await client.post("/execute", json=payload)
-        response.raise_for_status()
+        _check_response(response)
     except (httpx.ConnectError, httpx.ConnectTimeout, httpx.TimeoutException) as exc:
         _handle_network_error(exc)
 
@@ -275,7 +378,7 @@ async def daz_execute_file(
 
     try:
         response = await client.post("/execute", json=payload)
-        response.raise_for_status()
+        _check_response(response)
     except (httpx.ConnectError, httpx.ConnectTimeout, httpx.TimeoutException) as exc:
         _handle_network_error(exc)
 
@@ -311,7 +414,7 @@ async def daz_scene_info() -> dict[str, Any]:
       - lights: list of {name, label, type} for all lights
       - totalNodes: total node count in the scene
     """
-    return await _execute(_SCENE_INFO_SCRIPT)
+    return await _execute_by_id("vangard-scene-info")
 
 
 @mcp.tool()
@@ -332,7 +435,7 @@ async def daz_get_node(node_label: str) -> dict[str, Any]:
       - type: DazScript class name (e.g. DzFigure, DzBone, DzCamera)
       - properties: mapping of property label → current numeric value
     """
-    return await _execute(_GET_NODE_SCRIPT, {"nodeLabel": node_label})
+    return await _execute_by_id("vangard-get-node", {"nodeLabel": node_label})
 
 
 @mcp.tool()
@@ -360,8 +463,8 @@ async def daz_set_property(
       - property: property label as confirmed by DAZ Studio
       - value: the value read back after setting
     """
-    return await _execute(
-        _SET_PROPERTY_SCRIPT,
+    return await _execute_by_id(
+        "vangard-set-property",
         {"nodeLabel": node_label, "propertyName": property_name, "value": value},
     )
 
@@ -386,7 +489,7 @@ async def daz_render(
     args: dict[str, Any] = {}
     if output_path is not None:
         args["outputPath"] = output_path
-    return await _execute(_RENDER_SCRIPT, args or None)
+    return await _execute_by_id("vangard-render", args or None)
 
 
 @mcp.tool()
@@ -406,7 +509,7 @@ async def daz_load_file(
       - success: true on success
       - file: the path that was loaded
     """
-    return await _execute(_LOAD_FILE_SCRIPT, {"filePath": file_path, "merge": merge})
+    return await _execute_by_id("vangard-load-file", {"filePath": file_path, "merge": merge})
 
 
 def main() -> None:

@@ -100,6 +100,73 @@ App.getContentMgr().openFile(filePath, mergeBoolean);
 
 `DzFileInfo` constructor is **not** available in this scripting environment — do not attempt file-existence checks via it.
 
+### Node creation
+
+**Cameras** — use the direct constructor; do **not** use `DzNewCameraAction` or any other UI action:
+
+```javascript
+var cam = new DzBasicCamera();
+Scene.addNode(cam);
+cam.setLabel("My Camera");
+```
+
+Actions like `DzNewCameraAction` pop a modal dialog that blocks the script call and causes a timeout.
+
+**Lights** — constructors work directly:
+
+```javascript
+var light = new DzSpotLight();
+Scene.addNode(light);
+```
+
+### Aiming nodes
+
+`node.aimAt(new DzVec3(x, y, z))` works on cameras and lights and immediately applies the correct rotation. Do not attempt to set `"Point At"` via `findProperty("Point At").setValue(...)` — that does not correctly link to a target node.
+
+```javascript
+light.aimAt(new DzVec3(0, 163, 0));   // point at Ethan's head
+cam.aimAt(new DzVec3(0, 100, 0));     // point at torso
+```
+
+### Coordinate system and figure orientation
+
+Genesis figures face **+Z** (positive Z is in front of the figure). Place cameras at positive Z to see the face; place rim/back lights at negative Z.
+
+### Node element ID
+
+`node.elementID` is a **property**, not a method. Use `node.elementID`, not `node.getElementID()`.
+
+### Browsing the content library
+
+Use `DzDir` and `DzContentMgr` to browse content — do not shell out to `find` or similar OS commands:
+
+```javascript
+var mgr = App.getContentMgr();
+var path = mgr.getContentDirectoryPath(i);   // returns a plain string
+var dir = new DzDir(path + "/People");
+var files = dir.entryList(["*.duf"], DzDir.Files);
+```
+
+Content directory objects (from `mgr.getContentDirectory(i)`) expose a `.fullPath` property.
+
+### Light properties
+
+| UI Label | Internal name |
+|---|---|
+| Luminous Flux (Lumen) | `Flux` |
+| Shadow Softness | `Shadow Softness` |
+| Spread Angle | `Spread Angle` |
+| Photometric Mode | `Photometric Mode` |
+
+### Iray environment / lighting mode
+
+The `DzEnvironmentNode` is always `Scene.getNode(1)`. Set `"Environment Mode"` to `3` for scene-lights-only rendering:
+
+```javascript
+var envNode = Scene.getNode(1); // DzEnvironmentNode
+envNode.findProperty("Environment Mode").setValue(3); // 3 = Scene Only
+```
+
 ## Architecture
 
 This is a [FastMCP](https://github.com/jlowin/fastmcp) 3.x server that bridges Claude (or any MCP client) to DAZ Studio via the **DazScriptServer** HTTP plugin. DAZ Studio must be running locally with DazScriptServer active on port 18811.

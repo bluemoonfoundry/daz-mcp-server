@@ -16,6 +16,7 @@ from vangard_daz_mcp.server import (
     daz_set_property,
     daz_render,
     daz_load_file,
+    _register_scripts,
 )
 
 
@@ -77,6 +78,12 @@ async def test_daz_status_connect_error(mock_daz):
         await daz_status()
 
 
+async def test_daz_status_unauthorized(mock_daz):
+    mock_daz.get("/status").mock(return_value=httpx.Response(401))
+    with pytest.raises(ToolError, match="401"):
+        await daz_status()
+
+
 # ---------------------------------------------------------------------------
 # daz_execute
 # ---------------------------------------------------------------------------
@@ -112,6 +119,12 @@ async def test_daz_execute_timeout(mock_daz):
         await daz_execute(script="while(true){}")
 
 
+async def test_daz_execute_unauthorized(mock_daz):
+    mock_daz.post("/execute").mock(return_value=httpx.Response(401))
+    with pytest.raises(ToolError, match="401"):
+        await daz_execute(script="return 1;")
+
+
 # ---------------------------------------------------------------------------
 # daz_execute_file
 # ---------------------------------------------------------------------------
@@ -144,7 +157,7 @@ _SCENE_RESULT = {
 
 
 async def test_daz_scene_info_ok(mock_daz):
-    mock_daz.post("/execute").mock(return_value=_ok(_SCENE_RESULT))
+    mock_daz.post("/scripts/vangard-scene-info/execute").mock(return_value=_ok(_SCENE_RESULT))
     result = await daz_scene_info()
     assert result["nodeCount"] == 2
     assert result["selectedNode"] == "Genesis 9"
@@ -153,10 +166,31 @@ async def test_daz_scene_info_ok(mock_daz):
 
 async def test_daz_scene_info_unsaved(mock_daz):
     payload = {**_SCENE_RESULT, "sceneFile": "", "selectedNode": None}
-    mock_daz.post("/execute").mock(return_value=_ok(payload))
+    mock_daz.post("/scripts/vangard-scene-info/execute").mock(return_value=_ok(payload))
     result = await daz_scene_info()
     assert result["sceneFile"] == ""
     assert result["selectedNode"] is None
+
+
+async def test_execute_by_id_retries_on_404(mock_daz):
+    """On 404, scripts are re-registered with DazScriptServer and the call retried."""
+    call_count = 0
+
+    def scene_info_side_effect(request):
+        nonlocal call_count
+        call_count += 1
+        if call_count == 1:
+            return httpx.Response(404, json={"success": False, "error": "Script not found: 'vangard-scene-info'"})
+        return _ok(_SCENE_RESULT)
+
+    mock_daz.post("/scripts/vangard-scene-info/execute").mock(side_effect=scene_info_side_effect)
+    mock_daz.post("/scripts/register").mock(
+        return_value=httpx.Response(200, json={"success": True, "id": "x", "updated": False})
+    )
+
+    result = await daz_scene_info()
+    assert result["nodeCount"] == 2
+    assert call_count == 2
 
 
 # ---------------------------------------------------------------------------
@@ -178,14 +212,14 @@ _NODE_RESULT = {
 
 
 async def test_daz_get_node_ok(mock_daz):
-    mock_daz.post("/execute").mock(return_value=_ok(_NODE_RESULT))
+    mock_daz.post("/scripts/vangard-get-node/execute").mock(return_value=_ok(_NODE_RESULT))
     result = await daz_get_node("Genesis 9")
     assert result["label"] == "Genesis 9"
     assert result["properties"]["Rotation X"] == 15.0
 
 
 async def test_daz_get_node_not_found(mock_daz):
-    mock_daz.post("/execute").mock(return_value=_fail("Node not found: Ghost"))
+    mock_daz.post("/scripts/vangard-get-node/execute").mock(return_value=_fail("Node not found: Ghost"))
     with pytest.raises(ToolError, match="Node not found"):
         await daz_get_node("Ghost")
 
@@ -195,7 +229,7 @@ async def test_daz_get_node_not_found(mock_daz):
 # ---------------------------------------------------------------------------
 
 async def test_daz_set_property_ok(mock_daz):
-    mock_daz.post("/execute").mock(
+    mock_daz.post("/scripts/vangard-set-property/execute").mock(
         return_value=_ok({"node": "Genesis 9", "property": "Rotation X", "value": 45.0})
     )
     result = await daz_set_property("Genesis 9", "Rotation X", 45.0)
@@ -204,19 +238,19 @@ async def test_daz_set_property_ok(mock_daz):
 
 
 async def test_daz_set_property_node_not_found(mock_daz):
-    mock_daz.post("/execute").mock(return_value=_fail("Node not found: Ghost"))
+    mock_daz.post("/scripts/vangard-set-property/execute").mock(return_value=_fail("Node not found: Ghost"))
     with pytest.raises(ToolError, match="Node not found"):
         await daz_set_property("Ghost", "Rotation X", 0.0)
 
 
 async def test_daz_set_property_prop_not_found(mock_daz):
-    mock_daz.post("/execute").mock(return_value=_fail("Property not found: Foo on Genesis 9"))
+    mock_daz.post("/scripts/vangard-set-property/execute").mock(return_value=_fail("Property not found: Foo on Genesis 9"))
     with pytest.raises(ToolError, match="Property not found"):
         await daz_set_property("Genesis 9", "Foo", 1.0)
 
 
 async def test_daz_set_property_not_numeric(mock_daz):
-    mock_daz.post("/execute").mock(return_value=_fail("Property is not numeric: Label"))
+    mock_daz.post("/scripts/vangard-set-property/execute").mock(return_value=_fail("Property is not numeric: Label"))
     with pytest.raises(ToolError, match="not numeric"):
         await daz_set_property("Genesis 9", "Label", 1.0)
 
@@ -226,13 +260,13 @@ async def test_daz_set_property_not_numeric(mock_daz):
 # ---------------------------------------------------------------------------
 
 async def test_daz_render_default(mock_daz):
-    mock_daz.post("/execute").mock(return_value=_ok({"success": True}))
+    mock_daz.post("/scripts/vangard-render/execute").mock(return_value=_ok({"success": True}))
     result = await daz_render()
     assert result["success"] is True
 
 
 async def test_daz_render_with_output_path(mock_daz):
-    mock_daz.post("/execute").mock(return_value=_ok({"success": True}))
+    mock_daz.post("/scripts/vangard-render/execute").mock(return_value=_ok({"success": True}))
     result = await daz_render(output_path="C:/renders/out.png")
     assert result["success"] is True
 
@@ -243,7 +277,7 @@ async def test_daz_render_with_output_path(mock_daz):
 # ---------------------------------------------------------------------------
 
 async def test_daz_load_file_merge(mock_daz):
-    mock_daz.post("/execute").mock(
+    mock_daz.post("/scripts/vangard-load-file/execute").mock(
         return_value=_ok({"success": True, "file": "C:/scenes/char.duf"})
     )
     result = await daz_load_file("C:/scenes/char.duf")
@@ -252,7 +286,7 @@ async def test_daz_load_file_merge(mock_daz):
 
 
 async def test_daz_load_file_replace(mock_daz):
-    mock_daz.post("/execute").mock(
+    mock_daz.post("/scripts/vangard-load-file/execute").mock(
         return_value=_ok({"success": True, "file": "C:/scenes/scene.duf"})
     )
     result = await daz_load_file("C:/scenes/scene.duf", merge=False)
@@ -260,6 +294,6 @@ async def test_daz_load_file_replace(mock_daz):
 
 
 async def test_daz_load_file_not_found(mock_daz):
-    mock_daz.post("/execute").mock(return_value=_fail("File not found: C:/missing.duf"))
+    mock_daz.post("/scripts/vangard-load-file/execute").mock(return_value=_fail("File not found: C:/missing.duf"))
     with pytest.raises(ToolError, match="File not found"):
         await daz_load_file("C:/missing.duf")
