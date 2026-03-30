@@ -290,6 +290,101 @@ _LOAD_FILE_SCRIPT = """\
 })()
 """
 
+# args: {nodeLabel, includeZero}
+# includeZero: if true, return all morphs; if false, only return morphs with non-zero values
+# Returns: {morphs: [{label, name, value, path}], count}
+# Lists all numeric properties (morphs) on a node
+_LIST_MORPHS_SCRIPT = """\
+(function(){
+    var node = Scene.findNodeByLabel(args.nodeLabel);
+    if (!node) node = Scene.findNode(args.nodeLabel);
+    if (!node) throw new Error("Node not found: " + args.nodeLabel);
+
+    var includeZero = args.includeZero !== undefined ? args.includeZero : false;
+    var morphs = [];
+
+    for (var i = 0; i < node.getNumProperties(); i++) {
+        var prop = node.getProperty(i);
+        if (prop.inherits("DzNumericProperty")) {
+            var value = prop.getValue();
+
+            // Skip zero-valued morphs if includeZero is false
+            if (!includeZero && value === 0) {
+                continue;
+            }
+
+            // Get property path (useful for organizing morphs)
+            var path = prop.getPath ? prop.getPath() : "";
+
+            morphs.push({
+                label: prop.getLabel(),
+                name: prop.getName(),
+                value: value,
+                path: path
+            });
+        }
+    }
+
+    return {
+        morphs: morphs,
+        count: morphs.length,
+        nodeLabel: node.getLabel()
+    };
+})()
+"""
+
+# args: {nodeLabel, pattern, includeZero}
+# pattern: substring to search for in morph label or name (case-insensitive)
+# includeZero: if true, return all matching morphs; if false, only non-zero values
+# Returns: {morphs: [{label, name, value, path}], count, pattern}
+# Searches for morphs matching a pattern
+_SEARCH_MORPHS_SCRIPT = """\
+(function(){
+    var node = Scene.findNodeByLabel(args.nodeLabel);
+    if (!node) node = Scene.findNode(args.nodeLabel);
+    if (!node) throw new Error("Node not found: " + args.nodeLabel);
+
+    var pattern = args.pattern ? args.pattern.toLowerCase() : "";
+    var includeZero = args.includeZero !== undefined ? args.includeZero : false;
+    var morphs = [];
+
+    for (var i = 0; i < node.getNumProperties(); i++) {
+        var prop = node.getProperty(i);
+        if (prop.inherits("DzNumericProperty")) {
+            var label = prop.getLabel().toLowerCase();
+            var name = prop.getName().toLowerCase();
+            var value = prop.getValue();
+
+            // Check if label or name contains pattern
+            var matches = (label.indexOf(pattern) !== -1) || (name.indexOf(pattern) !== -1);
+
+            if (matches) {
+                // Skip zero-valued morphs if includeZero is false
+                if (!includeZero && value === 0) {
+                    continue;
+                }
+
+                var path = prop.getPath ? prop.getPath() : "";
+
+                morphs.push({
+                    label: prop.getLabel(),
+                    name: prop.getName(),
+                    value: value,
+                    path: path
+                });
+            }
+        }
+    }
+
+    return {
+        morphs: morphs,
+        count: morphs.length,
+        pattern: args.pattern,
+        nodeLabel: node.getLabel()
+    };
+})()
+"""
+
 # args: {characterLabel, targetX, targetY, targetZ, mode}
 # mode: "eyes", "head", "neck", "torso", "full"
 # Returns: {success, character, mode, rotatedBones}
@@ -784,6 +879,14 @@ _REGISTRY: dict[str, tuple[str, str]] = {
         "Load a file into the current DAZ Studio scene",
         _LOAD_FILE_SCRIPT,
     ),
+    "vangard-list-morphs": (
+        "List all morphs (numeric properties) on a node with current values",
+        _LIST_MORPHS_SCRIPT,
+    ),
+    "vangard-search-morphs": (
+        "Search morphs by name pattern (case-insensitive substring match)",
+        _SEARCH_MORPHS_SCRIPT,
+    ),
     "vangard-look-at-point": (
         "Make character look at world-space point with configurable body involvement",
         _LOOK_AT_POINT_SCRIPT,
@@ -931,6 +1034,7 @@ async def daz_script_help(topic: str = "overview") -> str:
     - content: Browsing and loading content from library
     - coordinates: Coordinate system and positioning reference
     - posing: Figure posing, bone hierarchy, morphs vs poses, rotation gotchas
+    - morphs: Morph discovery, searching, value ranges, and management
     - interaction: Multi-character interaction, look-at mechanics, world-space posing
 
     Args:
@@ -1066,6 +1170,102 @@ async def daz_load_file(
       - file: the path that was loaded
     """
     return await _execute_by_id("vangard-load-file", {"filePath": file_path, "merge": merge})
+
+
+# ---------------------------------------------------------------------------
+# Tools — morph discovery and management
+# ---------------------------------------------------------------------------
+
+@mcp.tool()
+async def daz_list_morphs(
+    node_label: str,
+    include_zero: bool = False,
+) -> dict[str, Any]:
+    """List all morphs (numeric properties) on a node.
+
+    Returns all numeric properties on a node, which includes morphs (body shapes,
+    facial expressions), transforms, and other numeric dials. Useful for discovering
+    what morphs are available on a figure.
+
+    Args:
+        node_label: Display label or internal name of the node (e.g., "Genesis 9").
+        include_zero: If True, return all morphs including those set to 0.
+                      If False (default), only return morphs with non-zero values
+                      (currently active morphs).
+
+    Returns:
+      - morphs: List of morph objects with:
+        - label: Display label (e.g., "Head Size")
+        - name: Internal name (e.g., "HeadSize")
+        - value: Current numeric value
+        - path: Property path for organization (e.g., "Morphs/Head")
+      - count: Number of morphs returned
+      - nodeLabel: Confirmed node label
+
+    Example:
+        # List only active morphs on Genesis 9
+        result = daz_list_morphs("Genesis 9", include_zero=False)
+        # result["morphs"] = [
+        #   {"label": "Height", "name": "Height", "value": 1.05, "path": "Morphs/Body"},
+        #   {"label": "Head Size", "name": "HeadSize", "value": 0.9, "path": "Morphs/Head"}
+        # ]
+
+        # List all available morphs (including zero values)
+        result = daz_list_morphs("Genesis 9", include_zero=True)
+        # result["count"] might be 500+ morphs
+    """
+    return await _execute_by_id("vangard-list-morphs", {
+        "nodeLabel": node_label,
+        "includeZero": include_zero,
+    })
+
+
+@mcp.tool()
+async def daz_search_morphs(
+    node_label: str,
+    pattern: str,
+    include_zero: bool = False,
+) -> dict[str, Any]:
+    """Search for morphs matching a name pattern.
+
+    Search through all numeric properties (morphs) on a node for those matching
+    a substring pattern. Useful for finding specific morphs like all facial
+    expressions, body morphs, or morphs for a specific body part.
+
+    Args:
+        node_label: Display label or internal name of the node (e.g., "Genesis 9").
+        pattern: Substring to search for in morph label or name (case-insensitive).
+                 Examples: "smile", "head", "muscle", "express"
+        include_zero: If True, return all matching morphs including zero values.
+                      If False (default), only return matching morphs that are active.
+
+    Returns:
+      - morphs: List of matching morph objects with:
+        - label: Display label
+        - name: Internal name
+        - value: Current value
+        - path: Property path
+      - count: Number of matching morphs
+      - pattern: The search pattern used
+      - nodeLabel: Confirmed node label
+
+    Example:
+        # Find all smile-related morphs
+        result = daz_search_morphs("Genesis 9", "smile", include_zero=True)
+        # result["morphs"] might include: "Smile", "Smile Open", "Smile Closed", etc.
+
+        # Find active head morphs
+        result = daz_search_morphs("Genesis 9", "head", include_zero=False)
+        # Only returns head morphs with non-zero values
+
+        # Find all facial expression morphs
+        result = daz_search_morphs("Genesis 9", "express", include_zero=True)
+    """
+    return await _execute_by_id("vangard-search-morphs", {
+        "nodeLabel": node_label,
+        "pattern": pattern,
+        "includeZero": include_zero,
+    })
 
 
 # ---------------------------------------------------------------------------

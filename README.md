@@ -141,6 +141,7 @@ Get DazScript documentation, examples, and best practices.
 - `content` - Browsing and loading content from library
 - `coordinates` - Coordinate system and positioning reference
 - `posing` - Figure posing, bone hierarchy, morphs vs poses, rotation gotchas
+- `morphs` - Morph discovery, searching, value ranges, and management
 - `interaction` - Multi-character interaction, look-at mechanics, world-space posing
 
 **Returns:** Formatted documentation with examples
@@ -225,6 +226,93 @@ Read all numeric properties of a node by its label or internal name.
 ```
 
 **Use when:** You need to read transforms, morphs, or other numeric properties on a node.
+
+---
+
+### 🔬 Morph Discovery Tools
+
+#### `daz_list_morphs`
+List all morphs (numeric properties) on a node with their current values.
+
+**Arguments:**
+- `node_label` (string): Node display label or internal name
+- `include_zero` (bool, default `False`): Include morphs with zero values
+
+**Returns:**
+```json
+{
+  "morphs": [
+    {"label": "Height", "name": "Height", "value": 1.05, "path": "Morphs/Body"},
+    {"label": "Head Size", "name": "HeadSize", "value": 0.9, "path": "Morphs/Head"}
+  ],
+  "count": 2,
+  "nodeLabel": "Genesis 9"
+}
+```
+
+**Use when:**
+- Discovering what morphs are available on a figure
+- Checking which morphs are currently active
+- Building morph selection UIs
+- Exploring character customization options
+
+**Example:**
+```
+# List only active morphs (non-zero values)
+daz_list_morphs("Genesis 9", include_zero=False)
+
+# List ALL available morphs (warning: may return 500-1000+ morphs)
+daz_list_morphs("Genesis 9", include_zero=True)
+```
+
+**Note:** Genesis figures can have 1000+ morphs. Use `include_zero=False` to see only active morphs, or use `daz_search_morphs` to filter by pattern.
+
+---
+
+#### `daz_search_morphs`
+Search for morphs matching a name pattern.
+
+**Arguments:**
+- `node_label` (string): Node display label or internal name
+- `pattern` (string): Substring to search for (case-insensitive)
+- `include_zero` (bool, default `False`): Include morphs with zero values
+
+**Returns:**
+```json
+{
+  "morphs": [
+    {"label": "Smile", "name": "Smile", "value": 0.0, "path": "Morphs/Expressions"},
+    {"label": "Smile Open", "name": "SmileOpen", "value": 0.0, "path": "Morphs/Expressions"}
+  ],
+  "count": 2,
+  "pattern": "smile",
+  "nodeLabel": "Genesis 9"
+}
+```
+
+**Use when:**
+- Finding specific morphs (e.g., all smile morphs, head morphs)
+- Discovering morphs by category or body part
+- Building filtered morph lists
+
+**Example:**
+```
+# Find all smile-related morphs
+daz_search_morphs("Genesis 9", "smile", include_zero=True)
+
+# Find active head morphs only
+daz_search_morphs("Genesis 9", "head", include_zero=False)
+
+# Find all facial expression morphs
+daz_search_morphs("Genesis 9", "express", include_zero=True)
+```
+
+**Common search patterns:**
+- `"smile"`, `"frown"`, `"express"` - Facial expressions
+- `"head"`, `"face"`, `"nose"` - Facial features
+- `"arm"`, `"leg"`, `"body"` - Body parts
+- `"muscle"`, `"tone"`, `"fit"` - Body definition
+- `"height"`, `"scale"` - Size adjustments
 
 ---
 

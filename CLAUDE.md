@@ -20,7 +20,7 @@ uv run vangard-daz-mcp
 
 ## Available MCP Tools
 
-This server exposes 13 tools to MCP clients:
+This server exposes 15 tools to MCP clients:
 
 ### Documentation Tools
 
@@ -28,7 +28,7 @@ This server exposes 13 tools to MCP clients:
 |------|-------------|
 | `daz_script_help` | Get DazScript documentation, examples, and best practices by topic |
 
-**Topics available:** `overview`, `gotchas`, `camera`, `light`, `environment`, `scene`, `properties`, `content`, `coordinates`, `posing`, `interaction`
+**Topics available:** `overview`, `gotchas`, `camera`, `light`, `environment`, `scene`, `properties`, `content`, `coordinates`, `posing`, `morphs`, `interaction`
 
 Documentation is loaded from `src/vangard_daz_mcp/dazscript_docs.json` and can be updated without code changes.
 
@@ -51,6 +51,28 @@ Documentation is loaded from `src/vangard_daz_mcp/dazscript_docs.json` and can b
 | `daz_load_file` | Load a content file (`.duf`, `.daz`, `.obj`, etc.) into scene |
 
 High-level tools use the **DazScriptServer script registry** (see Architecture section below) for efficiency.
+
+### Morph Discovery Tools
+
+| Tool | Description |
+|------|-------------|
+| `daz_list_morphs` | List all morphs (numeric properties) on a node with current values; can filter to show only active (non-zero) morphs |
+| `daz_search_morphs` | Search morphs by name pattern (case-insensitive substring match); useful for finding morphs by category or body part |
+
+**Morph discovery capabilities:**
+- Enumerate all numeric properties (morphs) on a figure
+- Filter by value (active vs all available morphs)
+- Search by pattern (e.g., "smile", "head", "express", "muscle")
+- Get morph metadata (label, internal name, value, property path)
+- Performance-optimized for figures with 1000+ morphs
+
+**Common use cases:**
+- "List all active morphs on Genesis 9"
+- "Find all smile-related facial expressions"
+- "Show available body shape morphs"
+- "What head morphs are currently applied?"
+
+**Note:** Genesis figures typically have 500-1000+ morphs. Use `include_zero=False` to list only active morphs, or `daz_search_morphs` to filter by pattern.
 
 ### Multi-Character Interaction Tools (advanced posing)
 
@@ -263,8 +285,9 @@ MCP client → FastMCP tool → httpx.AsyncClient → DazScriptServer (HTTP) →
 | `POST /scripts/:id/execute` | All high-level tools | Execute previously registered script by ID |
 
 **Script registry workflow:**
-1. At startup, `_register_scripts()` registers 9 named scripts:
+1. At startup, `_register_scripts()` registers 11 named scripts:
    - **Basic operations:** `vangard-scene-info`, `vangard-get-node`, `vangard-set-property`, `vangard-render`, `vangard-load-file`
+   - **Morph discovery:** `vangard-list-morphs`, `vangard-search-morphs`
    - **Multi-character interaction:** `vangard-look-at-point`, `vangard-look-at-character`, `vangard-reach-toward`, `vangard-interactive-pose`
 2. High-level tools call `POST /scripts/:id/execute` with just args (no script body)
 3. On 404 (DAZ Studio restarted), `_execute_by_id()` calls `_register_scripts()` and retries
