@@ -142,6 +142,7 @@ Get DazScript documentation, examples, and best practices.
 - `coordinates` - Coordinate system and positioning reference
 - `posing` - Figure posing, bone hierarchy, morphs vs poses, rotation gotchas
 - `morphs` - Morph discovery, searching, value ranges, and management
+- `hierarchy` - Scene hierarchy, parent-child relationships, parenting operations
 - `interaction` - Multi-character interaction, look-at mechanics, world-space posing
 
 **Returns:** Formatted documentation with examples
@@ -313,6 +314,169 @@ daz_search_morphs("Genesis 9", "express", include_zero=True)
 - `"arm"`, `"leg"`, `"body"` - Body parts
 - `"muscle"`, `"tone"`, `"fit"` - Body definition
 - `"height"`, `"scale"` - Size adjustments
+
+---
+
+### 🌳 Scene Hierarchy Tools
+
+#### `daz_get_node_hierarchy`
+Get complete hierarchy tree for a node with all descendants.
+
+**Arguments:**
+- `node_label` (string): Root node display label or internal name
+- `max_depth` (int, default `10`): Maximum recursion depth (0 = unlimited)
+
+**Returns:**
+```json
+{
+  "node": "Genesis 9",
+  "hierarchy": {
+    "label": "Genesis 9",
+    "name": "Genesis9",
+    "type": "DzFigure",
+    "children": [
+      {
+        "label": "hip",
+        "name": "hip",
+        "type": "DzBone",
+        "children": [...]
+      }
+    ]
+  },
+  "totalDescendants": 127
+}
+```
+
+**Use when:**
+- Understanding skeleton structure
+- Exploring bone relationships
+- Mapping complex scene hierarchies
+- Finding all descendants of a node
+
+**Example:**
+```
+# Get skeleton hierarchy with depth limit
+daz_get_node_hierarchy("Genesis 9", max_depth=3)
+
+# Get full hierarchy (warning: Genesis 9 has 100+ bones)
+daz_get_node_hierarchy("Genesis 9", max_depth=0)
+```
+
+---
+
+#### `daz_list_children`
+List direct children of a node.
+
+**Arguments:**
+- `node_label` (string): Parent node display label or internal name
+
+**Returns:**
+```json
+{
+  "node": "hip",
+  "children": [
+    {"label": "pelvis", "name": "pelvis", "type": "DzBone"},
+    {"label": "lThighBend", "name": "lThighBend", "type": "DzBone"},
+    {"label": "rThighBend", "name": "rThighBend", "type": "DzBone"}
+  ],
+  "count": 3
+}
+```
+
+**Use when:**
+- Exploring hierarchy one level at a time
+- Checking if a node has children
+- Building custom tree structures
+
+**Example:**
+```
+# List children of Genesis 9 root
+daz_list_children("Genesis 9")
+
+# Check if node has children
+result = daz_list_children("Camera 1")
+if result["count"] == 0:
+    print("No children")
+```
+
+---
+
+#### `daz_get_parent`
+Get parent node of a node.
+
+**Arguments:**
+- `node_label` (string): Child node display label or internal name
+
+**Returns:**
+```json
+{
+  "node": "lHand",
+  "parent": {
+    "label": "lForearmBend",
+    "name": "lForearmBend",
+    "type": "DzBone"
+  }
+}
+```
+
+Returns `null` for parent if node is a root (no parent).
+
+**Use when:**
+- Traversing hierarchy upward
+- Finding what contains a node
+- Checking if node is a root
+
+**Example:**
+```
+# Get parent of a bone
+result = daz_get_parent("lHand")
+print(f"Parent: {result['parent']['label']}")
+
+# Check if node is root
+result = daz_get_parent("Genesis 9")
+if result["parent"] is None:
+    print("This is a root node")
+```
+
+---
+
+#### `daz_set_parent`
+Set parent of a node (parenting operation).
+
+**Arguments:**
+- `node_label` (string): Node to parent
+- `parent_label` (string): New parent node
+- `maintain_world_transform` (bool, default `True`): If true, adjust local transform to keep same world position
+
+**Returns:**
+```json
+{
+  "success": true,
+  "node": "Sword",
+  "newParent": "rHand",
+  "previousParent": null
+}
+```
+
+**Use when:**
+- Attaching props to figures (e.g., weapon to hand)
+- Parenting cameras to nodes
+- Reorganizing scene hierarchy
+- Attaching clothing to bones
+
+**Example:**
+```
+# Attach sword to right hand (maintains position)
+daz_set_parent("Sword", "rHand", maintain_world_transform=True)
+
+# Parent camera to figure (follows figure)
+daz_set_parent("Camera 1", "Genesis 9", maintain_world_transform=True)
+
+# Attach bracelet to forearm
+daz_set_parent("Bracelet", "lForearmBend", maintain_world_transform=True)
+```
+
+**Note:** When `maintain_world_transform=True`, the node's world position stays the same, but local transform values (X/Y/Z Translate, Rotate) change to account for the new parent's transform.
 
 ---
 

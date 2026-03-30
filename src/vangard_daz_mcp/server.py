@@ -385,6 +385,144 @@ _SEARCH_MORPHS_SCRIPT = """\
 })()
 """
 
+# args: {nodeLabel, maxDepth}
+# maxDepth: maximum recursion depth (default 10, 0 = unlimited)
+# Returns: {node, children: [{node, children}], totalDescendants}
+# Gets complete hierarchy tree for a node
+_GET_NODE_HIERARCHY_SCRIPT = """\
+(function(){
+    var node = Scene.findNodeByLabel(args.nodeLabel);
+    if (!node) node = Scene.findNode(args.nodeLabel);
+    if (!node) throw new Error("Node not found: " + args.nodeLabel);
+
+    var maxDepth = args.maxDepth !== undefined ? args.maxDepth : 10;
+    var totalDescendants = 0;
+
+    function buildHierarchy(n, depth) {
+        if (maxDepth > 0 && depth >= maxDepth) {
+            return null;
+        }
+
+        var nodeInfo = {
+            label: n.getLabel(),
+            name: n.getName(),
+            type: n.className()
+        };
+
+        var children = [];
+        for (var i = 0; i < n.getNumNodeChildren(); i++) {
+            totalDescendants++;
+            var childHierarchy = buildHierarchy(n.getNodeChild(i), depth + 1);
+            if (childHierarchy) {
+                children.push(childHierarchy);
+            }
+        }
+
+        if (children.length > 0) {
+            nodeInfo.children = children;
+        }
+
+        return nodeInfo;
+    }
+
+    var hierarchy = buildHierarchy(node, 0);
+
+    return {
+        node: node.getLabel(),
+        hierarchy: hierarchy,
+        totalDescendants: totalDescendants
+    };
+})()
+"""
+
+# args: {nodeLabel}
+# Returns: {node, children: [{label, name, type}], count}
+# Lists direct children of a node
+_LIST_CHILDREN_SCRIPT = """\
+(function(){
+    var node = Scene.findNodeByLabel(args.nodeLabel);
+    if (!node) node = Scene.findNode(args.nodeLabel);
+    if (!node) throw new Error("Node not found: " + args.nodeLabel);
+
+    var children = [];
+    for (var i = 0; i < node.getNumNodeChildren(); i++) {
+        var child = node.getNodeChild(i);
+        children.push({
+            label: child.getLabel(),
+            name: child.getName(),
+            type: child.className()
+        });
+    }
+
+    return {
+        node: node.getLabel(),
+        children: children,
+        count: children.length
+    };
+})()
+"""
+
+# args: {nodeLabel}
+# Returns: {node, parent: {label, name, type} | null}
+# Gets parent node of a node
+_GET_PARENT_SCRIPT = """\
+(function(){
+    var node = Scene.findNodeByLabel(args.nodeLabel);
+    if (!node) node = Scene.findNode(args.nodeLabel);
+    if (!node) throw new Error("Node not found: " + args.nodeLabel);
+
+    var parent = node.getNodeParent();
+
+    return {
+        node: node.getLabel(),
+        parent: parent ? {
+            label: parent.getLabel(),
+            name: parent.getName(),
+            type: parent.className()
+        } : null
+    };
+})()
+"""
+
+# args: {nodeLabel, parentLabel, maintainWorldTransform}
+# maintainWorldTransform: if true, adjust local transform to maintain world position
+# Returns: {success, node, newParent, previousParent}
+# Sets parent of a node
+_SET_PARENT_SCRIPT = """\
+(function(){
+    var node = Scene.findNodeByLabel(args.nodeLabel);
+    if (!node) node = Scene.findNode(args.nodeLabel);
+    if (!node) throw new Error("Node not found: " + args.nodeLabel);
+
+    var newParent = Scene.findNodeByLabel(args.parentLabel);
+    if (!newParent) newParent = Scene.findNode(args.parentLabel);
+    if (!newParent) throw new Error("Parent node not found: " + args.parentLabel);
+
+    var maintainWorldTransform = args.maintainWorldTransform !== undefined ? args.maintainWorldTransform : true;
+
+    var previousParent = node.getNodeParent();
+    var previousParentLabel = previousParent ? previousParent.getLabel() : null;
+
+    // Store world transform if needed
+    var worldPos = null;
+    var worldRot = null;
+    if (maintainWorldTransform) {
+        worldPos = node.getWSPos();
+        worldRot = node.getWSRot();
+    }
+
+    // Set new parent
+    node.setNodeParent(newParent, maintainWorldTransform);
+
+    return {
+        success: true,
+        node: node.getLabel(),
+        newParent: newParent.getLabel(),
+        previousParent: previousParentLabel
+    };
+})()
+"""
+
 # args: {characterLabel, targetX, targetY, targetZ, mode}
 # mode: "eyes", "head", "neck", "torso", "full"
 # Returns: {success, character, mode, rotatedBones}
@@ -887,6 +1025,22 @@ _REGISTRY: dict[str, tuple[str, str]] = {
         "Search morphs by name pattern (case-insensitive substring match)",
         _SEARCH_MORPHS_SCRIPT,
     ),
+    "vangard-get-node-hierarchy": (
+        "Get complete hierarchy tree for a node with recursive children",
+        _GET_NODE_HIERARCHY_SCRIPT,
+    ),
+    "vangard-list-children": (
+        "List direct children of a node",
+        _LIST_CHILDREN_SCRIPT,
+    ),
+    "vangard-get-parent": (
+        "Get parent node of a node",
+        _GET_PARENT_SCRIPT,
+    ),
+    "vangard-set-parent": (
+        "Set parent of a node (parenting operation)",
+        _SET_PARENT_SCRIPT,
+    ),
     "vangard-look-at-point": (
         "Make character look at world-space point with configurable body involvement",
         _LOOK_AT_POINT_SCRIPT,
@@ -1035,6 +1189,7 @@ async def daz_script_help(topic: str = "overview") -> str:
     - coordinates: Coordinate system and positioning reference
     - posing: Figure posing, bone hierarchy, morphs vs poses, rotation gotchas
     - morphs: Morph discovery, searching, value ranges, and management
+    - hierarchy: Scene hierarchy, parent-child relationships, parenting operations
     - interaction: Multi-character interaction, look-at mechanics, world-space posing
 
     Args:
@@ -1265,6 +1420,175 @@ async def daz_search_morphs(
         "nodeLabel": node_label,
         "pattern": pattern,
         "includeZero": include_zero,
+    })
+
+
+# ---------------------------------------------------------------------------
+# Tools — scene hierarchy and node relationships
+# ---------------------------------------------------------------------------
+
+@mcp.tool()
+async def daz_get_node_hierarchy(
+    node_label: str,
+    max_depth: int = 10,
+) -> dict[str, Any]:
+    """Get complete hierarchy tree for a node with all descendants.
+
+    Returns the full hierarchical structure of a node, including all children,
+    grandchildren, etc. Useful for understanding skeleton structure, bone
+    relationships, and complex scene hierarchies.
+
+    Args:
+        node_label: Display label or internal name of the root node.
+        max_depth: Maximum recursion depth (default 10, 0 = unlimited).
+                   Use to limit deep hierarchies (e.g., Genesis 9 skeleton has 100+ bones).
+
+    Returns:
+      - node: Root node label
+      - hierarchy: Nested structure with:
+        - label: Node display label
+        - name: Internal name
+        - type: DazScript class name
+        - children: List of child hierarchies (recursive)
+      - totalDescendants: Total number of descendants
+
+    Example:
+        # Get skeleton hierarchy with depth limit
+        result = daz_get_node_hierarchy("Genesis 9", max_depth=3)
+        # Returns nested structure: hip -> abdomen -> chest -> ...
+
+        # Get full hierarchy (warning: can be large)
+        result = daz_get_node_hierarchy("Genesis 9", max_depth=0)
+        # Returns complete skeleton with all 100+ bones
+
+        # Get prop hierarchy
+        result = daz_get_node_hierarchy("Sword", max_depth=5)
+    """
+    return await _execute_by_id("vangard-get-node-hierarchy", {
+        "nodeLabel": node_label,
+        "maxDepth": max_depth,
+    })
+
+
+@mcp.tool()
+async def daz_list_children(node_label: str) -> dict[str, Any]:
+    """List direct children of a node.
+
+    Returns only the immediate children (not grandchildren). Useful for
+    exploring hierarchy one level at a time or checking if a node has children.
+
+    Args:
+        node_label: Display label or internal name of the parent node.
+
+    Returns:
+      - node: Parent node label
+      - children: List of child objects with:
+        - label: Child display label
+        - name: Child internal name
+        - type: DazScript class name
+      - count: Number of children
+
+    Example:
+        # List children of Genesis 9 root
+        result = daz_list_children("Genesis 9")
+        # Returns: [{"label": "hip", "name": "hip", "type": "DzBone"}]
+
+        # Check if node has children
+        result = daz_list_children("Camera 1")
+        # result["count"] == 0 means no children
+
+        # List bones under hip
+        result = daz_list_children("hip")
+        # Returns: pelvis, lThighBend, rThighBend
+    """
+    return await _execute_by_id("vangard-list-children", {
+        "nodeLabel": node_label,
+    })
+
+
+@mcp.tool()
+async def daz_get_parent(node_label: str) -> dict[str, Any]:
+    """Get parent node of a node.
+
+    Returns the immediate parent of a node, or null if the node is a root node
+    (no parent). Useful for traversing hierarchy upward.
+
+    Args:
+        node_label: Display label or internal name of the child node.
+
+    Returns:
+      - node: Child node label
+      - parent: Parent node object with label, name, type, or null if no parent
+
+    Example:
+        # Get parent of a bone
+        result = daz_get_parent("lHand")
+        # Returns: {"parent": {"label": "lForearmBend", "name": "lForearmBend", ...}}
+
+        # Check if node is root (has no parent)
+        result = daz_get_parent("Genesis 9")
+        # result["parent"] == null
+
+        # Traverse hierarchy upward
+        node = "lIndex3"
+        while True:
+            result = daz_get_parent(node)
+            if not result["parent"]:
+                break
+            print(f"Parent of {node}: {result['parent']['label']}")
+            node = result["parent"]["label"]
+    """
+    return await _execute_by_id("vangard-get-parent", {
+        "nodeLabel": node_label,
+    })
+
+
+@mcp.tool()
+async def daz_set_parent(
+    node_label: str,
+    parent_label: str,
+    maintain_world_transform: bool = True,
+) -> dict[str, Any]:
+    """Set parent of a node (parenting operation).
+
+    Changes the parent of a node, effectively moving it in the scene hierarchy.
+    Commonly used to attach props to figures (e.g., weapon to hand) or reorganize
+    scene structure.
+
+    Args:
+        node_label: Display label or internal name of node to parent.
+        parent_label: Display label or internal name of new parent.
+        maintain_world_transform: If True (default), adjust local transform to
+                                  maintain the same world-space position/rotation.
+                                  If False, keep local transform (node will move
+                                  in world space).
+
+    Returns:
+      - success: true on success
+      - node: Node label
+      - newParent: New parent label
+      - previousParent: Previous parent label (or null if was root)
+
+    Example:
+        # Attach sword to right hand (maintain position)
+        result = daz_set_parent("Sword", "rHand", maintain_world_transform=True)
+        # Sword stays in place, now follows hand movements
+
+        # Parent camera to figure (follows figure)
+        result = daz_set_parent("Camera 1", "Genesis 9", maintain_world_transform=True)
+
+        # Unparent node (make it root) - parent to Scene root
+        result = daz_set_parent("Prop", "Scene", maintain_world_transform=True)
+
+    Note:
+        When maintain_world_transform=True, the node's world position is preserved,
+        but its local transform values (X/Y/Z Translate, Rotate) will change to
+        account for the new parent's transform.
+    """
+    return await _execute_by_id("vangard-set-parent", {
+        "nodeLabel": node_label,
+        "parentLabel": parent_label,
+        "maintainWorldTransform": maintain_world_transform,
     })
 
 

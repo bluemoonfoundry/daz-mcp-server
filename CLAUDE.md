@@ -20,7 +20,7 @@ uv run vangard-daz-mcp
 
 ## Available MCP Tools
 
-This server exposes 15 tools to MCP clients:
+This server exposes 19 tools to MCP clients:
 
 ### Documentation Tools
 
@@ -28,7 +28,7 @@ This server exposes 15 tools to MCP clients:
 |------|-------------|
 | `daz_script_help` | Get DazScript documentation, examples, and best practices by topic |
 
-**Topics available:** `overview`, `gotchas`, `camera`, `light`, `environment`, `scene`, `properties`, `content`, `coordinates`, `posing`, `morphs`, `interaction`
+**Topics available:** `overview`, `gotchas`, `camera`, `light`, `environment`, `scene`, `properties`, `content`, `coordinates`, `posing`, `morphs`, `hierarchy`, `interaction`
 
 Documentation is loaded from `src/vangard_daz_mcp/dazscript_docs.json` and can be updated without code changes.
 
@@ -73,6 +73,32 @@ High-level tools use the **DazScriptServer script registry** (see Architecture s
 - "What head morphs are currently applied?"
 
 **Note:** Genesis figures typically have 500-1000+ morphs. Use `include_zero=False` to list only active morphs, or `daz_search_morphs` to filter by pattern.
+
+### Scene Hierarchy Tools
+
+| Tool | Description |
+|------|-------------|
+| `daz_get_node_hierarchy` | Get complete hierarchy tree for a node with all descendants (recursive with depth limit) |
+| `daz_list_children` | List direct children of a node |
+| `daz_get_parent` | Get parent node of a node |
+| `daz_set_parent` | Set parent of a node (parenting operation with optional world-space transform maintenance) |
+
+**Hierarchy manipulation capabilities:**
+- Traverse parent-child relationships up and down
+- Build complete skeleton/scene hierarchy maps
+- Parent props to figure bones (attach weapons, clothing, etc.)
+- Parent cameras/lights to moving nodes
+- Reorganize scene structure programmatically
+- Maintain world-space position during parenting
+
+**Common use cases:**
+- "Attach sword to right hand"
+- "Show me the skeleton hierarchy of Genesis 9"
+- "What bones are under the hip?"
+- "Parent camera to character's head"
+- "Find parent of lHand bone"
+
+**Note:** Genesis skeletons have ~100+ bones. Use `max_depth` parameter in `daz_get_node_hierarchy` to limit recursion depth.
 
 ### Multi-Character Interaction Tools (advanced posing)
 
@@ -285,9 +311,10 @@ MCP client → FastMCP tool → httpx.AsyncClient → DazScriptServer (HTTP) →
 | `POST /scripts/:id/execute` | All high-level tools | Execute previously registered script by ID |
 
 **Script registry workflow:**
-1. At startup, `_register_scripts()` registers 11 named scripts:
+1. At startup, `_register_scripts()` registers 15 named scripts:
    - **Basic operations:** `vangard-scene-info`, `vangard-get-node`, `vangard-set-property`, `vangard-render`, `vangard-load-file`
    - **Morph discovery:** `vangard-list-morphs`, `vangard-search-morphs`
+   - **Scene hierarchy:** `vangard-get-node-hierarchy`, `vangard-list-children`, `vangard-get-parent`, `vangard-set-parent`
    - **Multi-character interaction:** `vangard-look-at-point`, `vangard-look-at-character`, `vangard-reach-toward`, `vangard-interactive-pose`
 2. High-level tools call `POST /scripts/:id/execute` with just args (no script body)
 3. On 404 (DAZ Studio restarted), `_execute_by_id()` calls `_register_scripts()` and retries
