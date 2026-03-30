@@ -1176,6 +1176,185 @@ _BATCH_SELECT_SCRIPT = """\
 })()
 """
 
+# args: {cameraLabel}
+# Returns: {success, camera, previousCamera}
+# Set which camera is active in the viewport
+_SET_ACTIVE_CAMERA_SCRIPT = """\
+(function(){
+    var cam = Scene.findNodeByLabel(args.cameraLabel);
+    if (!cam) cam = Scene.findNode(args.cameraLabel);
+    if (!cam) throw new Error("Camera not found: " + args.cameraLabel);
+    if (!cam.inherits("DzCamera")) throw new Error("Node is not a camera: " + args.cameraLabel);
+
+    var previousCamera = null;
+    var viewportMgr = MainWindow.getViewportMgr();
+    if (viewportMgr) {
+        var activeViewport = viewportMgr.getActiveViewport();
+        if (activeViewport) {
+            var prevCam = activeViewport.get3DViewport().getCamera();
+            if (prevCam) previousCamera = prevCam.getLabel();
+            activeViewport.get3DViewport().setCamera(cam);
+        }
+    }
+
+    return {
+        success: true,
+        camera: cam.getLabel(),
+        previousCamera: previousCamera
+    };
+})()
+"""
+
+# args: {cameraLabel, targetLabel, distance, angleHorizontal, angleVertical}
+# Returns: {success, camera, target, position}
+# Position camera orbiting around a target node at specified angle and distance
+_ORBIT_CAMERA_AROUND_SCRIPT = """\
+(function(){
+    var cam = Scene.findNodeByLabel(args.cameraLabel);
+    if (!cam) cam = Scene.findNode(args.cameraLabel);
+    if (!cam) throw new Error("Camera not found: " + args.cameraLabel);
+
+    var target = Scene.findNodeByLabel(args.targetLabel);
+    if (!target) target = Scene.findNode(args.targetLabel);
+    if (!target) throw new Error("Target not found: " + args.targetLabel);
+
+    var distance = args.distance !== undefined ? args.distance : 200;
+    var angleH = args.angleHorizontal !== undefined ? args.angleHorizontal : 45;
+    var angleV = args.angleVertical !== undefined ? args.angleVertical : 15;
+
+    // Get target world position
+    var targetPos = target.getWSPos();
+    var targetY = targetPos.y;
+
+    // Calculate camera position using spherical coordinates
+    var angleHRad = angleH * (Math.PI / 180);
+    var angleVRad = angleV * (Math.PI / 180);
+
+    var x = targetPos.x + distance * Math.cos(angleVRad) * Math.sin(angleHRad);
+    var y = targetY + distance * Math.sin(angleVRad);
+    var z = targetPos.z + distance * Math.cos(angleVRad) * Math.cos(angleHRad);
+
+    // Set camera position
+    cam.findProperty("XTranslate").setValue(x);
+    cam.findProperty("YTranslate").setValue(y);
+    cam.findProperty("ZTranslate").setValue(z);
+
+    // Aim camera at target
+    cam.aimAt(targetPos);
+
+    return {
+        success: true,
+        camera: cam.getLabel(),
+        target: target.getLabel(),
+        position: {x: x, y: y, z: z},
+        targetPosition: {x: targetPos.x, y: targetPos.y, z: targetPos.z}
+    };
+})()
+"""
+
+# args: {cameraLabel, nodeLabel, distance}
+# Returns: {success, camera, node, position}
+# Frame camera to show a node by positioning at calculated distance
+_FRAME_CAMERA_TO_NODE_SCRIPT = """\
+(function(){
+    var cam = Scene.findNodeByLabel(args.cameraLabel);
+    if (!cam) cam = Scene.findNode(args.cameraLabel);
+    if (!cam) throw new Error("Camera not found: " + args.cameraLabel);
+
+    var node = Scene.findNodeByLabel(args.nodeLabel);
+    if (!node) node = Scene.findNode(args.nodeLabel);
+    if (!node) throw new Error("Node not found: " + args.nodeLabel);
+
+    // Get node bounding box
+    var bbox = node.getSceneBoundingBox();
+    var center = bbox.getCenter();
+    var size = bbox.getSize();
+    var maxDim = Math.max(size.x, Math.max(size.y, size.z));
+
+    // Calculate distance based on object size or use provided distance
+    var distance = args.distance !== undefined ? args.distance : maxDim * 2.5;
+
+    // Position camera in front of object (positive Z)
+    var camX = center.x;
+    var camY = center.y;
+    var camZ = center.z + distance;
+
+    cam.findProperty("XTranslate").setValue(camX);
+    cam.findProperty("YTranslate").setValue(camY);
+    cam.findProperty("ZTranslate").setValue(camZ);
+
+    // Aim camera at center
+    cam.aimAt(center);
+
+    return {
+        success: true,
+        camera: cam.getLabel(),
+        node: node.getLabel(),
+        position: {x: camX, y: camY, z: camZ},
+        nodeCenter: {x: center.x, y: center.y, z: center.z},
+        nodeSize: {x: size.x, y: size.y, z: size.z}
+    };
+})()
+"""
+
+# args: {cameraLabel}
+# Returns: {preset: {transforms, label}}
+# Save camera position and rotation as preset data
+_SAVE_CAMERA_PRESET_SCRIPT = """\
+(function(){
+    var cam = Scene.findNodeByLabel(args.cameraLabel);
+    if (!cam) cam = Scene.findNode(args.cameraLabel);
+    if (!cam) throw new Error("Camera not found: " + args.cameraLabel);
+
+    var preset = {
+        label: cam.getLabel(),
+        transforms: {}
+    };
+
+    var props = ["XTranslate", "YTranslate", "ZTranslate",
+                 "XRotate", "YRotate", "ZRotate",
+                 "XScale", "YScale", "ZScale"];
+
+    for (var i = 0; i < props.length; i++) {
+        var prop = cam.findProperty(props[i]);
+        if (prop) {
+            preset.transforms[props[i]] = prop.getValue();
+        }
+    }
+
+    return {preset: preset};
+})()
+"""
+
+# args: {cameraLabel, preset}
+# Returns: {success, camera, applied}
+# Restore camera position and rotation from preset data
+_LOAD_CAMERA_PRESET_SCRIPT = """\
+(function(){
+    var cam = Scene.findNodeByLabel(args.cameraLabel);
+    if (!cam) cam = Scene.findNode(args.cameraLabel);
+    if (!cam) throw new Error("Camera not found: " + args.cameraLabel);
+
+    var preset = args.preset;
+    if (!preset || !preset.transforms) throw new Error("Invalid preset data");
+
+    var applied = [];
+    for (var propName in preset.transforms) {
+        var prop = cam.findProperty(propName);
+        if (prop) {
+            prop.setValue(preset.transforms[propName]);
+            applied.push(propName);
+        }
+    }
+
+    return {
+        success: true,
+        camera: cam.getLabel(),
+        applied: applied
+    };
+})()
+"""
+
 # Registry entries: script_id → (description, script_text)
 # Registered with DazScriptServer on startup so high-level tools call by ID.
 _REGISTRY: dict[str, tuple[str, str]] = {
@@ -1254,6 +1433,26 @@ _REGISTRY: dict[str, tuple[str, str]] = {
     "vangard-batch-select": (
         "Select multiple nodes (replace or add to current selection)",
         _BATCH_SELECT_SCRIPT,
+    ),
+    "vangard-set-active-camera": (
+        "Set which camera is active in the viewport",
+        _SET_ACTIVE_CAMERA_SCRIPT,
+    ),
+    "vangard-orbit-camera-around": (
+        "Position camera orbiting around a target node at specified angle and distance",
+        _ORBIT_CAMERA_AROUND_SCRIPT,
+    ),
+    "vangard-frame-camera-to-node": (
+        "Frame camera to show a node by positioning at calculated distance",
+        _FRAME_CAMERA_TO_NODE_SCRIPT,
+    ),
+    "vangard-save-camera-preset": (
+        "Save camera position and rotation as preset data",
+        _SAVE_CAMERA_PRESET_SCRIPT,
+    ),
+    "vangard-load-camera-preset": (
+        "Restore camera position and rotation from preset data",
+        _LOAD_CAMERA_PRESET_SCRIPT,
     ),
 }
 
@@ -1390,6 +1589,7 @@ async def daz_script_help(topic: str = "overview") -> str:
     - hierarchy: Scene hierarchy, parent-child relationships, parenting operations
     - interaction: Multi-character interaction, look-at mechanics, world-space posing
     - batch: Batch operations for efficient multi-node/multi-property modifications
+    - viewport: Viewport and camera control, positioning, framing, presets
 
     Args:
         topic: Documentation topic to retrieve (default: "overview")
@@ -2162,6 +2362,244 @@ async def daz_batch_select(
     return await _execute_by_id(
         "vangard-batch-select",
         {"nodeLabels": node_labels, "addToSelection": add_to_selection}
+    )
+
+
+# ---------------------------------------------------------------------------
+# Tools — viewport and camera control
+# ---------------------------------------------------------------------------
+
+@mcp.tool()
+async def daz_set_active_camera(camera_label: str) -> dict[str, Any]:
+    """Set which camera is active in the DAZ Studio viewport.
+
+    Changes the active viewport camera to show the scene from the specified
+    camera's perspective. The previous active camera is returned for reference.
+
+    Args:
+        camera_label: Display label of the camera to activate.
+
+    Returns:
+      - success: true on success
+      - camera: label of the camera that was activated
+      - previousCamera: label of the previously active camera (or null)
+
+    Example:
+        # Switch to a specific camera
+        daz_set_active_camera("Camera 1")
+
+        # Switch to a custom camera
+        daz_set_active_camera("Close Up Camera")
+
+        # Switch back to default camera
+        daz_set_active_camera("Perspective View")
+
+    Note:
+        The camera must exist in the scene. Use daz_scene_info() to list
+        available cameras. The viewport updates immediately to show the
+        camera's current view.
+    """
+    return await _execute_by_id("vangard-set-active-camera", {"cameraLabel": camera_label})
+
+
+@mcp.tool()
+async def daz_orbit_camera_around(
+    camera_label: str,
+    target_label: str,
+    distance: float = 200.0,
+    angle_horizontal: float = 45.0,
+    angle_vertical: float = 15.0,
+) -> dict[str, Any]:
+    """Position camera orbiting around a target node at specified angle and distance.
+
+    Uses spherical coordinates to position the camera at a specific angle around
+    a target object. The camera is automatically aimed at the target after positioning.
+
+    Args:
+        camera_label: Display label of the camera to position.
+        target_label: Display label of the target node to orbit around.
+        distance: Distance from target in centimeters (default: 200).
+        angle_horizontal: Horizontal angle in degrees, 0=front/+Z, 90=right/+X (default: 45).
+        angle_vertical: Vertical angle in degrees, positive=above, negative=below (default: 15).
+
+    Returns:
+      - success: true on success
+      - camera: camera label
+      - target: target node label
+      - position: camera world position {x, y, z}
+      - targetPosition: target world position {x, y, z}
+
+    Example:
+        # Position camera at 45° to the right, slightly above, 200cm away
+        daz_orbit_camera_around("Camera 1", "Genesis 9", distance=200,
+                                angle_horizontal=45, angle_vertical=15)
+
+        # Side view from the left
+        daz_orbit_camera_around("Camera 1", "Genesis 9", distance=150,
+                                angle_horizontal=-90, angle_vertical=0)
+
+        # Bird's eye view
+        daz_orbit_camera_around("Camera 1", "Genesis 9", distance=300,
+                                angle_horizontal=0, angle_vertical=60)
+
+        # Dramatic low angle
+        daz_orbit_camera_around("Camera 1", "Genesis 9", distance=180,
+                                angle_horizontal=25, angle_vertical=-20)
+
+    Note:
+        Angles use spherical coordinates:
+        - Horizontal: 0°=front(+Z), 90°=right(+X), 180°=back(-Z), -90°=left(-X)
+        - Vertical: positive=above horizon, negative=below
+
+        Camera is automatically aimed at the target's world position after positioning.
+    """
+    return await _execute_by_id(
+        "vangard-orbit-camera-around",
+        {
+            "cameraLabel": camera_label,
+            "targetLabel": target_label,
+            "distance": distance,
+            "angleHorizontal": angle_horizontal,
+            "angleVertical": angle_vertical,
+        }
+    )
+
+
+@mcp.tool()
+async def daz_frame_camera_to_node(
+    camera_label: str,
+    node_label: str,
+    distance: float | None = None,
+) -> dict[str, Any]:
+    """Frame camera to show a node by positioning at calculated distance.
+
+    Positions the camera to frame the specified node in view. Calculates the
+    node's bounding box and positions the camera at an appropriate distance
+    to show the entire object. Camera is positioned in front (+Z) and aimed
+    at the node's center.
+
+    Args:
+        camera_label: Display label of the camera to position.
+        node_label: Display label of the node to frame.
+        distance: Optional distance from node center in cm. If not specified,
+                  calculated as 2.5x the largest dimension of the node's bounding box.
+
+    Returns:
+      - success: true on success
+      - camera: camera label
+      - node: node label
+      - position: camera world position {x, y, z}
+      - nodeCenter: node bounding box center {x, y, z}
+      - nodeSize: node bounding box size {x, y, z}
+
+    Example:
+        # Frame a character (auto distance)
+        daz_frame_camera_to_node("Camera 1", "Genesis 9")
+
+        # Frame a prop with specific distance
+        daz_frame_camera_to_node("Camera 1", "Sword", distance=50)
+
+        # Frame entire scene
+        daz_frame_camera_to_node("Camera 1", "Scene", distance=500)
+
+        # Close-up on head
+        daz_frame_camera_to_node("Camera 1", "head", distance=30)
+
+    Note:
+        - Auto-calculated distance is 2.5x the largest bounding box dimension
+        - Camera is positioned in front of the node (+Z direction)
+        - Camera is aimed at the center of the node's bounding box
+        - Useful for automatically framing objects of varying sizes
+    """
+    args: dict[str, Any] = {
+        "cameraLabel": camera_label,
+        "nodeLabel": node_label,
+    }
+    if distance is not None:
+        args["distance"] = distance
+
+    return await _execute_by_id("vangard-frame-camera-to-node", args)
+
+
+@mcp.tool()
+async def daz_save_camera_preset(camera_label: str) -> dict[str, Any]:
+    """Save camera position and rotation as preset data.
+
+    Captures the current transform properties of a camera (position, rotation,
+    scale) and returns them as preset data. This data can be saved by the client
+    and later restored using daz_load_camera_preset().
+
+    Args:
+        camera_label: Display label of the camera to save.
+
+    Returns:
+      - preset: Dictionary containing:
+        - label: camera label
+        - transforms: Dictionary of property names to values (XTranslate, YTranslate,
+                     ZTranslate, XRotate, YRotate, ZRotate, XScale, YScale, ZScale)
+
+    Example:
+        # Save camera position
+        preset = daz_save_camera_preset("Camera 1")
+
+        # Client can store preset data (e.g., in a file or database)
+        import json
+        with open("my_camera_preset.json", "w") as f:
+            json.dump(preset, f)
+
+        # Later, restore the camera
+        with open("my_camera_preset.json") as f:
+            preset = json.load(f)
+        daz_load_camera_preset("Camera 1", preset["preset"])
+
+    Note:
+        - Preset data is a plain dictionary that can be serialized (JSON, etc.)
+        - Includes all transform properties (position, rotation, scale)
+        - Does not include camera-specific settings (focal length, DOF, etc.)
+        - Preset data can be applied to any camera, not just the original
+    """
+    return await _execute_by_id("vangard-save-camera-preset", {"cameraLabel": camera_label})
+
+
+@mcp.tool()
+async def daz_load_camera_preset(camera_label: str, preset: dict[str, Any]) -> dict[str, Any]:
+    """Restore camera position and rotation from preset data.
+
+    Applies saved preset data (from daz_save_camera_preset()) to a camera,
+    restoring its position, rotation, and scale.
+
+    Args:
+        camera_label: Display label of the camera to modify.
+        preset: Preset dictionary from daz_save_camera_preset(), containing:
+                - transforms: Dictionary of property names to values
+
+    Returns:
+      - success: true on success
+      - camera: camera label
+      - applied: list of property names that were applied
+
+    Example:
+        # Load previously saved preset
+        with open("my_camera_preset.json") as f:
+            preset = json.load(f)
+
+        result = daz_load_camera_preset("Camera 1", preset["preset"])
+        print(f"Applied properties: {result['applied']}")
+
+        # Apply same preset to multiple cameras
+        cameras = ["Camera 1", "Camera 2", "Camera 3"]
+        for cam in cameras:
+            daz_load_camera_preset(cam, preset["preset"])
+
+    Note:
+        - Preset can be applied to any camera, not just the original
+        - Only properties present in the preset are modified
+        - Useful for saving/loading camera positions across sessions
+        - Can be used to synchronize multiple cameras
+    """
+    return await _execute_by_id(
+        "vangard-load-camera-preset",
+        {"cameraLabel": camera_label, "preset": preset}
     )
 
 

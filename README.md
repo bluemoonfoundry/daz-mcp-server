@@ -661,6 +661,210 @@ daz_batch_select(["Spot Light 1", "Distant Light 1", "Point Light 1"])
 
 ---
 
+### 📷 Viewport and Camera Control
+
+Viewport control tools enable programmatic camera positioning, framing, and preset management for automated scene photography and consistent camera angles.
+
+**Key capabilities:**
+- Switch active viewport camera
+- Position camera using spherical coordinates (orbit around target)
+- Auto-frame camera to show objects (calculates bounding box)
+- Save/load camera positions as presets (JSON-serializable)
+- Reusable camera angles across scenes
+
+#### `daz_set_active_camera`
+Set which camera is active in the DAZ Studio viewport.
+
+**Arguments:**
+- `camera_label` (string): Display label of the camera to activate
+
+**Returns:**
+```json
+{
+  "success": true,
+  "camera": "Camera 1",
+  "previousCamera": "Perspective View"
+}
+```
+
+**Use when:** Switching between predefined camera angles, previewing from multiple viewpoints.
+
+**Example:**
+```
+# Switch to specific camera
+daz_set_active_camera("Camera 1")
+
+# Switch back to default
+daz_set_active_camera("Perspective View")
+```
+
+---
+
+#### `daz_orbit_camera_around`
+Position camera orbiting around a target node at specified angle and distance.
+
+**Arguments:**
+- `camera_label` (string): Camera to position
+- `target_label` (string): Target node to orbit around
+- `distance` (float, default `200.0`): Distance from target in cm
+- `angle_horizontal` (float, default `45.0`): Horizontal angle in degrees (0=front/+Z, 90=right/+X)
+- `angle_vertical` (float, default `15.0`): Vertical angle in degrees (positive=above)
+
+**Returns:**
+```json
+{
+  "success": true,
+  "camera": "Camera 1",
+  "target": "Genesis 9",
+  "position": {"x": 141.4, "y": 151.8, "z": 141.4},
+  "targetPosition": {"x": 0, "y": 100, "z": 0}
+}
+```
+
+**Use when:** Character photography, product shots, turntable animations, establishing camera angles.
+
+**Example:**
+```
+# Front 3/4 view (classic portrait angle)
+daz_orbit_camera_around("Camera 1", "Genesis 9",
+                        distance=200, angle_horizontal=45, angle_vertical=15)
+
+# Side view from left
+daz_orbit_camera_around("Camera 1", "Genesis 9",
+                        distance=150, angle_horizontal=-90, angle_vertical=0)
+
+# Bird's eye view
+daz_orbit_camera_around("Camera 1", "Genesis 9",
+                        distance=300, angle_horizontal=0, angle_vertical=60)
+
+# Dramatic low angle
+daz_orbit_camera_around("Camera 1", "Genesis 9",
+                        distance=180, angle_horizontal=25, angle_vertical=-20)
+```
+
+**Angle reference:**
+- Horizontal: 0°=front(+Z), 90°=right(+X), 180°=back(-Z), -90°=left(-X)
+- Vertical: positive=above horizon, negative=below
+
+**Distance guidelines** (170cm tall figure):
+- Full body: 350-450cm
+- Portrait: 80-120cm
+- Face close-up: 30-50cm
+
+---
+
+#### `daz_frame_camera_to_node`
+Frame camera to show a node by positioning at calculated distance.
+
+**Arguments:**
+- `camera_label` (string): Camera to position
+- `node_label` (string): Node to frame
+- `distance` (float, optional): Distance from node center in cm. If not specified, auto-calculated as 2.5x largest bounding box dimension.
+
+**Returns:**
+```json
+{
+  "success": true,
+  "camera": "Camera 1",
+  "node": "Genesis 9",
+  "position": {"x": 0, "y": 100, "z": 450},
+  "nodeCenter": {"x": 0, "y": 100, "z": 0},
+  "nodeSize": {"x": 50, "y": 170, "z": 40}
+}
+```
+
+**Use when:** Auto-framing objects of varying sizes, consistent framing across scenes.
+
+**Example:**
+```
+# Frame character (auto distance)
+daz_frame_camera_to_node("Camera 1", "Genesis 9")
+
+# Frame prop with specific distance
+daz_frame_camera_to_node("Camera 1", "Sword", distance=50)
+
+# Close-up on head
+daz_frame_camera_to_node("Camera 1", "head", distance=30)
+```
+
+**Note:** Camera is positioned in front (+Z) and aimed at node's bounding box center. Auto-calculated distance is 2.5x the largest dimension.
+
+---
+
+#### `daz_save_camera_preset`
+Save camera position and rotation as preset data.
+
+**Arguments:**
+- `camera_label` (string): Camera to save
+
+**Returns:**
+```json
+{
+  "preset": {
+    "label": "Camera 1",
+    "transforms": {
+      "XTranslate": 0, "YTranslate": 100, "ZTranslate": 300,
+      "XRotate": -10, "YRotate": 0, "ZRotate": 0,
+      "XScale": 1.0, "YScale": 1.0, "ZScale": 1.0
+    }
+  }
+}
+```
+
+**Use when:** Saving reusable camera angles, sharing camera positions across projects.
+
+**Example:**
+```python
+# Save camera position
+preset = daz_save_camera_preset("Camera 1")
+
+# Store to file
+import json
+with open("portrait_camera.json", "w") as f:
+    json.dump(preset, f)
+```
+
+**Note:** Preset data is JSON-serializable and can be applied to any camera.
+
+---
+
+#### `daz_load_camera_preset`
+Restore camera position and rotation from preset data.
+
+**Arguments:**
+- `camera_label` (string): Camera to modify
+- `preset` (dict): Preset dictionary from `daz_save_camera_preset()` (must contain `transforms` key)
+
+**Returns:**
+```json
+{
+  "success": true,
+  "camera": "Camera 1",
+  "applied": ["XTranslate", "YTranslate", "ZTranslate", "XRotate", "YRotate", "ZRotate"]
+}
+```
+
+**Use when:** Restoring saved camera positions, applying same angle to multiple cameras.
+
+**Example:**
+```python
+# Load preset from file
+import json
+with open("portrait_camera.json") as f:
+    preset = json.load(f)
+
+# Apply to camera
+daz_load_camera_preset("Camera 1", preset["preset"])
+
+# Apply same preset to multiple cameras
+for cam in ["Camera 1", "Camera 2", "Camera 3"]:
+    daz_load_camera_preset(cam, preset["preset"])
+```
+
+**Note:** Preset can be applied to any camera, not just the original. Useful for synchronizing multiple cameras.
+
+---
+
 ### ✏️ Modification Tools
 
 #### `daz_set_property`

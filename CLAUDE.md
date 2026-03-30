@@ -20,7 +20,7 @@ uv run vangard-daz-mcp
 
 ## Available MCP Tools
 
-This server exposes 23 tools to MCP clients:
+This server exposes 28 tools to MCP clients:
 
 ### Documentation Tools
 
@@ -28,7 +28,7 @@ This server exposes 23 tools to MCP clients:
 |------|-------------|
 | `daz_script_help` | Get DazScript documentation, examples, and best practices by topic |
 
-**Topics available:** `overview`, `gotchas`, `camera`, `light`, `environment`, `scene`, `properties`, `content`, `coordinates`, `posing`, `morphs`, `hierarchy`, `interaction`, `batch`
+**Topics available:** `overview`, `gotchas`, `camera`, `light`, `environment`, `scene`, `properties`, `content`, `coordinates`, `posing`, `morphs`, `hierarchy`, `interaction`, `batch`, `viewport`
 
 Documentation is loaded from `src/vangard_daz_mcp/dazscript_docs.json` and can be updated without code changes.
 
@@ -168,6 +168,110 @@ Each operation in a batch has individual error handling. Failed operations retur
 - Single property change
 - Interactive/conditional logic between operations
 - Need to check results between each operation
+
+### Viewport and Camera Control Tools
+
+| Tool | Description |
+|------|-------------|
+| `daz_set_active_camera` | Set which camera is active in the DAZ Studio viewport |
+| `daz_orbit_camera_around` | Position camera orbiting around target at specified angle/distance |
+| `daz_frame_camera_to_node` | Frame camera to show a node (auto-calculates distance from bounding box) |
+| `daz_save_camera_preset` | Save camera position/rotation as JSON-serializable preset data |
+| `daz_load_camera_preset` | Restore camera from saved preset data |
+
+**Key capabilities:**
+- **Active camera switching**: Change viewport view to show scene from specific camera
+- **Spherical positioning**: Position camera using intuitive angle/distance parameters
+- **Auto-framing**: Calculate optimal camera distance based on object bounding box
+- **Preset management**: Save/load camera positions as reusable JSON data
+
+**Common use cases:**
+- **Multi-camera setup**: Create and position multiple cameras for different angles (front, side, top, 3/4 view)
+- **Consistent framing**: Save camera positions for reuse across scenes (portrait preset, full body preset)
+- **Turntable animation**: Position cameras at regular intervals around subject (0°, 45°, 90°, 135°, 180°, etc.)
+- **Auto-framing**: Frame characters or props of varying sizes automatically
+- **Camera presets library**: Build library of reusable camera angles (dramatic low, flattering portrait, bird's eye)
+
+**Spherical coordinate system:**
+- **Horizontal angle**: 0°=front(+Z), 90°=right(+X), 180°=back(-Z), -90°=left(-X)
+- **Vertical angle**: positive=above horizon, negative=below horizon
+- **Distance**: In centimeters from target
+
+**Distance guidelines** (for 170cm tall character):
+- Full body: 350-450cm
+- Portrait (head/shoulders): 80-120cm
+- Face close-up: 30-50cm
+- Detail shots (eyes, hands): 15-25cm
+
+**Flattering portrait angles:**
+- Horizontal: 15-45° (slight angle avoids straight-on flatness)
+- Vertical: 5-15° (slightly above eye level)
+
+**Dramatic angles:**
+- Low angle (powerful): horizontal 25-45°, vertical -20 to -30°
+- High angle (vulnerable): horizontal 0-45°, vertical 40-60°
+
+**Camera preset workflow:**
+```python
+# Save camera position after manual positioning
+preset = daz_save_camera_preset("Camera 1")
+
+# Save to file for reuse
+import json
+with open("portrait_preset.json", "w") as f:
+    json.dump(preset, f)
+
+# Later, in another scene
+with open("portrait_preset.json") as f:
+    preset = json.load(f)
+daz_load_camera_preset("Camera 1", preset["preset"])
+
+# Apply same preset to multiple cameras
+for cam in ["Cam1", "Cam2", "Cam3"]:
+    daz_load_camera_preset(cam, preset["preset"])
+```
+
+**Auto-framing workflow:**
+```python
+# Frame different body parts automatically
+daz_frame_camera_to_node("Camera 1", "Genesis 9")        # Full body (auto distance)
+daz_frame_camera_to_node("Camera 1", "head", distance=30)  # Face close-up
+daz_frame_camera_to_node("Camera 1", "lHand", distance=20)  # Hand detail shot
+
+# Frame varies-size props
+daz_frame_camera_to_node("Camera 1", "Sword")    # Small prop
+daz_frame_camera_to_node("Camera 1", "Car")      # Large prop
+```
+
+**Multi-camera turntable setup:**
+```python
+# Create 8 cameras at 45° intervals around character
+angles = [0, 45, 90, 135, 180, 225, 270, 315]
+for i, angle in enumerate(angles):
+    cam_name = f"Cam_{angle}"
+
+    # Create camera
+    daz_execute(f'''
+        var cam = new DzBasicCamera();
+        Scene.addNode(cam);
+        cam.setLabel("{cam_name}");
+    ''')
+
+    # Position camera
+    daz_orbit_camera_around(cam_name, "Genesis 9", 200, angle, 15)
+
+# Switch between cameras for preview/render
+for angle in angles:
+    daz_set_active_camera(f"Cam_{angle}")
+    # render or preview
+```
+
+**Important notes:**
+- All camera positioning tools automatically aim the camera at the target (uses `camera.aimAt()`)
+- Genesis figures face +Z, so angle_horizontal=0 shows the front
+- Camera presets are JSON-serializable and portable across scenes
+- Auto-framing positions camera in front (+Z) at calculated or specified distance
+- Viewport updates immediately when setting active camera
 
 ### Updating Documentation
 
@@ -363,12 +467,13 @@ MCP client → FastMCP tool → httpx.AsyncClient → DazScriptServer (HTTP) →
 | `POST /scripts/:id/execute` | All high-level tools | Execute previously registered script by ID |
 
 **Script registry workflow:**
-1. At startup, `_register_scripts()` registers 19 named scripts:
+1. At startup, `_register_scripts()` registers 24 named scripts:
    - **Basic operations:** `vangard-scene-info`, `vangard-get-node`, `vangard-set-property`, `vangard-render`, `vangard-load-file`
    - **Morph discovery:** `vangard-list-morphs`, `vangard-search-morphs`
    - **Scene hierarchy:** `vangard-get-node-hierarchy`, `vangard-list-children`, `vangard-get-parent`, `vangard-set-parent`
    - **Multi-character interaction:** `vangard-look-at-point`, `vangard-look-at-character`, `vangard-reach-toward`, `vangard-interactive-pose`
    - **Batch operations:** `vangard-batch-set-properties`, `vangard-batch-transform`, `vangard-batch-visibility`, `vangard-batch-select`
+   - **Viewport/camera control:** `vangard-set-active-camera`, `vangard-orbit-camera-around`, `vangard-frame-camera-to-node`, `vangard-save-camera-preset`, `vangard-load-camera-preset`
 2. High-level tools call `POST /scripts/:id/execute` with just args (no script body)
 3. On 404 (DAZ Studio restarted), `_execute_by_id()` calls `_register_scripts()` and retries
 
