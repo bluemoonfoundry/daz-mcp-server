@@ -865,6 +865,263 @@ for cam in ["Camera 1", "Camera 2", "Camera 3"]:
 
 ---
 
+### 🎬 Animation System
+
+Animation tools enable keyframe-based property animation. Set keyframes at specific frames, and DAZ Studio interpolates smoothly between them. Supports animating any numeric property (transforms, morphs, lights, cameras).
+
+**Key capabilities:**
+- Set/get/remove keyframes on properties
+- Timeline control (current frame, frame range)
+- Export animations as image sequences
+- Copy and offset animations between properties
+- Inspect keyframe data programmatically
+
+**Common use cases:**
+- Character animation (walk cycles, gestures, facial expressions)
+- Camera animation (dolly, pan, zoom)
+- Product turntables (360° rotation)
+- Morph animations (smile fade, eye blink)
+- Multi-character choreography
+
+#### `daz_set_keyframe`
+Set a keyframe on a property at specified frame.
+
+**Arguments:**
+- `node_label` (string): Node display label
+- `property_name` (string): Property label or internal name
+- `frame` (int): Frame number (0-based)
+- `value` (float): Value at this frame
+
+**Returns:**
+```json
+{
+  "success": true,
+  "node": "Genesis 9",
+  "property": "X Translate",
+  "frame": 0,
+  "value": 0.0
+}
+```
+
+**Use when:** Creating animations, defining key poses.
+
+**Example:**
+```
+# Animate movement (0 to 100cm over 30 frames)
+daz_set_keyframe("Genesis 9", "XTranslate", frame=0, value=0)
+daz_set_keyframe("Genesis 9", "XTranslate", frame=30, value=100)
+
+# Animate rotation (0 to 90 degrees)
+daz_set_keyframe("Genesis 9", "YRotate", frame=0, value=0)
+daz_set_keyframe("Genesis 9", "YRotate", frame=60, value=90)
+
+# Animate morph (fade in smile)
+daz_set_keyframe("Genesis 9", "PHMSmile", frame=0, value=0)
+daz_set_keyframe("Genesis 9", "PHMSmile", frame=15, value=0.8)
+```
+
+**Note:** DAZ Studio interpolates between keyframes automatically. Setting keyframe at existing frame updates the value.
+
+---
+
+#### `daz_get_keyframes`
+Get all keyframes for a property.
+
+**Arguments:**
+- `node_label` (string): Node display label
+- `property_name` (string): Property label or internal name
+
+**Returns:**
+```json
+{
+  "keyframes": [
+    {"frame": 0, "value": 0.0},
+    {"frame": 30, "value": 100.0}
+  ],
+  "count": 2
+}
+```
+
+**Use when:** Inspecting animations, copying keyframes, checking if property is animated.
+
+**Example:**
+```python
+# Get keyframes
+result = daz_get_keyframes("Genesis 9", "XTranslate")
+for kf in result['keyframes']:
+    print(f"Frame {kf['frame']}: {kf['value']}")
+
+# Copy keyframes to another node
+for kf in result['keyframes']:
+    daz_set_keyframe("Genesis 8", "XTranslate", kf['frame'], kf['value'])
+```
+
+---
+
+#### `daz_remove_keyframe`
+Remove a keyframe at specified frame.
+
+**Arguments:**
+- `node_label` (string): Node display label
+- `property_name` (string): Property label or internal name
+- `frame` (int): Frame number
+
+**Returns:**
+```json
+{
+  "success": true,
+  "node": "Genesis 9",
+  "property": "X Translate",
+  "frame": 15,
+  "removed": true
+}
+```
+
+**Use when:** Removing specific keyframes, editing animation timing.
+
+**Example:**
+```
+# Remove keyframe
+daz_remove_keyframe("Genesis 9", "XTranslate", frame=15)
+```
+
+**Note:** Returns `removed: false` if no keyframe exists at that frame (not an error).
+
+---
+
+#### `daz_clear_animation`
+Remove all keyframes from a property.
+
+**Arguments:**
+- `node_label` (string): Node display label
+- `property_name` (string): Property label or internal name
+
+**Returns:**
+```json
+{
+  "success": true,
+  "node": "Genesis 9",
+  "property": "X Translate",
+  "removed": 5
+}
+```
+
+**Use when:** Clearing animations, resetting properties to static state.
+
+**Example:**
+```python
+# Clear animation
+result = daz_clear_animation("Genesis 9", "XTranslate")
+print(f"Removed {result['removed']} keyframes")
+
+# Clear all transform animations
+for prop in ["XTranslate", "YTranslate", "ZTranslate", "XRotate", "YRotate", "ZRotate"]:
+    daz_clear_animation("Genesis 9", prop)
+```
+
+**Note:** More efficient than removing keyframes individually.
+
+---
+
+#### `daz_set_frame`
+Set current animation frame.
+
+**Arguments:**
+- `frame` (int): Frame number to move to
+
+**Returns:**
+```json
+{
+  "success": true,
+  "frame": 30,
+  "previousFrame": 0
+}
+```
+
+**Use when:** Previewing animation, rendering specific frames.
+
+**Example:**
+```python
+# Jump to frame 30
+daz_set_frame(30)
+
+# Render all frames
+info = daz_get_animation_info()
+for frame in range(info['startFrame'], info['endFrame'] + 1):
+    daz_set_frame(frame)
+    daz_render(output_path=f"frame_{frame:04d}.png")
+```
+
+**Note:** Scene updates to show animated state at the frame.
+
+---
+
+#### `daz_set_frame_range`
+Set animation frame range (start and end).
+
+**Arguments:**
+- `start_frame` (int): First frame (typically 0)
+- `end_frame` (int): Last frame
+
+**Returns:**
+```json
+{
+  "success": true,
+  "startFrame": 0,
+  "endFrame": 119,
+  "previousStart": 0,
+  "previousEnd": 30
+}
+```
+
+**Use when:** Defining animation length before creating keyframes.
+
+**Example:**
+```
+# 4-second animation (120 frames at 30fps)
+daz_set_frame_range(0, 119)
+
+# 10-second animation
+daz_set_frame_range(0, 299)
+```
+
+**Note:** Frame range is inclusive (frames 0-119 = 120 frames). Duration = (end - start + 1) / fps.
+
+---
+
+#### `daz_get_animation_info`
+Get animation timeline info (current frame, range, fps).
+
+**Returns:**
+```json
+{
+  "currentFrame": 0,
+  "startFrame": 0,
+  "endFrame": 119,
+  "fps": 30.0,
+  "totalFrames": 120,
+  "durationSeconds": 4.0
+}
+```
+
+**Use when:** Checking timeline state before rendering, calculating duration.
+
+**Example:**
+```python
+# Get timeline info
+info = daz_get_animation_info()
+print(f"Animation: {info['durationSeconds']} seconds ({info['totalFrames']} frames)")
+
+# Render entire animation
+for frame in range(info['startFrame'], info['endFrame'] + 1):
+    daz_set_frame(frame)
+    daz_render(output_path=f"frame_{frame:04d}.png")
+```
+
+**Note:** FPS is typically 30 in DAZ Studio.
+
+---
+
 ### ✏️ Modification Tools
 
 #### `daz_set_property`

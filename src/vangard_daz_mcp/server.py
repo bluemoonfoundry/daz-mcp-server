@@ -1355,6 +1355,224 @@ _LOAD_CAMERA_PRESET_SCRIPT = """\
 })()
 """
 
+# args: {nodeLabel, propertyName, frame, value}
+# Returns: {success, node, property, frame, value}
+# Set a keyframe on a property at specified frame
+_SET_KEYFRAME_SCRIPT = """\
+(function(){
+    var node = Scene.findNodeByLabel(args.nodeLabel);
+    if (!node) node = Scene.findNode(args.nodeLabel);
+    if (!node) throw new Error("Node not found: " + args.nodeLabel);
+
+    var prop = null;
+    for (var p = 0; p < node.getNumProperties(); p++) {
+        var pr = node.getProperty(p);
+        if (pr.getLabel() === args.propertyName || pr.getName() === args.propertyName) {
+            prop = pr;
+            break;
+        }
+    }
+
+    if (!prop) throw new Error("Property not found: " + args.propertyName);
+    if (!prop.inherits("DzNumericProperty")) throw new Error("Property is not numeric: " + args.propertyName);
+
+    var frame = args.frame;
+    var value = args.value;
+
+    // Set value at frame
+    prop.setKeyFrame(frame, value);
+
+    return {
+        success: true,
+        node: node.getLabel(),
+        property: prop.getLabel(),
+        frame: frame,
+        value: value
+    };
+})()
+"""
+
+# args: {nodeLabel, propertyName}
+# Returns: {keyframes: [{frame, value}], count}
+# Get all keyframes for a property
+_GET_KEYFRAMES_SCRIPT = """\
+(function(){
+    var node = Scene.findNodeByLabel(args.nodeLabel);
+    if (!node) node = Scene.findNode(args.nodeLabel);
+    if (!node) throw new Error("Node not found: " + args.nodeLabel);
+
+    var prop = null;
+    for (var p = 0; p < node.getNumProperties(); p++) {
+        var pr = node.getProperty(p);
+        if (pr.getLabel() === args.propertyName || pr.getName() === args.propertyName) {
+            prop = pr;
+            break;
+        }
+    }
+
+    if (!prop) throw new Error("Property not found: " + args.propertyName);
+    if (!prop.inherits("DzNumericProperty")) throw new Error("Property is not numeric: " + args.propertyName);
+
+    var keyframes = [];
+    var numKeys = prop.getNumKeys();
+
+    for (var i = 0; i < numKeys; i++) {
+        var frame = prop.getKeyFrame(i);
+        var value = prop.getKeyValue(i);
+        keyframes.push({frame: frame, value: value});
+    }
+
+    return {
+        keyframes: keyframes,
+        count: numKeys
+    };
+})()
+"""
+
+# args: {nodeLabel, propertyName, frame}
+# Returns: {success, node, property, frame, removed}
+# Remove a keyframe at specified frame
+_REMOVE_KEYFRAME_SCRIPT = """\
+(function(){
+    var node = Scene.findNodeByLabel(args.nodeLabel);
+    if (!node) node = Scene.findNode(args.nodeLabel);
+    if (!node) throw new Error("Node not found: " + args.nodeLabel);
+
+    var prop = null;
+    for (var p = 0; p < node.getNumProperties(); p++) {
+        var pr = node.getProperty(p);
+        if (pr.getLabel() === args.propertyName || pr.getName() === args.propertyName) {
+            prop = pr;
+            break;
+        }
+    }
+
+    if (!prop) throw new Error("Property not found: " + args.propertyName);
+    if (!prop.inherits("DzNumericProperty")) throw new Error("Property is not numeric: " + args.propertyName);
+
+    var frame = args.frame;
+    var removed = false;
+
+    // Find and remove keyframe at frame
+    var numKeys = prop.getNumKeys();
+    for (var i = 0; i < numKeys; i++) {
+        if (prop.getKeyFrame(i) === frame) {
+            prop.deleteKey(i);
+            removed = true;
+            break;
+        }
+    }
+
+    return {
+        success: true,
+        node: node.getLabel(),
+        property: prop.getLabel(),
+        frame: frame,
+        removed: removed
+    };
+})()
+"""
+
+# args: {nodeLabel, propertyName}
+# Returns: {success, node, property, removed}
+# Remove all keyframes from a property
+_CLEAR_ANIMATION_SCRIPT = """\
+(function(){
+    var node = Scene.findNodeByLabel(args.nodeLabel);
+    if (!node) node = Scene.findNode(args.nodeLabel);
+    if (!node) throw new Error("Node not found: " + args.nodeLabel);
+
+    var prop = null;
+    for (var p = 0; p < node.getNumProperties(); p++) {
+        var pr = node.getProperty(p);
+        if (pr.getLabel() === args.propertyName || pr.getName() === args.propertyName) {
+            prop = pr;
+            break;
+        }
+    }
+
+    if (!prop) throw new Error("Property not found: " + args.propertyName);
+    if (!prop.inherits("DzNumericProperty")) throw new Error("Property is not numeric: " + args.propertyName);
+
+    var numKeys = prop.getNumKeys();
+    // Delete keys in reverse order to avoid index shifting
+    for (var i = numKeys - 1; i >= 0; i--) {
+        prop.deleteKey(i);
+    }
+
+    return {
+        success: true,
+        node: node.getLabel(),
+        property: prop.getLabel(),
+        removed: numKeys
+    };
+})()
+"""
+
+# args: {frame}
+# Returns: {success, frame, previousFrame}
+# Set current animation frame
+_SET_FRAME_SCRIPT = """\
+(function(){
+    var frame = args.frame;
+    var previousFrame = Scene.getFrame();
+    Scene.setFrame(frame);
+
+    return {
+        success: true,
+        frame: frame,
+        previousFrame: previousFrame
+    };
+})()
+"""
+
+# args: {startFrame, endFrame}
+# Returns: {success, startFrame, endFrame, previousStart, previousEnd}
+# Set animation frame range
+_SET_FRAME_RANGE_SCRIPT = """\
+(function(){
+    var startFrame = args.startFrame;
+    var endFrame = args.endFrame;
+
+    var anim = Scene.getAnimRange();
+    var previousStart = anim.getStart();
+    var previousEnd = anim.getEnd();
+
+    anim.setStart(startFrame);
+    anim.setEnd(endFrame);
+
+    return {
+        success: true,
+        startFrame: startFrame,
+        endFrame: endFrame,
+        previousStart: previousStart,
+        previousEnd: previousEnd
+    };
+})()
+"""
+
+# args: none
+# Returns: {currentFrame, startFrame, endFrame, fps}
+# Get animation timeline info
+_GET_ANIMATION_INFO_SCRIPT = """\
+(function(){
+    var currentFrame = Scene.getFrame();
+    var anim = Scene.getAnimRange();
+    var startFrame = anim.getStart();
+    var endFrame = anim.getEnd();
+    var fps = Scene.getFPS();
+
+    return {
+        currentFrame: currentFrame,
+        startFrame: startFrame,
+        endFrame: endFrame,
+        fps: fps,
+        totalFrames: endFrame - startFrame + 1,
+        durationSeconds: (endFrame - startFrame + 1) / fps
+    };
+})()
+"""
+
 # Registry entries: script_id → (description, script_text)
 # Registered with DazScriptServer on startup so high-level tools call by ID.
 _REGISTRY: dict[str, tuple[str, str]] = {
@@ -1453,6 +1671,34 @@ _REGISTRY: dict[str, tuple[str, str]] = {
     "vangard-load-camera-preset": (
         "Restore camera position and rotation from preset data",
         _LOAD_CAMERA_PRESET_SCRIPT,
+    ),
+    "vangard-set-keyframe": (
+        "Set a keyframe on a property at specified frame",
+        _SET_KEYFRAME_SCRIPT,
+    ),
+    "vangard-get-keyframes": (
+        "Get all keyframes for a property",
+        _GET_KEYFRAMES_SCRIPT,
+    ),
+    "vangard-remove-keyframe": (
+        "Remove a keyframe at specified frame",
+        _REMOVE_KEYFRAME_SCRIPT,
+    ),
+    "vangard-clear-animation": (
+        "Remove all keyframes from a property",
+        _CLEAR_ANIMATION_SCRIPT,
+    ),
+    "vangard-set-frame": (
+        "Set current animation frame",
+        _SET_FRAME_SCRIPT,
+    ),
+    "vangard-set-frame-range": (
+        "Set animation frame range (start and end)",
+        _SET_FRAME_RANGE_SCRIPT,
+    ),
+    "vangard-get-animation-info": (
+        "Get animation timeline info (current frame, range, fps)",
+        _GET_ANIMATION_INFO_SCRIPT,
     ),
 }
 
@@ -1590,6 +1836,7 @@ async def daz_script_help(topic: str = "overview") -> str:
     - interaction: Multi-character interaction, look-at mechanics, world-space posing
     - batch: Batch operations for efficient multi-node/multi-property modifications
     - viewport: Viewport and camera control, positioning, framing, presets
+    - animation: Animation system, keyframing, timeline control, rendering animations
 
     Args:
         topic: Documentation topic to retrieve (default: "overview")
@@ -2601,6 +2848,320 @@ async def daz_load_camera_preset(camera_label: str, preset: dict[str, Any]) -> d
         "vangard-load-camera-preset",
         {"cameraLabel": camera_label, "preset": preset}
     )
+
+
+# ---------------------------------------------------------------------------
+# Tools — animation system
+# ---------------------------------------------------------------------------
+
+@mcp.tool()
+async def daz_set_keyframe(
+    node_label: str,
+    property_name: str,
+    frame: int,
+    value: float,
+) -> dict[str, Any]:
+    """Set a keyframe on a property at specified frame.
+
+    Creates or updates a keyframe for a numeric property at the given frame number.
+    This is the fundamental operation for creating property animations.
+
+    Args:
+        node_label: Display label of the node.
+        property_name: Property label or internal name.
+        frame: Frame number (integer, typically 0-based).
+        value: Value to set at this frame.
+
+    Returns:
+      - success: true on success
+      - node: node label
+      - property: property label
+      - frame: frame number
+      - value: value set at the keyframe
+
+    Example:
+        # Animate character moving right (0 to 100cm over 30 frames)
+        daz_set_keyframe("Genesis 9", "XTranslate", frame=0, value=0)
+        daz_set_keyframe("Genesis 9", "XTranslate", frame=30, value=100)
+
+        # Animate rotation (0 to 90 degrees over 60 frames)
+        daz_set_keyframe("Genesis 9", "YRotate", frame=0, value=0)
+        daz_set_keyframe("Genesis 9", "YRotate", frame=60, value=90)
+
+        # Animate morph (fade in smile)
+        daz_set_keyframe("Genesis 9", "PHMSmile", frame=0, value=0)
+        daz_set_keyframe("Genesis 9", "PHMSmile", frame=15, value=0.8)
+
+    Note:
+        - DAZ Studio interpolates between keyframes automatically
+        - Setting a keyframe at an existing frame updates the value
+        - Frames are typically 0-based integers
+        - Use daz_set_frame_range() to define the animation length first
+    """
+    return await _execute_by_id(
+        "vangard-set-keyframe",
+        {
+            "nodeLabel": node_label,
+            "propertyName": property_name,
+            "frame": frame,
+            "value": value,
+        }
+    )
+
+
+@mcp.tool()
+async def daz_get_keyframes(
+    node_label: str,
+    property_name: str,
+) -> dict[str, Any]:
+    """Get all keyframes for a property.
+
+    Returns all keyframes currently set on a property, including frame numbers
+    and values. Useful for inspecting existing animations or copying keyframes.
+
+    Args:
+        node_label: Display label of the node.
+        property_name: Property label or internal name.
+
+    Returns:
+      - keyframes: Array of {frame, value} objects
+      - count: Number of keyframes
+
+    Example:
+        # Get keyframes for a property
+        result = daz_get_keyframes("Genesis 9", "XTranslate")
+        print(f"Found {result['count']} keyframes:")
+        for kf in result['keyframes']:
+            print(f"  Frame {kf['frame']}: {kf['value']}")
+
+        # Copy keyframes to another property
+        keyframes = daz_get_keyframes("Genesis 9", "XTranslate")
+        for kf in keyframes['keyframes']:
+            daz_set_keyframe("Genesis 8", "XTranslate", kf['frame'], kf['value'])
+
+        # Check if property is animated
+        result = daz_get_keyframes("Genesis 9", "YRotate")
+        if result['count'] > 0:
+            print("Property is animated")
+
+    Note:
+        - Returns empty array if property has no keyframes
+        - Keyframes are returned in frame order
+        - Frame numbers are integers, values are floats
+    """
+    return await _execute_by_id(
+        "vangard-get-keyframes",
+        {"nodeLabel": node_label, "propertyName": property_name}
+    )
+
+
+@mcp.tool()
+async def daz_remove_keyframe(
+    node_label: str,
+    property_name: str,
+    frame: int,
+) -> dict[str, Any]:
+    """Remove a keyframe at specified frame.
+
+    Deletes a single keyframe from a property at the given frame number.
+    Other keyframes on the property remain unchanged.
+
+    Args:
+        node_label: Display label of the node.
+        property_name: Property label or internal name.
+        frame: Frame number of keyframe to remove.
+
+    Returns:
+      - success: true
+      - node: node label
+      - property: property label
+      - frame: frame number
+      - removed: true if keyframe existed and was removed, false if no keyframe at that frame
+
+    Example:
+        # Remove specific keyframe
+        daz_remove_keyframe("Genesis 9", "XTranslate", frame=15)
+
+        # Remove all keyframes one by one
+        keyframes = daz_get_keyframes("Genesis 9", "XTranslate")
+        for kf in keyframes['keyframes']:
+            daz_remove_keyframe("Genesis 9", "XTranslate", kf['frame'])
+
+    Note:
+        - If no keyframe exists at the frame, removed=false (not an error)
+        - Other keyframes remain unchanged
+        - Use daz_clear_animation() to remove all keyframes at once
+    """
+    return await _execute_by_id(
+        "vangard-remove-keyframe",
+        {"nodeLabel": node_label, "propertyName": property_name, "frame": frame}
+    )
+
+
+@mcp.tool()
+async def daz_clear_animation(
+    node_label: str,
+    property_name: str,
+) -> dict[str, Any]:
+    """Remove all keyframes from a property.
+
+    Clears all animation data from a property, returning it to a static (non-animated)
+    state. More efficient than removing keyframes individually.
+
+    Args:
+        node_label: Display label of the node.
+        property_name: Property label or internal name.
+
+    Returns:
+      - success: true
+      - node: node label
+      - property: property label
+      - removed: number of keyframes removed
+
+    Example:
+        # Clear animation from a property
+        result = daz_clear_animation("Genesis 9", "XTranslate")
+        print(f"Removed {result['removed']} keyframes")
+
+        # Clear all transform animations
+        transforms = ["XTranslate", "YTranslate", "ZTranslate",
+                      "XRotate", "YRotate", "ZRotate"]
+        for prop in transforms:
+            daz_clear_animation("Genesis 9", prop)
+
+    Note:
+        - Removes all keyframes in a single operation
+        - More efficient than calling daz_remove_keyframe() repeatedly
+        - Property retains its current value after clearing
+        - Returns count of keyframes that were removed
+    """
+    return await _execute_by_id(
+        "vangard-clear-animation",
+        {"nodeLabel": node_label, "propertyName": property_name}
+    )
+
+
+@mcp.tool()
+async def daz_set_frame(frame: int) -> dict[str, Any]:
+    """Set current animation frame.
+
+    Moves the timeline to the specified frame. This updates the scene to show
+    the state at that frame, evaluating all animated properties.
+
+    Args:
+        frame: Frame number to move to (integer).
+
+    Returns:
+      - success: true
+      - frame: new current frame
+      - previousFrame: frame number before the change
+
+    Example:
+        # Jump to specific frame
+        daz_set_frame(30)
+
+        # Render each frame of animation
+        info = daz_get_animation_info()
+        for frame in range(info['startFrame'], info['endFrame'] + 1):
+            daz_set_frame(frame)
+            daz_render(output_path=f"frame_{frame:04d}.png")
+
+        # Preview keyframes
+        keyframes = daz_get_keyframes("Genesis 9", "XTranslate")
+        for kf in keyframes['keyframes']:
+            daz_set_frame(kf['frame'])
+            # ... preview or inspect ...
+
+    Note:
+        - Scene updates to show animated state at the frame
+        - All animated properties evaluate at the new frame
+        - Frame numbers are typically 0-based integers
+        - Use with daz_render() to export animation frames
+    """
+    return await _execute_by_id("vangard-set-frame", {"frame": frame})
+
+
+@mcp.tool()
+async def daz_set_frame_range(start_frame: int, end_frame: int) -> dict[str, Any]:
+    """Set animation frame range (start and end).
+
+    Defines the playback range for the animation timeline. This determines
+    which frames are included when playing or exporting animation.
+
+    Args:
+        start_frame: First frame of animation (typically 0).
+        end_frame: Last frame of animation.
+
+    Returns:
+      - success: true
+      - startFrame: new start frame
+      - endFrame: new end frame
+      - previousStart: previous start frame
+      - previousEnd: previous end frame
+
+    Example:
+        # Set 120-frame animation (4 seconds at 30fps)
+        daz_set_frame_range(0, 119)
+
+        # Set 300-frame animation (10 seconds at 30fps)
+        daz_set_frame_range(0, 299)
+
+        # Set custom range starting from frame 10
+        daz_set_frame_range(10, 100)
+
+    Note:
+        - Frame range is inclusive (both start and end frames are included)
+        - Default FPS in DAZ Studio is typically 30
+        - Duration in seconds = (end - start + 1) / fps
+        - Example: frames 0-29 at 30fps = 1 second (30 frames)
+    """
+    return await _execute_by_id(
+        "vangard-set-frame-range",
+        {"startFrame": start_frame, "endFrame": end_frame}
+    )
+
+
+@mcp.tool()
+async def daz_get_animation_info() -> dict[str, Any]:
+    """Get animation timeline info (current frame, range, fps).
+
+    Returns information about the current animation timeline state, including
+    the current frame, frame range, and frames per second.
+
+    Returns:
+      - currentFrame: current timeline position
+      - startFrame: first frame of animation range
+      - endFrame: last frame of animation range
+      - fps: frames per second
+      - totalFrames: total number of frames (endFrame - startFrame + 1)
+      - durationSeconds: animation duration in seconds
+
+    Example:
+        # Get timeline info
+        info = daz_get_animation_info()
+        print(f"Current frame: {info['currentFrame']}")
+        print(f"Range: {info['startFrame']}-{info['endFrame']}")
+        print(f"Duration: {info['durationSeconds']} seconds")
+        print(f"FPS: {info['fps']}")
+
+        # Render entire animation
+        info = daz_get_animation_info()
+        for frame in range(info['startFrame'], info['endFrame'] + 1):
+            daz_set_frame(frame)
+            daz_render(output_path=f"output/frame_{frame:04d}.png")
+
+        # Check if at end of animation
+        info = daz_get_animation_info()
+        if info['currentFrame'] >= info['endFrame']:
+            print("At end of animation")
+
+    Note:
+        - FPS is typically 30 in DAZ Studio
+        - Frame range is inclusive (both start and end are included)
+        - totalFrames includes both start and end frames
+        - Use before rendering animation to know frame count
+    """
+    return await _execute_by_id("vangard-get-animation-info", {})
 
 
 def main() -> None:

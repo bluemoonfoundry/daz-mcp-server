@@ -20,7 +20,7 @@ uv run vangard-daz-mcp
 
 ## Available MCP Tools
 
-This server exposes 28 tools to MCP clients:
+This server exposes 35 tools to MCP clients:
 
 ### Documentation Tools
 
@@ -28,7 +28,7 @@ This server exposes 28 tools to MCP clients:
 |------|-------------|
 | `daz_script_help` | Get DazScript documentation, examples, and best practices by topic |
 
-**Topics available:** `overview`, `gotchas`, `camera`, `light`, `environment`, `scene`, `properties`, `content`, `coordinates`, `posing`, `morphs`, `hierarchy`, `interaction`, `batch`, `viewport`
+**Topics available:** `overview`, `gotchas`, `camera`, `light`, `environment`, `scene`, `properties`, `content`, `coordinates`, `posing`, `morphs`, `hierarchy`, `interaction`, `batch`, `viewport`, `animation`
 
 Documentation is loaded from `src/vangard_daz_mcp/dazscript_docs.json` and can be updated without code changes.
 
@@ -273,6 +273,141 @@ for angle in angles:
 - Auto-framing positions camera in front (+Z) at calculated or specified distance
 - Viewport updates immediately when setting active camera
 
+### Animation System Tools
+
+| Tool | Description |
+|------|-------------|
+| `daz_set_keyframe` | Set a keyframe on a property at specified frame |
+| `daz_get_keyframes` | Get all keyframes for a property |
+| `daz_remove_keyframe` | Remove a keyframe at specified frame |
+| `daz_clear_animation` | Remove all keyframes from a property |
+| `daz_set_frame` | Set current animation frame |
+| `daz_set_frame_range` | Set animation frame range (start and end) |
+| `daz_get_animation_info` | Get animation timeline info (current frame, range, fps) |
+
+**Animation capabilities:**
+- **Keyframe-based animation**: Set property values at specific frames, DAZ interpolates between them
+- **Any numeric property**: Animate transforms, morphs, lights, cameras, or any numeric property
+- **Timeline control**: Set frame range, current frame, query fps and duration
+- **Keyframe management**: Get, remove, clear keyframes programmatically
+- **Animation export**: Render frame-by-frame to create image sequences
+
+**Common use cases:**
+- **Character animation**: Walk cycles, gestures, facial expressions (morph animation)
+- **Camera animation**: Dolly, pan, zoom, cinematic shots
+- **Product turntables**: 360° rotation animations for product visualization
+- **Multi-character choreography**: Animate multiple characters with offset timing
+- **Morph sequences**: Fade facial expressions, eye blinks, shape changes
+
+**Basic animation workflow:**
+```python
+# 1. Set animation length (4 seconds = 120 frames at 30fps)
+daz_set_frame_range(0, 119)
+
+# 2. Set start keyframe
+daz_set_keyframe("Genesis 9", "XTranslate", frame=0, value=0)
+
+# 3. Set end keyframe (DAZ interpolates frames 1-118 automatically)
+daz_set_keyframe("Genesis 9", "XTranslate", frame=119, value=100)
+
+# 4. Render animation as image sequence
+info = daz_get_animation_info()
+for frame in range(info['startFrame'], info['endFrame'] + 1):
+    daz_set_frame(frame)
+    daz_render(output_path=f"frame_{frame:04d}.png")
+```
+
+**Keyframe management:**
+```python
+# Inspect keyframes
+result = daz_get_keyframes("Genesis 9", "XTranslate")
+for kf in result['keyframes']:
+    print(f"Frame {kf['frame']}: {kf['value']}")
+
+# Copy animation to another node
+for kf in result['keyframes']:
+    daz_set_keyframe("Genesis 8", "XTranslate", kf['frame'], kf['value'])
+
+# Offset animation in time (shift by 30 frames)
+keyframes = daz_get_keyframes("Genesis 9", "YRotate")
+daz_clear_animation("Genesis 9", "YRotate")
+for kf in keyframes['keyframes']:
+    daz_set_keyframe("Genesis 9", "YRotate", kf['frame'] + 30, kf['value'])
+
+# Clear all animations
+daz_clear_animation("Genesis 9", "XTranslate")
+```
+
+**Animation patterns:**
+
+*Simple translation (move 100cm over 1 second)*:
+```python
+daz_set_frame_range(0, 29)  # 30 frames at 30fps = 1 second
+daz_set_keyframe("Genesis 9", "XTranslate", 0, 0)
+daz_set_keyframe("Genesis 9", "XTranslate", 29, 100)
+```
+
+*Rotation animation (360° turntable)*:
+```python
+daz_set_frame_range(0, 119)  # 4 seconds
+daz_set_keyframe("Genesis 9", "YRotate", 0, 0)
+daz_set_keyframe("Genesis 9", "YRotate", 119, 360)
+```
+
+*Morph animation (fade in smile)*:
+```python
+daz_set_frame_range(0, 59)  # 2 seconds
+daz_set_keyframe("Genesis 9", "PHMSmile", 0, 0)
+daz_set_keyframe("Genesis 9", "PHMSmile", 59, 0.8)
+```
+
+*Camera animation (dolly in)*:
+```python
+daz_set_frame_range(0, 90)  # 3 seconds
+daz_set_keyframe("Camera 1", "ZTranslate", 0, 300)
+daz_set_keyframe("Camera 1", "ZTranslate", 90, 150)
+```
+
+*Multi-property animation (walk forward while waving)*:
+```python
+daz_set_frame_range(0, 90)
+
+# Walk forward
+daz_set_keyframe("Genesis 9", "ZTranslate", 0, 0)
+daz_set_keyframe("Genesis 9", "ZTranslate", 90, 150)
+
+# Wave arm (up-down-up)
+daz_set_keyframe("Genesis 9/rShldrBend", "ZRotate", 0, 0)
+daz_set_keyframe("Genesis 9/rShldrBend", "ZRotate", 30, 45)
+daz_set_keyframe("Genesis 9/rShldrBend", "ZRotate", 60, 0)
+daz_set_keyframe("Genesis 9/rShldrBend", "ZRotate", 90, 45)
+```
+
+**Frame calculations:**
+- Frame range is **inclusive** (frames 0-29 = 30 frames, not 29)
+- Duration in seconds = (end_frame - start_frame + 1) / fps
+- Example: frames 0-119 at 30fps = (119 - 0 + 1) / 30 = 4.0 seconds
+- Typical DAZ Studio FPS: 30
+
+**Rendering tips:**
+- Use zero-padded frame numbers: `f"frame_{frame:04d}.png"` (sorts correctly: frame_0001.png, frame_0002.png)
+- Render to image sequence first, then convert to video using ffmpeg:
+  ```bash
+  ffmpeg -framerate 30 -i frame_%04d.png -c:v libx264 -pix_fmt yuv420p output.mp4
+  ```
+
+**Performance considerations:**
+- Minimize keyframes (2-3 per motion, not one per frame)
+- DAZ interpolates smoothly between keyframes
+- Use `daz_clear_animation()` instead of removing keyframes individually
+
+**Important notes:**
+- Frames are 0-based integers (0, 1, 2, ...)
+- Setting keyframe at existing frame updates the value
+- DAZ Studio uses linear interpolation between keyframes
+- Any numeric property can be animated (not just transforms)
+- Use `daz_get_animation_info()` to check fps, frame range, and duration before rendering
+
 ### Updating Documentation
 
 The `daz_script_help` tool loads documentation from `src/vangard_daz_mcp/dazscript_docs.json`. To add or update topics:
@@ -467,13 +602,14 @@ MCP client → FastMCP tool → httpx.AsyncClient → DazScriptServer (HTTP) →
 | `POST /scripts/:id/execute` | All high-level tools | Execute previously registered script by ID |
 
 **Script registry workflow:**
-1. At startup, `_register_scripts()` registers 24 named scripts:
+1. At startup, `_register_scripts()` registers 31 named scripts:
    - **Basic operations:** `vangard-scene-info`, `vangard-get-node`, `vangard-set-property`, `vangard-render`, `vangard-load-file`
    - **Morph discovery:** `vangard-list-morphs`, `vangard-search-morphs`
    - **Scene hierarchy:** `vangard-get-node-hierarchy`, `vangard-list-children`, `vangard-get-parent`, `vangard-set-parent`
    - **Multi-character interaction:** `vangard-look-at-point`, `vangard-look-at-character`, `vangard-reach-toward`, `vangard-interactive-pose`
    - **Batch operations:** `vangard-batch-set-properties`, `vangard-batch-transform`, `vangard-batch-visibility`, `vangard-batch-select`
    - **Viewport/camera control:** `vangard-set-active-camera`, `vangard-orbit-camera-around`, `vangard-frame-camera-to-node`, `vangard-save-camera-preset`, `vangard-load-camera-preset`
+   - **Animation system:** `vangard-set-keyframe`, `vangard-get-keyframes`, `vangard-remove-keyframe`, `vangard-clear-animation`, `vangard-set-frame`, `vangard-set-frame-range`, `vangard-get-animation-info`
 2. High-level tools call `POST /scripts/:id/execute` with just args (no script body)
 3. On 404 (DAZ Studio restarted), `_execute_by_id()` calls `_register_scripts()` and retries
 
