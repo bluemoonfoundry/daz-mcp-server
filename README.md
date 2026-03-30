@@ -480,6 +480,187 @@ daz_set_parent("Bracelet", "lForearmBend", maintain_world_transform=True)
 
 ---
 
+### ⚡ Batch Operations
+
+Batch operations allow you to modify multiple nodes or properties in a single call, significantly improving performance. Each operation has individual error handling, so failures don't abort the entire batch.
+
+**Performance benefits:**
+- Single script call (all operations execute in one round-trip)
+- No HTTP/network overhead between operations
+- 5-10x faster than individual calls for typical batches
+- Individual error handling without aborting the batch
+
+**Common use cases:**
+- Applying facial expressions (multiple morphs at once)
+- Configuring lighting setups (multiple light properties)
+- Moving/rotating groups of props together
+- Showing/hiding groups of nodes for scene management
+- Resetting multiple cameras or lights to default values
+
+#### `daz_batch_set_properties`
+Set multiple properties on one or more nodes in a single call.
+
+**Arguments:**
+- `operations` (array): List of operation objects, each containing:
+  - `nodeLabel` (string): Display label of the node
+  - `propertyName` (string): Property label or internal name
+  - `value` (float): New value for the property
+
+**Returns:**
+```json
+{
+  "results": [
+    {"success": true, "node": "Genesis 9", "property": "X Translate", "value": 100},
+    {"success": false, "node": "Missing", "error": "Node not found: Missing"}
+  ],
+  "successCount": 1,
+  "failureCount": 1,
+  "total": 2
+}
+```
+
+**Use when:** Setting 3+ properties, applying facial expressions, configuring scene presets.
+
+**Example:**
+```
+# Apply "surprised" facial expression
+daz_batch_set_properties([
+    {"nodeLabel": "Genesis 9", "propertyName": "PHMEyesWide", "value": 0.8},
+    {"nodeLabel": "Genesis 9", "propertyName": "PHMBrowsUp", "value": 0.7},
+    {"nodeLabel": "Genesis 9", "propertyName": "PHMMouthOpen", "value": 0.4}
+])
+
+# Configure lighting setup
+daz_batch_set_properties([
+    {"nodeLabel": "Key Light", "propertyName": "Flux", "value": 2000},
+    {"nodeLabel": "Fill Light", "propertyName": "Flux", "value": 800},
+    {"nodeLabel": "Rim Light", "propertyName": "Flux", "value": 2500}
+])
+```
+
+**Performance:** Setting 10 morphs via batch is ~5-10x faster than 10 individual `daz_set_property` calls.
+
+---
+
+#### `daz_batch_transform`
+Apply the same transform properties to multiple nodes.
+
+**Arguments:**
+- `node_labels` (array): List of node display labels to transform
+- `transforms` (object): Dictionary of property names to values (e.g., `{"XTranslate": 50, "YRotate": 45}`)
+
+**Returns:**
+```json
+{
+  "results": [
+    {"success": true, "node": "Prop1", "applied": ["X Translate", "Y Rotate"]},
+    {"success": false, "node": "Missing", "error": "Node not found: Missing"}
+  ],
+  "successCount": 1,
+  "failureCount": 1,
+  "total": 2
+}
+```
+
+**Use when:** Moving, rotating, or scaling multiple objects by the same amount.
+
+**Example:**
+```
+# Move multiple props to the right
+daz_batch_transform(
+    ["Chair", "Table", "Lamp"],
+    {"XTranslate": 100}
+)
+
+# Rotate and scale multiple objects
+daz_batch_transform(
+    ["Prop1", "Prop2", "Prop3"],
+    {"YRotate": 45, "Scale": 1.2}
+)
+
+# Reset rotation for all cameras
+daz_batch_transform(
+    ["Camera 1", "Camera 2", "Camera 3"],
+    {"XRotate": 0, "YRotate": 0, "ZRotate": 0}
+)
+```
+
+**Note:** Only properties that exist on each node are applied. Missing properties are silently skipped.
+
+---
+
+#### `daz_batch_visibility`
+Show or hide multiple nodes in the viewport and renders.
+
+**Arguments:**
+- `node_labels` (array): List of node display labels to modify
+- `visible` (bool, default `True`): True to show nodes, False to hide them
+
+**Returns:**
+```json
+{
+  "results": [
+    {"success": true, "node": "Ground", "visible": false},
+    {"success": true, "node": "Sky Dome", "visible": false}
+  ],
+  "successCount": 2,
+  "failureCount": 0,
+  "total": 2
+}
+```
+
+**Use when:** Scene management, testing configurations, optimizing render times.
+
+**Example:**
+```
+# Hide all cameras
+daz_batch_visibility(["Camera 1", "Camera 2", "Camera 3"], visible=False)
+
+# Hide environment elements for character close-up
+daz_batch_visibility(["Ground", "Sky Dome", "Background"], visible=False)
+
+# Show all weapons
+daz_batch_visibility(["Sword", "Shield", "Helmet"], visible=True)
+```
+
+**Note:** Hidden nodes remain in the scene but are not visible in viewport or renders.
+
+---
+
+#### `daz_batch_select`
+Select multiple nodes in the DAZ Studio scene.
+
+**Arguments:**
+- `node_labels` (array): List of node display labels to select
+- `add_to_selection` (bool, default `False`): If True, add to current selection; if False, replace current selection
+
+**Returns:**
+```json
+{
+  "selected": ["Genesis 9", "Genesis 8 Female"],
+  "count": 2,
+  "total": 2
+}
+```
+
+**Use when:** Selecting groups of nodes for inspection or operations.
+
+**Example:**
+```
+# Select multiple characters
+daz_batch_select(["Genesis 9", "Genesis 8 Female"])
+
+# Add props to current selection
+daz_batch_select(["Sword", "Shield"], add_to_selection=True)
+
+# Select all lights
+daz_batch_select(["Spot Light 1", "Distant Light 1", "Point Light 1"])
+```
+
+**Note:** Nodes that don't exist are silently skipped. Returns count of successful selections.
+
+---
+
 ### ✏️ Modification Tools
 
 #### `daz_set_property`

@@ -994,6 +994,188 @@ _INTERACTIVE_POSE_SCRIPT = """\
 })()
 """
 
+# args: {operations: [{nodeLabel, propertyName, value}]}
+# Returns: {results: [{success, node, property, value, error}], successCount, failureCount}
+# Batch property setting with individual error handling for each operation
+_BATCH_SET_PROPERTIES_SCRIPT = """\
+(function(){
+    var operations = args.operations || [];
+    var results = [];
+    var successCount = 0;
+    var failureCount = 0;
+
+    for (var i = 0; i < operations.length; i++) {
+        var op = operations[i];
+        var result = { success: false, node: op.nodeLabel };
+
+        try {
+            var n = Scene.findNodeByLabel(op.nodeLabel);
+            if (!n) n = Scene.findNode(op.nodeLabel);
+            if (!n) throw new Error("Node not found: " + op.nodeLabel);
+
+            var prop = null;
+            for (var p = 0; p < n.getNumProperties(); p++) {
+                var pr = n.getProperty(p);
+                if (pr.getLabel() === op.propertyName || pr.getName() === op.propertyName) {
+                    prop = pr;
+                    break;
+                }
+            }
+
+            if (!prop) throw new Error("Property not found: " + op.propertyName);
+            if (!prop.inherits("DzNumericProperty")) throw new Error("Property is not numeric: " + op.propertyName);
+
+            prop.setValue(op.value);
+            result.success = true;
+            result.property = prop.getLabel();
+            result.value = prop.getValue();
+            successCount++;
+        } catch (e) {
+            result.error = e.message || String(e);
+            failureCount++;
+        }
+
+        results.push(result);
+    }
+
+    return {
+        results: results,
+        successCount: successCount,
+        failureCount: failureCount,
+        total: operations.length
+    };
+})()
+"""
+
+# args: {nodeLabels: [string], transforms: {propertyName: value}}
+# Returns: {results: [{success, node, applied, error}], successCount, failureCount}
+# Apply same transform properties to multiple nodes
+_BATCH_TRANSFORM_SCRIPT = """\
+(function(){
+    var nodeLabels = args.nodeLabels || [];
+    var transforms = args.transforms || {};
+    var results = [];
+    var successCount = 0;
+    var failureCount = 0;
+
+    for (var i = 0; i < nodeLabels.length; i++) {
+        var nodeLabel = nodeLabels[i];
+        var result = { success: false, node: nodeLabel, applied: [] };
+
+        try {
+            var n = Scene.findNodeByLabel(nodeLabel);
+            if (!n) n = Scene.findNode(nodeLabel);
+            if (!n) throw new Error("Node not found: " + nodeLabel);
+
+            for (var propName in transforms) {
+                var prop = null;
+                for (var p = 0; p < n.getNumProperties(); p++) {
+                    var pr = n.getProperty(p);
+                    if (pr.getLabel() === propName || pr.getName() === propName) {
+                        prop = pr;
+                        break;
+                    }
+                }
+
+                if (prop && prop.inherits("DzNumericProperty")) {
+                    prop.setValue(transforms[propName]);
+                    result.applied.push(prop.getLabel());
+                }
+            }
+
+            result.success = true;
+            successCount++;
+        } catch (e) {
+            result.error = e.message || String(e);
+            failureCount++;
+        }
+
+        results.push(result);
+    }
+
+    return {
+        results: results,
+        successCount: successCount,
+        failureCount: failureCount,
+        total: nodeLabels.length
+    };
+})()
+"""
+
+# args: {nodeLabels: [string], visible: boolean}
+# Returns: {results: [{success, node, visible, error}], successCount, failureCount}
+# Show or hide multiple nodes
+_BATCH_VISIBILITY_SCRIPT = """\
+(function(){
+    var nodeLabels = args.nodeLabels || [];
+    var visible = args.visible !== undefined ? args.visible : true;
+    var results = [];
+    var successCount = 0;
+    var failureCount = 0;
+
+    for (var i = 0; i < nodeLabels.length; i++) {
+        var nodeLabel = nodeLabels[i];
+        var result = { success: false, node: nodeLabel };
+
+        try {
+            var n = Scene.findNodeByLabel(nodeLabel);
+            if (!n) n = Scene.findNode(nodeLabel);
+            if (!n) throw new Error("Node not found: " + nodeLabel);
+
+            n.setVisible(visible);
+            result.success = true;
+            result.visible = visible;
+            successCount++;
+        } catch (e) {
+            result.error = e.message || String(e);
+            failureCount++;
+        }
+
+        results.push(result);
+    }
+
+    return {
+        results: results,
+        successCount: successCount,
+        failureCount: failureCount,
+        total: nodeLabels.length
+    };
+})()
+"""
+
+# args: {nodeLabels: [string], addToSelection: boolean}
+# Returns: {selected: [labels], count}
+# Select multiple nodes (replace or add to current selection)
+_BATCH_SELECT_SCRIPT = """\
+(function(){
+    var nodeLabels = args.nodeLabels || [];
+    var addToSelection = args.addToSelection !== undefined ? args.addToSelection : false;
+    var selected = [];
+
+    // Clear selection if replacing
+    if (!addToSelection) {
+        Scene.selectAllNodes(false);
+    }
+
+    for (var i = 0; i < nodeLabels.length; i++) {
+        var nodeLabel = nodeLabels[i];
+        var n = Scene.findNodeByLabel(nodeLabel);
+        if (!n) n = Scene.findNode(nodeLabel);
+
+        if (n) {
+            n.select(true);
+            selected.push(n.getLabel());
+        }
+    }
+
+    return {
+        selected: selected,
+        count: selected.length,
+        total: nodeLabels.length
+    };
+})()
+"""
+
 # Registry entries: script_id → (description, script_text)
 # Registered with DazScriptServer on startup so high-level tools call by ID.
 _REGISTRY: dict[str, tuple[str, str]] = {
@@ -1056,6 +1238,22 @@ _REGISTRY: dict[str, tuple[str, str]] = {
     "vangard-interactive-pose": (
         "Coordinate two characters for interactive poses (hug, handshake, etc)",
         _INTERACTIVE_POSE_SCRIPT,
+    ),
+    "vangard-batch-set-properties": (
+        "Set multiple properties on one or more nodes with individual error handling",
+        _BATCH_SET_PROPERTIES_SCRIPT,
+    ),
+    "vangard-batch-transform": (
+        "Apply same transform properties to multiple nodes",
+        _BATCH_TRANSFORM_SCRIPT,
+    ),
+    "vangard-batch-visibility": (
+        "Show or hide multiple nodes",
+        _BATCH_VISIBILITY_SCRIPT,
+    ),
+    "vangard-batch-select": (
+        "Select multiple nodes (replace or add to current selection)",
+        _BATCH_SELECT_SCRIPT,
     ),
 }
 
@@ -1191,6 +1389,7 @@ async def daz_script_help(topic: str = "overview") -> str:
     - morphs: Morph discovery, searching, value ranges, and management
     - hierarchy: Scene hierarchy, parent-child relationships, parenting operations
     - interaction: Multi-character interaction, look-at mechanics, world-space posing
+    - batch: Batch operations for efficient multi-node/multi-property modifications
 
     Args:
         topic: Documentation topic to retrieve (default: "overview")
@@ -1789,6 +1988,181 @@ async def daz_interactive_pose(
         args["distance"] = distance
 
     return await _execute_by_id("vangard-interactive-pose", args)
+
+
+# ---------------------------------------------------------------------------
+# Tools — batch operations
+# ---------------------------------------------------------------------------
+
+@mcp.tool()
+async def daz_batch_set_properties(
+    operations: list[dict[str, Any]],
+) -> dict[str, Any]:
+    """Set multiple properties on one or more nodes in a single call.
+
+    Executes multiple property-setting operations with individual error handling.
+    Failed operations don't abort the entire batch - each operation returns
+    success status and error details.
+
+    Args:
+        operations: List of operation objects, each containing:
+            - nodeLabel (str): Display label of the node
+            - propertyName (str): Property label or internal name
+            - value (float): New value for the property
+
+    Returns:
+      - results: Array of result objects with success, node, property, value, error
+      - successCount: Number of successful operations
+      - failureCount: Number of failed operations
+      - total: Total number of operations attempted
+
+    Example:
+        # Set multiple properties on different nodes
+        daz_batch_set_properties([
+            {"nodeLabel": "Genesis 9", "propertyName": "XTranslate", "value": 100},
+            {"nodeLabel": "Genesis 9", "propertyName": "YRotate", "value": 45},
+            {"nodeLabel": "Camera 1", "propertyName": "ZTranslate", "value": 300}
+        ])
+
+        # Apply multiple morphs to a character
+        daz_batch_set_properties([
+            {"nodeLabel": "Genesis 9", "propertyName": "PHMSmile", "value": 0.5},
+            {"nodeLabel": "Genesis 9", "propertyName": "PHMEyesWide", "value": 0.3},
+            {"nodeLabel": "Genesis 9", "propertyName": "PHMBrowsUp", "value": 0.4}
+        ])
+
+    Note:
+        This is significantly more efficient than calling daz_set_property
+        individually for each operation. All operations execute in a single
+        script call to DAZ Studio.
+    """
+    return await _execute_by_id("vangard-batch-set-properties", {"operations": operations})
+
+
+@mcp.tool()
+async def daz_batch_transform(
+    node_labels: list[str],
+    transforms: dict[str, float],
+) -> dict[str, Any]:
+    """Apply the same transform properties to multiple nodes.
+
+    Useful for moving, rotating, or scaling multiple objects by the same amount.
+    Only properties that exist on each node are applied (missing properties
+    are silently skipped).
+
+    Args:
+        node_labels: List of node display labels to transform.
+        transforms: Dictionary of property names to values (e.g., {"XTranslate": 50, "YRotate": 45}).
+
+    Returns:
+      - results: Array of result objects with success, node, applied properties, error
+      - successCount: Number of nodes successfully transformed
+      - failureCount: Number of nodes that failed
+      - total: Total number of nodes attempted
+
+    Example:
+        # Move multiple props to the right
+        daz_batch_transform(
+            ["Prop1", "Prop2", "Prop3"],
+            {"XTranslate": 100}
+        )
+
+        # Rotate and scale multiple objects
+        daz_batch_transform(
+            ["Chair", "Table", "Lamp"],
+            {"YRotate": 45, "Scale": 1.2}
+        )
+
+        # Reset rotation for all cameras
+        daz_batch_transform(
+            ["Camera 1", "Camera 2", "Camera 3"],
+            {"XRotate": 0, "YRotate": 0, "ZRotate": 0}
+        )
+
+    Note:
+        Transform properties include: XTranslate, YTranslate, ZTranslate,
+        XRotate, YRotate, ZRotate, Scale, XScale, YScale, ZScale.
+    """
+    return await _execute_by_id(
+        "vangard-batch-transform",
+        {"nodeLabels": node_labels, "transforms": transforms}
+    )
+
+
+@mcp.tool()
+async def daz_batch_visibility(
+    node_labels: list[str],
+    visible: bool = True,
+) -> dict[str, Any]:
+    """Show or hide multiple nodes in the viewport and renders.
+
+    Args:
+        node_labels: List of node display labels to modify.
+        visible: True to show nodes, False to hide them (default: True).
+
+    Returns:
+      - results: Array of result objects with success, node, visible state, error
+      - successCount: Number of nodes successfully modified
+      - failureCount: Number of nodes that failed
+      - total: Total number of nodes attempted
+
+    Example:
+        # Hide all cameras
+        daz_batch_visibility(["Camera 1", "Camera 2", "Camera 3"], visible=False)
+
+        # Show multiple props
+        daz_batch_visibility(["Sword", "Shield", "Helmet"], visible=True)
+
+        # Hide environment elements for character close-up
+        daz_batch_visibility(["Ground", "Sky Dome", "Background"], visible=False)
+
+    Note:
+        Hidden nodes are not visible in the viewport or renders, but remain
+        in the scene. Use this for scene management, testing different
+        configurations, or optimizing render times.
+    """
+    return await _execute_by_id(
+        "vangard-batch-visibility",
+        {"nodeLabels": node_labels, "visible": visible}
+    )
+
+
+@mcp.tool()
+async def daz_batch_select(
+    node_labels: list[str],
+    add_to_selection: bool = False,
+) -> dict[str, Any]:
+    """Select multiple nodes in the DAZ Studio scene.
+
+    Args:
+        node_labels: List of node display labels to select.
+        add_to_selection: If True, add to current selection; if False, replace
+                          current selection (default: False).
+
+    Returns:
+      - selected: Array of node labels that were successfully selected
+      - count: Number of nodes selected
+      - total: Total number of node labels provided
+
+    Example:
+        # Select multiple characters
+        daz_batch_select(["Genesis 9", "Genesis 8 Female"])
+
+        # Add props to current selection
+        daz_batch_select(["Sword", "Shield"], add_to_selection=True)
+
+        # Select all lights in scene
+        daz_batch_select(["Spot Light 1", "Distant Light 1", "Point Light 1"])
+
+    Note:
+        Selection affects which nodes appear in the Scene/Parameters panes
+        in DAZ Studio. Some operations apply to the current selection.
+        Nodes that don't exist are silently skipped.
+    """
+    return await _execute_by_id(
+        "vangard-batch-select",
+        {"nodeLabels": node_labels, "addToSelection": add_to_selection}
+    )
 
 
 def main() -> None:
