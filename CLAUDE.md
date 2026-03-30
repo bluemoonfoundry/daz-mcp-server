@@ -20,7 +20,7 @@ uv run vangard-daz-mcp
 
 ## Available MCP Tools
 
-This server exposes 35 tools to MCP clients:
+This server exposes 39 tools to MCP clients:
 
 ### Documentation Tools
 
@@ -28,7 +28,7 @@ This server exposes 35 tools to MCP clients:
 |------|-------------|
 | `daz_script_help` | Get DazScript documentation, examples, and best practices by topic |
 
-**Topics available:** `overview`, `gotchas`, `camera`, `light`, `environment`, `scene`, `properties`, `content`, `coordinates`, `posing`, `morphs`, `hierarchy`, `interaction`, `batch`, `viewport`, `animation`
+**Topics available:** `overview`, `gotchas`, `camera`, `light`, `environment`, `scene`, `properties`, `content`, `coordinates`, `posing`, `morphs`, `hierarchy`, `interaction`, `batch`, `viewport`, `animation`, `rendering`
 
 Documentation is loaded from `src/vangard_daz_mcp/dazscript_docs.json` and can be updated without code changes.
 
@@ -408,6 +408,133 @@ daz_set_keyframe("Genesis 9/rShldrBend", "ZRotate", 90, 45)
 - Any numeric property can be animated (not just transforms)
 - Use `daz_get_animation_info()` to check fps, frame range, and duration before rendering
 
+### Advanced Rendering Control Tools
+
+| Tool | Description |
+|------|-------------|
+| `daz_render_with_camera` | Render from specific camera without changing viewport |
+| `daz_get_render_settings` | Get current render settings and configuration |
+| `daz_batch_render_cameras` | Render from multiple cameras in sequence |
+| `daz_render_animation` | Render animation frame range as image sequence |
+
+**Rendering capabilities:**
+- **Multi-camera rendering**: Render from specific cameras without disrupting viewport
+- **Batch camera renders**: Render from multiple cameras in one operation
+- **Animation export**: Render entire animations as frame-by-frame image sequences
+- **Render configuration**: Query render settings (camera, output path, aspect ratio)
+- **Automated workflows**: Single-call animation and multi-camera rendering
+
+**Common use cases:**
+- **Product photography**: Multi-angle renders (front, side, top, 3/4 views)
+- **Character turntables**: 360° rotation with 8-16 camera positions
+- **Animation export**: Export animations as PNG sequences for video conversion
+- **Test renders**: Quick multi-angle test renders to evaluate composition
+- **Multi-camera animation**: Render same animation from multiple camera angles
+
+**Multi-camera rendering workflow:**
+```python
+# 1. Set up cameras at different angles
+angles = [0, 45, 90, 135, 180, 225, 270, 315]
+for angle in angles:
+    cam_name = f"Cam_{angle}"
+    daz_execute(f'var c = new DzBasicCamera(); Scene.addNode(c); c.setLabel("{cam_name}");')
+    daz_orbit_camera_around(cam_name, "Genesis 9", 200, angle, 15)
+
+# 2. Batch render all angles
+cameras = [f"Cam_{angle}" for angle in angles]
+daz_batch_render_cameras(cameras, "/renders/turntable", "angle")
+# Generates: angle_Cam_0.png, angle_Cam_45.png, ..., angle_Cam_315.png
+```
+
+**Animation rendering workflow:**
+```python
+# 1. Create animation
+daz_set_frame_range(0, 119)  # 4 seconds at 30fps
+daz_set_keyframe("Genesis 9", "YRotate", 0, 0)
+daz_set_keyframe("Genesis 9", "YRotate", 119, 360)
+
+# 2. Render animation
+daz_render_animation("/renders/animation", camera="Camera 1")
+# Generates: frame_0000.png, frame_0001.png, ..., frame_0119.png
+
+# 3. Convert to video (outside Python)
+# ffmpeg -framerate 30 -i frame_%04d.png -c:v libx264 -pix_fmt yuv420p output.mp4
+```
+
+**Comparison: Manual vs Automated Animation Rendering**
+
+*Manual approach (121 tool calls for 120 frames)*:
+```python
+info = daz_get_animation_info()  # 1 call
+for frame in range(info['startFrame'], info['endFrame'] + 1):
+    daz_set_frame(frame)  # 120 calls
+    daz_render(output_path=f"frame_{frame:04d}.png")  # 120 calls
+```
+
+*Automated approach (1 tool call)*:
+```python
+daz_render_animation("/renders/animation")  # 1 call
+```
+
+Benefits:
+- **Efficiency**: Single call instead of 121 calls (reduces HTTP overhead)
+- **Reliability**: No loop interruption, auto frame restoration
+- **Convenience**: Zero-padded filenames, auto frame range detection
+- **Cleaner code**: One line instead of loop
+
+**Product photography workflow:**
+```python
+# Set up standard product angles
+angles = {
+    "front": (0, 10),
+    "front_left": (-45, 15),
+    "front_right": (45, 15),
+    "left": (-90, 10),
+    "right": (90, 10),
+    "top": (0, 75),
+    "back": (180, 10)
+}
+
+# Create cameras
+for name, (h_angle, v_angle) in angles.items():
+    cam_name = f"Product_{name}"
+    daz_execute(f'var c = new DzBasicCamera(); Scene.addNode(c); c.setLabel("{cam_name}");')
+    daz_orbit_camera_around(cam_name, "Product", 250, h_angle, v_angle)
+
+# Render all angles
+camera_list = [f"Product_{name}" for name in angles.keys()]
+daz_batch_render_cameras(camera_list, "/renders/product", "product")
+```
+
+**Video conversion (ffmpeg):**
+```bash
+# Standard quality (30fps)
+ffmpeg -framerate 30 -i frame_%04d.png -c:v libx264 -pix_fmt yuv420p output.mp4
+
+# High quality (slower encode)
+ffmpeg -framerate 30 -i frame_%04d.png -c:v libx264 -preset slow -crf 18 -pix_fmt yuv420p hq_output.mp4
+
+# 60fps (smooth)
+ffmpeg -framerate 60 -i frame_%04d.png -c:v libx264 -pix_fmt yuv420p output_60fps.mp4
+
+# Animated GIF (web preview)
+ffmpeg -framerate 30 -i frame_%04d.png -vf "scale=640:-1" output.gif
+```
+
+**Important notes:**
+- **Viewport camera unchanged**: `daz_render_with_camera()` doesn't change what user sees
+- **Frame numbering**: Auto zero-padded to 4 digits (frame_0000.png, frame_0001.png)
+- **Render time**: Rendering can take minutes per frame (increase `DAZ_TIMEOUT` for long renders)
+- **Pixel dimensions**: Cannot be set reliably via DazScript - set in DAZ Studio UI
+- **Timeline restoration**: `daz_render_animation()` restores current frame after completion
+- **Camera restoration**: Batch and animation tools restore previous render camera
+
+**Performance considerations:**
+- Single frame: 30 seconds to 5+ minutes (depends on quality, scene complexity)
+- 120-frame animation: 1-10 hours
+- Multi-camera batch (8 cameras): 4-40 minutes
+- Increase `DAZ_TIMEOUT` env var for long renders: `DAZ_TIMEOUT=300` (5 minutes) or more
+
 ### Updating Documentation
 
 The `daz_script_help` tool loads documentation from `src/vangard_daz_mcp/dazscript_docs.json`. To add or update topics:
@@ -602,7 +729,7 @@ MCP client → FastMCP tool → httpx.AsyncClient → DazScriptServer (HTTP) →
 | `POST /scripts/:id/execute` | All high-level tools | Execute previously registered script by ID |
 
 **Script registry workflow:**
-1. At startup, `_register_scripts()` registers 31 named scripts:
+1. At startup, `_register_scripts()` registers 35 named scripts:
    - **Basic operations:** `vangard-scene-info`, `vangard-get-node`, `vangard-set-property`, `vangard-render`, `vangard-load-file`
    - **Morph discovery:** `vangard-list-morphs`, `vangard-search-morphs`
    - **Scene hierarchy:** `vangard-get-node-hierarchy`, `vangard-list-children`, `vangard-get-parent`, `vangard-set-parent`
@@ -610,6 +737,7 @@ MCP client → FastMCP tool → httpx.AsyncClient → DazScriptServer (HTTP) →
    - **Batch operations:** `vangard-batch-set-properties`, `vangard-batch-transform`, `vangard-batch-visibility`, `vangard-batch-select`
    - **Viewport/camera control:** `vangard-set-active-camera`, `vangard-orbit-camera-around`, `vangard-frame-camera-to-node`, `vangard-save-camera-preset`, `vangard-load-camera-preset`
    - **Animation system:** `vangard-set-keyframe`, `vangard-get-keyframes`, `vangard-remove-keyframe`, `vangard-clear-animation`, `vangard-set-frame`, `vangard-set-frame-range`, `vangard-get-animation-info`
+   - **Advanced rendering:** `vangard-render-with-camera`, `vangard-get-render-settings`, `vangard-batch-render-cameras`, `vangard-render-animation`
 2. High-level tools call `POST /scripts/:id/execute` with just args (no script body)
 3. On 404 (DAZ Studio restarted), `_execute_by_id()` calls `_register_scripts()` and retries
 

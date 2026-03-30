@@ -1122,6 +1122,181 @@ for frame in range(info['startFrame'], info['endFrame'] + 1):
 
 ---
 
+### 🎥 Advanced Rendering Control
+
+Advanced rendering tools provide programmatic control for multi-camera rendering, animation export, and batch rendering operations.
+
+**Key capabilities:**
+- Render from specific camera without changing viewport
+- Batch render from multiple cameras
+- Export animations as image sequences
+- Query render settings
+- Automated rendering workflows
+
+**Common use cases:**
+- Multi-angle product shots (front, side, top, perspective)
+- Character turntables (8-16 camera angles)
+- Animation export (frame-by-frame image sequences)
+- Test renders from multiple angles
+- Multi-camera animation rendering
+
+#### `daz_render_with_camera`
+Render from specific camera without changing active viewport camera.
+
+**Arguments:**
+- `camera_label` (string): Camera to render from
+- `output_path` (string, optional): Output file path (if not specified, renders to viewport)
+
+**Returns:**
+```json
+{
+  "success": true,
+  "camera": "Camera 1",
+  "outputPath": "/path/to/render.png"
+}
+```
+
+**Use when:** Multi-camera batch renders, testing camera angles without disrupting viewport.
+
+**Example:**
+```python
+# Render from specific camera
+daz_render_with_camera("Camera 1", output_path="/renders/cam1.png")
+
+# Render from multiple cameras
+for cam in ["Front", "Side", "Top"]:
+    daz_render_with_camera(cam, output_path=f"/renders/{cam}.png")
+```
+
+**Note:** Viewport camera remains unchanged. Previous render camera is restored automatically.
+
+---
+
+#### `daz_get_render_settings`
+Get current render settings and configuration.
+
+**Returns:**
+```json
+{
+  "renderToFile": true,
+  "outputPath": "/path/to/output.png",
+  "currentCamera": "Camera 1",
+  "aspectRatio": 1.777,
+  "aspectWidth": 16,
+  "aspectHeight": 9
+}
+```
+
+**Use when:** Verifying render configuration before batch operations, debugging render issues.
+
+**Example:**
+```python
+# Check render settings
+settings = daz_get_render_settings()
+print(f"Render camera: {settings['currentCamera']}")
+print(f"Aspect: {settings['aspectWidth']}x{settings['aspectHeight']}")
+
+# Verify configuration
+if not settings['renderToFile']:
+    print("Warning: Render configured for viewport, not file")
+```
+
+---
+
+#### `daz_batch_render_cameras`
+Render from multiple cameras in sequence.
+
+**Arguments:**
+- `cameras` (list[string]): List of camera labels
+- `output_dir` (string): Output directory
+- `base_filename` (string, default `"render"`): Base filename (camera name is appended)
+
+**Returns:**
+```json
+{
+  "success": true,
+  "rendered": [
+    {"camera": "Front", "outputPath": "/renders/product_Front.png"},
+    {"camera": "Side", "outputPath": "/renders/product_Side.png"}
+  ],
+  "total": 2
+}
+```
+
+**Use when:** Product photography, turntable renders, multi-angle test renders.
+
+**Example:**
+```python
+# Render from multiple cameras
+daz_batch_render_cameras(
+    cameras=["Front", "Side", "Top", "Perspective"],
+    output_dir="/renders",
+    base_filename="product"
+)
+# Generates: product_Front.png, product_Side.png, product_Top.png, product_Perspective.png
+
+# Turntable (8 cameras around character)
+cameras = [f"Cam_{angle}" for angle in [0, 45, 90, 135, 180, 225, 270, 315]]
+daz_batch_render_cameras(cameras, "/renders/turntable", "angle")
+```
+
+**Note:** Camera names in filenames have non-alphanumeric chars replaced with underscores. Previous render camera is restored after batch.
+
+---
+
+#### `daz_render_animation`
+Render animation frame range as image sequence.
+
+**Arguments:**
+- `output_dir` (string): Output directory
+- `start_frame` (int, optional): First frame (default: animation range start)
+- `end_frame` (int, optional): Last frame (default: animation range end)
+- `filename_pattern` (string, default `"frame"`): Filename pattern (frame number appended)
+- `camera` (string, optional): Camera to render from (default: current render camera)
+
+**Returns:**
+```json
+{
+  "success": true,
+  "rendered": [
+    {"frame": 0, "outputPath": "/animation/frame_0000.png"},
+    {"frame": 1, "outputPath": "/animation/frame_0001.png"}
+  ],
+  "total": 120,
+  "frames": {"start": 0, "end": 119}
+}
+```
+
+**Use when:** Exporting animations, creating video sequences.
+
+**Example:**
+```python
+# Render entire animation (uses animation range)
+daz_render_animation(output_dir="/animation")
+# Generates: frame_0000.png, frame_0001.png, ..., frame_0119.png
+
+# Render specific frame range
+daz_render_animation(
+    output_dir="/animation/clip",
+    start_frame=30,
+    end_frame=60,
+    filename_pattern="clip"
+)
+
+# Render animation from specific camera
+daz_render_animation(
+    output_dir="/animation",
+    camera="Camera 1"
+)
+
+# Convert to video (using ffmpeg)
+# ffmpeg -framerate 30 -i frame_%04d.png -c:v libx264 -pix_fmt yuv420p output.mp4
+```
+
+**Note:** Frame numbers zero-padded to 4 digits (0000-9999). Timeline position and render camera restored after completion.
+
+---
+
 ### ✏️ Modification Tools
 
 #### `daz_set_property`

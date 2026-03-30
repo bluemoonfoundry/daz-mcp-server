@@ -1355,6 +1355,202 @@ _LOAD_CAMERA_PRESET_SCRIPT = """\
 })()
 """
 
+# args: {cameraLabel, outputPath}
+# Returns: {success, camera, outputPath}
+# Render from specific camera (doesn't change active viewport camera)
+_RENDER_WITH_CAMERA_SCRIPT = """\
+(function(){
+    var cam = Scene.findNodeByLabel(args.cameraLabel);
+    if (!cam) cam = Scene.findNode(args.cameraLabel);
+    if (!cam) throw new Error("Camera not found: " + args.cameraLabel);
+    if (!cam.inherits("DzCamera")) throw new Error("Node is not a camera: " + args.cameraLabel);
+
+    var renderMgr = App.getRenderMgr();
+    var opts = renderMgr.getRenderOptions();
+
+    // Save previous camera
+    var previousCam = opts.camera;
+
+    // Set render camera
+    opts.camera = cam;
+
+    // Set output if provided
+    if (args.outputPath) {
+        opts.renderImgToId = 0;
+        opts.renderImgFilename = args.outputPath;
+    }
+
+    // Render
+    renderMgr.doRender();
+
+    // Restore previous camera
+    if (previousCam) {
+        opts.camera = previousCam;
+    }
+
+    return {
+        success: true,
+        camera: cam.getLabel(),
+        outputPath: args.outputPath || null
+    };
+})()
+"""
+
+# args: none
+# Returns: {renderToFile, currentCamera, aspectRatio, aspectWidth, aspectHeight}
+# Get current render settings
+_GET_RENDER_SETTINGS_SCRIPT = """\
+(function(){
+    var renderMgr = App.getRenderMgr();
+    var opts = renderMgr.getRenderOptions();
+
+    var result = {
+        renderToFile: opts.renderImgToId === 0,
+        outputPath: opts.renderImgToId === 0 ? opts.renderImgFilename : null,
+        aspectRatio: opts.aspect,
+        aspectWidth: opts.aspectWidth,
+        aspectHeight: opts.aspectHeight
+    };
+
+    // Get current render camera
+    if (opts.camera) {
+        result.currentCamera = opts.camera.getLabel();
+    } else {
+        result.currentCamera = null;
+    }
+
+    return result;
+})()
+"""
+
+# args: {cameras: [labels], outputDir, baseFilename}
+# Returns: {success, rendered: [{camera, outputPath}], total}
+# Render from multiple cameras in sequence
+_BATCH_RENDER_CAMERAS_SCRIPT = """\
+(function(){
+    var cameras = args.cameras || [];
+    var outputDir = args.outputDir || "";
+    var baseFilename = args.baseFilename || "render";
+
+    var renderMgr = App.getRenderMgr();
+    var opts = renderMgr.getRenderOptions();
+    var previousCam = opts.camera;
+
+    var rendered = [];
+
+    for (var i = 0; i < cameras.length; i++) {
+        var camLabel = cameras[i];
+        var cam = Scene.findNodeByLabel(camLabel);
+        if (!cam) cam = Scene.findNode(camLabel);
+
+        if (cam && cam.inherits("DzCamera")) {
+            // Build output path
+            var outputPath = outputDir;
+            if (outputPath && outputPath.charAt(outputPath.length - 1) !== "/" &&
+                outputPath.charAt(outputPath.length - 1) !== "\\\\") {
+                outputPath += "/";
+            }
+            outputPath += baseFilename + "_" + camLabel.replace(/[^a-zA-Z0-9]/g, "_") + ".png";
+
+            // Set camera and output
+            opts.camera = cam;
+            opts.renderImgToId = 0;
+            opts.renderImgFilename = outputPath;
+
+            // Render
+            renderMgr.doRender();
+
+            rendered.push({
+                camera: cam.getLabel(),
+                outputPath: outputPath
+            });
+        }
+    }
+
+    // Restore previous camera
+    if (previousCam) {
+        opts.camera = previousCam;
+    }
+
+    return {
+        success: true,
+        rendered: rendered,
+        total: cameras.length
+    };
+})()
+"""
+
+# args: {startFrame, endFrame, outputDir, filenamePattern, camera}
+# Returns: {success, rendered: [{frame, outputPath}], total}
+# Render animation frame range
+_RENDER_ANIMATION_SCRIPT = """\
+(function(){
+    var startFrame = args.startFrame !== undefined ? args.startFrame : Scene.getAnimRange().getStart();
+    var endFrame = args.endFrame !== undefined ? args.endFrame : Scene.getAnimRange().getEnd();
+    var outputDir = args.outputDir || "";
+    var filenamePattern = args.filenamePattern || "frame";
+
+    var renderMgr = App.getRenderMgr();
+    var opts = renderMgr.getRenderOptions();
+
+    // Set camera if specified
+    var previousCam = opts.camera;
+    if (args.camera) {
+        var cam = Scene.findNodeByLabel(args.camera);
+        if (!cam) cam = Scene.findNode(args.camera);
+        if (cam && cam.inherits("DzCamera")) {
+            opts.camera = cam;
+        }
+    }
+
+    var rendered = [];
+    var previousFrame = Scene.getFrame();
+
+    for (var frame = startFrame; frame <= endFrame; frame++) {
+        // Set frame
+        Scene.setFrame(frame);
+
+        // Build output path with zero-padding
+        var frameStr = String(frame);
+        while (frameStr.length < 4) frameStr = "0" + frameStr;
+
+        var outputPath = outputDir;
+        if (outputPath && outputPath.charAt(outputPath.length - 1) !== "/" &&
+            outputPath.charAt(outputPath.length - 1) !== "\\\\") {
+            outputPath += "/";
+        }
+        outputPath += filenamePattern + "_" + frameStr + ".png";
+
+        // Set output
+        opts.renderImgToId = 0;
+        opts.renderImgFilename = outputPath;
+
+        // Render
+        renderMgr.doRender();
+
+        rendered.push({
+            frame: frame,
+            outputPath: outputPath
+        });
+    }
+
+    // Restore previous frame
+    Scene.setFrame(previousFrame);
+
+    // Restore previous camera
+    if (previousCam) {
+        opts.camera = previousCam;
+    }
+
+    return {
+        success: true,
+        rendered: rendered,
+        total: rendered.length,
+        frames: {start: startFrame, end: endFrame}
+    };
+})()
+"""
+
 # args: {nodeLabel, propertyName, frame, value}
 # Returns: {success, node, property, frame, value}
 # Set a keyframe on a property at specified frame
@@ -1700,6 +1896,22 @@ _REGISTRY: dict[str, tuple[str, str]] = {
         "Get animation timeline info (current frame, range, fps)",
         _GET_ANIMATION_INFO_SCRIPT,
     ),
+    "vangard-render-with-camera": (
+        "Render from specific camera without changing viewport",
+        _RENDER_WITH_CAMERA_SCRIPT,
+    ),
+    "vangard-get-render-settings": (
+        "Get current render settings and configuration",
+        _GET_RENDER_SETTINGS_SCRIPT,
+    ),
+    "vangard-batch-render-cameras": (
+        "Render from multiple cameras in sequence",
+        _BATCH_RENDER_CAMERAS_SCRIPT,
+    ),
+    "vangard-render-animation": (
+        "Render animation frame range as image sequence",
+        _RENDER_ANIMATION_SCRIPT,
+    ),
 }
 
 
@@ -1837,6 +2049,7 @@ async def daz_script_help(topic: str = "overview") -> str:
     - batch: Batch operations for efficient multi-node/multi-property modifications
     - viewport: Viewport and camera control, positioning, framing, presets
     - animation: Animation system, keyframing, timeline control, rendering animations
+    - rendering: Advanced rendering control, multi-camera, batch rendering, animation export
 
     Args:
         topic: Documentation topic to retrieve (default: "overview")
@@ -3162,6 +3375,222 @@ async def daz_get_animation_info() -> dict[str, Any]:
         - Use before rendering animation to know frame count
     """
     return await _execute_by_id("vangard-get-animation-info", {})
+
+
+# ---------------------------------------------------------------------------
+# Tools — advanced rendering control
+# ---------------------------------------------------------------------------
+
+@mcp.tool()
+async def daz_render_with_camera(
+    camera_label: str,
+    output_path: str | None = None,
+) -> dict[str, Any]:
+    """Render from specific camera without changing active viewport camera.
+
+    Renders the scene from the specified camera's viewpoint. The viewport camera
+    remains unchanged, making this ideal for multi-camera renders without
+    disrupting the user's viewport.
+
+    Args:
+        camera_label: Display label of the camera to render from.
+        output_path: Optional output file path. If not specified, renders to viewport.
+
+    Returns:
+      - success: true on success
+      - camera: camera label used for render
+      - outputPath: output file path (or null if rendered to viewport)
+
+    Example:
+        # Render from specific camera
+        daz_render_with_camera("Camera 1", output_path="/path/to/render.png")
+
+        # Render from multiple cameras without changing viewport
+        cameras = ["Front", "Side", "Top", "Perspective"]
+        for cam in cameras:
+            daz_render_with_camera(cam, output_path=f"renders/{cam}.png")
+
+        # Test render from camera (to viewport, no file)
+        daz_render_with_camera("Camera 1")
+
+    Note:
+        - Viewport camera remains unchanged after render
+        - Previous render camera is restored automatically
+        - Use for multi-camera batch renders
+        - Combine with daz_orbit_camera_around() to set up camera first
+    """
+    args: dict[str, Any] = {"cameraLabel": camera_label}
+    if output_path is not None:
+        args["outputPath"] = output_path
+
+    return await _execute_by_id("vangard-render-with-camera", args)
+
+
+@mcp.tool()
+async def daz_get_render_settings() -> dict[str, Any]:
+    """Get current render settings and configuration.
+
+    Returns information about the current render configuration, including
+    render target, output path, aspect ratio, and render camera.
+
+    Returns:
+      - renderToFile: true if rendering to file, false if to viewport
+      - outputPath: current output file path (or null)
+      - currentCamera: label of current render camera (or null for viewport camera)
+      - aspectRatio: aspect ratio value
+      - aspectWidth: aspect width component
+      - aspectHeight: aspect height component
+
+    Example:
+        # Check render settings
+        settings = daz_get_render_settings()
+        print(f"Render camera: {settings['currentCamera']}")
+        print(f"Output: {settings['outputPath']}")
+        print(f"Aspect: {settings['aspectWidth']}x{settings['aspectHeight']}")
+
+        # Verify render is configured correctly before batch render
+        settings = daz_get_render_settings()
+        if not settings['renderToFile']:
+            print("Warning: Render is configured for viewport, not file output")
+
+    Note:
+        - Aspect ratio determines render dimensions relative to each other
+        - Pixel dimensions cannot be set reliably via DazScript
+        - currentCamera may be null if using active viewport camera
+    """
+    return await _execute_by_id("vangard-get-render-settings", {})
+
+
+@mcp.tool()
+async def daz_batch_render_cameras(
+    cameras: list[str],
+    output_dir: str,
+    base_filename: str = "render",
+) -> dict[str, Any]:
+    """Render from multiple cameras in sequence.
+
+    Renders the same scene from multiple camera angles in a single operation.
+    Each camera generates a separate output file with the camera name appended.
+
+    Args:
+        cameras: List of camera labels to render from.
+        output_dir: Output directory for rendered images.
+        base_filename: Base filename (default: "render"). Camera name is appended automatically.
+
+    Returns:
+      - success: true on success
+      - rendered: Array of {camera, outputPath} objects
+      - total: Total number of cameras attempted
+
+    Example:
+        # Render from multiple preset cameras
+        daz_batch_render_cameras(
+            cameras=["Front", "Side", "Top", "Perspective"],
+            output_dir="/path/to/renders",
+            base_filename="character"
+        )
+        # Generates: character_Front.png, character_Side.png, etc.
+
+        # Render turntable (8 cameras around character)
+        cameras = [f"Cam_{angle}" for angle in [0, 45, 90, 135, 180, 225, 270, 315]]
+        daz_batch_render_cameras(cameras, "/path/to/turntable", "frame")
+
+        # Render all cameras in scene
+        scene_info = daz_scene_info()
+        all_cameras = [cam['label'] for cam in scene_info['cameras']]
+        daz_batch_render_cameras(all_cameras, "/path/to/renders")
+
+    Note:
+        - Camera names in filenames have non-alphanumeric chars replaced with underscores
+        - All renders use current scene state (same lighting, poses, etc.)
+        - Previous render camera is restored after batch completes
+        - Cameras that don't exist are skipped
+    """
+    return await _execute_by_id(
+        "vangard-batch-render-cameras",
+        {
+            "cameras": cameras,
+            "outputDir": output_dir,
+            "baseFilename": base_filename,
+        }
+    )
+
+
+@mcp.tool()
+async def daz_render_animation(
+    output_dir: str,
+    start_frame: int | None = None,
+    end_frame: int | None = None,
+    filename_pattern: str = "frame",
+    camera: str | None = None,
+) -> dict[str, Any]:
+    """Render animation frame range as image sequence.
+
+    Renders each frame of an animation to separate image files. Automatically
+    advances through frames and generates zero-padded filenames for proper
+    sorting. This is the recommended way to export animations.
+
+    Args:
+        output_dir: Output directory for rendered frames.
+        start_frame: First frame to render (default: animation range start).
+        end_frame: Last frame to render (default: animation range end).
+        filename_pattern: Filename pattern (default: "frame"). Frame number is appended.
+        camera: Optional camera label to render from (default: current render camera).
+
+    Returns:
+      - success: true on success
+      - rendered: Array of {frame, outputPath} objects
+      - total: Total number of frames rendered
+      - frames: {start, end} frame range rendered
+
+    Example:
+        # Render entire animation
+        daz_render_animation(output_dir="/path/to/animation")
+        # Generates: frame_0000.png, frame_0001.png, ..., frame_0119.png
+
+        # Render specific frame range
+        daz_render_animation(
+            output_dir="/path/to/animation",
+            start_frame=30,
+            end_frame=60,
+            filename_pattern="clip"
+        )
+
+        # Render animation from specific camera
+        daz_render_animation(
+            output_dir="/path/to/animation",
+            camera="Camera 1"
+        )
+
+        # Render preview (every 5th frame)
+        info = daz_get_animation_info()
+        for frame in range(info['startFrame'], info['endFrame'] + 1, 5):
+            daz_render_animation(
+                output_dir="/path/to/preview",
+                start_frame=frame,
+                end_frame=frame,
+                filename_pattern=f"preview_frame"
+            )
+
+    Note:
+        - Frame numbers are zero-padded to 4 digits (0000, 0001, etc.)
+        - Current timeline frame is restored after render completes
+        - If camera is specified, render camera is restored after completion
+        - Use daz_get_animation_info() to get default frame range
+        - Convert to video: ffmpeg -framerate 30 -i frame_%04d.png output.mp4
+    """
+    args: dict[str, Any] = {
+        "outputDir": output_dir,
+        "filenamePattern": filename_pattern,
+    }
+    if start_frame is not None:
+        args["startFrame"] = start_frame
+    if end_frame is not None:
+        args["endFrame"] = end_frame
+    if camera is not None:
+        args["camera"] = camera
+
+    return await _execute_by_id("vangard-render-animation", args)
 
 
 def main() -> None:
