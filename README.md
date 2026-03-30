@@ -14,6 +14,7 @@ This MCP server allows Claude (via Claude Desktop or other MCP clients) to contr
 - Load content files
 - Trigger renders
 - Execute arbitrary DazScript code
+- Access comprehensive DazScript documentation and examples
 
 The server acts as a bridge: **MCP Client** ↔ **vangard-daz-mcp** ↔ **DazScriptServer plugin** ↔ **DAZ Studio**
 
@@ -120,6 +121,39 @@ After saving the config, restart Claude Desktop. The DAZ Studio tools will appea
 ---
 
 ## Available Tools
+
+### 📚 Documentation Tools
+
+#### `daz_script_help`
+Get DazScript documentation, examples, and best practices.
+
+**Arguments:**
+- `topic` (string, default `"overview"`): Documentation topic to retrieve
+
+**Available Topics:**
+- `overview` - DazScript environment basics
+- `gotchas` - Critical mistakes that cause timeouts or errors
+- `camera` - Camera creation, positioning, and aiming
+- `light` - Light creation, types, and three-point lighting
+- `environment` - Iray environment settings and lighting modes
+- `scene` - Scene management (new, save, load, selection)
+- `properties` - Node properties, transforms, and morphs
+- `content` - Browsing and loading content from library
+- `coordinates` - Coordinate system and positioning reference
+- `posing` - Figure posing, bone hierarchy, morphs vs poses, rotation gotchas
+- `interaction` - Multi-character interaction, look-at mechanics, world-space posing
+
+**Returns:** Formatted documentation with examples
+
+**Use when:** Before writing custom DazScript code to learn correct patterns and avoid common mistakes.
+
+**Example:**
+```
+daz_script_help("camera")  # Get camera documentation
+daz_script_help("gotchas") # Learn critical gotchas
+```
+
+---
 
 ### 🔍 Inspection Tools
 
@@ -272,6 +306,157 @@ Trigger a render using current DAZ Studio render settings.
 - If `output_path` is omitted, uses DAZ Studio's configured output path
 
 **Use when:** Rendering the current scene setup.
+
+---
+
+### 🎭 Multi-Character Interaction Tools
+
+#### `daz_look_at_point`
+Make character look at a world-space point with cascading body involvement.
+
+**Arguments:**
+- `character_label` (string): Character display label or internal name
+- `target_x` (float): World X coordinate (cm) to look at
+- `target_y` (float): World Y coordinate (cm) to look at
+- `target_z` (float): World Z coordinate (cm) to look at
+- `mode` (string, default `"head"`): How much body to involve
+  - `"eyes"` - Only rotate eyes
+  - `"head"` - Eyes + head rotation
+  - `"neck"` - Eyes + head + neck
+  - `"torso"` - Eyes + head + neck + chest
+  - `"full"` - Complete body rotation including hip
+
+**Returns:**
+```json
+{
+  "success": true,
+  "character": "Genesis 9",
+  "mode": "head",
+  "rotatedBones": ["lEye", "rEye", "head"]
+}
+```
+
+**Use when:** Making a character look at a specific point in 3D space with natural body movement.
+
+**Example:**
+```
+# Look at point in front at eye level
+daz_look_at_point("Genesis 9", 0, 160, 200, mode="head")
+
+# Full body turn to look behind
+daz_look_at_point("Genesis 9", 0, 140, -150, mode="full")
+```
+
+---
+
+#### `daz_look_at_character`
+Make one character look at another character's face.
+
+**Arguments:**
+- `source_label` (string): Character who will look
+- `target_label` (string): Character to look at
+- `mode` (string, default `"head"`): Body involvement level (same options as `daz_look_at_point`)
+
+**Returns:**
+```json
+{
+  "success": true,
+  "source": "Alice",
+  "target": "Bob",
+  "mode": "head",
+  "targetPosition": {"x": 50, "y": 163, "z": 0},
+  "rotatedBones": ["lEye", "rEye", "head"]
+}
+```
+
+**Use when:** Creating eye contact or attention between characters.
+
+**Example:**
+```
+# Alice looks at Bob
+daz_look_at_character("Alice", "Bob", mode="head")
+
+# Bob turns whole body to face Alice
+daz_look_at_character("Bob", "Alice", mode="full")
+```
+
+---
+
+#### `daz_reach_toward`
+Position character's arm to reach toward a world-space point using pseudo-IK.
+
+**Arguments:**
+- `character_label` (string): Character display label or internal name
+- `side` (string): Which arm: `"left"` or `"right"`
+- `target_x` (float): World X coordinate (cm) to reach toward
+- `target_y` (float): World Y coordinate (cm) to reach toward
+- `target_z` (float): World Z coordinate (cm) to reach toward
+
+**Returns:**
+```json
+{
+  "success": true,
+  "character": "Genesis 9",
+  "side": "right",
+  "targetDistance": 45.3,
+  "bones": ["right shoulder", "right forearm", "right hand"]
+}
+```
+
+**Use when:** Positioning hands to grasp objects, point at things, or reach toward targets.
+
+**Example:**
+```
+# Reach right hand toward object at chest height
+daz_reach_toward("Genesis 9", "right", 50, 130, 80)
+
+# Reach left hand toward object on left side
+daz_reach_toward("Genesis 9", "left", -60, 100, 50)
+```
+
+**Note:** Uses simplified IK approximation. For precise hand positioning, load artist-created pose presets.
+
+---
+
+#### `daz_interactive_pose`
+Coordinate two characters for interactive poses.
+
+**Arguments:**
+- `char1_label` (string): First character display label
+- `char2_label` (string): Second character display label
+- `interaction_type` (string, default `"face-each-other"`): Type of interaction
+  - `"face-each-other"` - Position and rotate to face each other
+  - `"hug"` - Both characters hug with arms around each other
+  - `"shoulder-arm"` - Char1 puts arm around char2's shoulders
+  - `"handshake"` - Both extend right hands for handshake
+- `distance` (float, optional): Spacing between characters in cm
+
+**Returns:**
+```json
+{
+  "success": true,
+  "char1": "Alice",
+  "char2": "Bob",
+  "interactionType": "hug",
+  "applied": ["facing", "hug arms"]
+}
+```
+
+**Use when:** Creating common two-character interactions quickly.
+
+**Example:**
+```
+# Position characters facing each other at conversation distance
+daz_interactive_pose("Alice", "Bob", "face-each-other", distance=120)
+
+# Create tight hug
+daz_interactive_pose("Alice", "Bob", "hug", distance=30)
+
+# Bob puts arm around Alice's shoulders
+daz_interactive_pose("Bob", "Alice", "shoulder-arm")
+```
+
+**Note:** These are simplified interaction poses. Fine-tune positions afterward using `daz_set_property`.
 
 ---
 

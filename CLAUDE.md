@@ -20,14 +20,24 @@ uv run vangard-daz-mcp
 
 ## Available MCP Tools
 
-This server exposes 8 tools to MCP clients:
+This server exposes 13 tools to MCP clients:
+
+### Documentation Tools
+
+| Tool | Description |
+|------|-------------|
+| `daz_script_help` | Get DazScript documentation, examples, and best practices by topic |
+
+**Topics available:** `overview`, `gotchas`, `camera`, `light`, `environment`, `scene`, `properties`, `content`, `coordinates`, `posing`, `interaction`
+
+Documentation is loaded from `src/vangard_daz_mcp/dazscript_docs.json` and can be updated without code changes.
 
 ### Low-Level Tools (direct DazScript execution)
 
 | Tool | Description |
 |------|-------------|
 | `daz_status` | Check DAZ Studio connectivity and DazScriptServer version |
-| `daz_execute` | Execute inline DazScript code with optional args |
+| `daz_execute` | Execute inline DazScript code with optional args (enhanced docstring with critical gotchas) |
 | `daz_execute_file` | Execute a `.dsa`/`.ds` script file from disk |
 
 ### High-Level Tools (structured operations)
@@ -41,6 +51,34 @@ This server exposes 8 tools to MCP clients:
 | `daz_load_file` | Load a content file (`.duf`, `.daz`, `.obj`, etc.) into scene |
 
 High-level tools use the **DazScriptServer script registry** (see Architecture section below) for efficiency.
+
+### Multi-Character Interaction Tools (advanced posing)
+
+| Tool | Description |
+|------|-------------|
+| `daz_look_at_point` | Make character look at world-space point with configurable body involvement (eyes/head/neck/torso/full) |
+| `daz_look_at_character` | Make one character look at another character's face with cascading body rotation |
+| `daz_reach_toward` | Position arm to reach toward world-space point using pseudo-IK (calculates shoulder/elbow angles) |
+| `daz_interactive_pose` | Coordinate two characters for interaction (hug, handshake, shoulder-arm, face-each-other) |
+
+These tools handle complex world-space mathematics for multi-character scenes:
+- Cascading look-at rotations from eyes through head/neck/torso/hip
+- Pseudo-IK arm reaching with automatic elbow bend calculation
+- Pre-configured interaction poses with proper character spacing
+- Complementary pose coordination between two characters
+
+**Use these helpers** for standard multi-character interactions instead of writing custom scripts. They handle the error-prone world-space coordinate transformations and provide natural-looking cascading body movements.
+
+### Updating Documentation
+
+The `daz_script_help` tool loads documentation from `src/vangard_daz_mcp/dazscript_docs.json`. To add or update topics:
+
+1. Edit `dazscript_docs.json` with new topic entries
+2. Each topic has a `title` and `content` field
+3. Use markdown formatting in `content` for code examples
+4. Restart the MCP server to reload documentation
+
+No code changes required to update documentation.
 
 ## DazScript environment (verified against DAZ Studio 4.24.0.4)
 
@@ -225,7 +263,9 @@ MCP client → FastMCP tool → httpx.AsyncClient → DazScriptServer (HTTP) →
 | `POST /scripts/:id/execute` | All high-level tools | Execute previously registered script by ID |
 
 **Script registry workflow:**
-1. At startup, `_register_scripts()` registers 5 named scripts (`vangard-scene-info`, `vangard-get-node`, etc.)
+1. At startup, `_register_scripts()` registers 9 named scripts:
+   - **Basic operations:** `vangard-scene-info`, `vangard-get-node`, `vangard-set-property`, `vangard-render`, `vangard-load-file`
+   - **Multi-character interaction:** `vangard-look-at-point`, `vangard-look-at-character`, `vangard-reach-toward`, `vangard-interactive-pose`
 2. High-level tools call `POST /scripts/:id/execute` with just args (no script body)
 3. On 404 (DAZ Studio restarted), `_execute_by_id()` calls `_register_scripts()` and retries
 
