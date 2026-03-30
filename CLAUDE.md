@@ -18,6 +18,30 @@ uv run pytest tests/test_server.py::test_daz_status_ok -v
 uv run vangard-daz-mcp
 ```
 
+## Available MCP Tools
+
+This server exposes 8 tools to MCP clients:
+
+### Low-Level Tools (direct DazScript execution)
+
+| Tool | Description |
+|------|-------------|
+| `daz_status` | Check DAZ Studio connectivity and DazScriptServer version |
+| `daz_execute` | Execute inline DazScript code with optional args |
+| `daz_execute_file` | Execute a `.dsa`/`.ds` script file from disk |
+
+### High-Level Tools (structured operations)
+
+| Tool | Description |
+|------|-------------|
+| `daz_scene_info` | Get scene snapshot (figures, cameras, lights, selection) |
+| `daz_get_node` | Read all numeric properties of a node by label/name |
+| `daz_set_property` | Set a numeric property (transform, morph, etc.) on a node |
+| `daz_render` | Trigger render with current settings, optional output path |
+| `daz_load_file` | Load a content file (`.duf`, `.daz`, `.obj`, etc.) into scene |
+
+High-level tools use the **DazScriptServer script registry** (see Architecture section below) for efficiency.
+
 ## DazScript environment (verified against DAZ Studio 4.24.0.4)
 
 ### Globals
@@ -169,6 +193,8 @@ envNode.findProperty("Environment Mode").setValue(3); // 3 = Scene Only
 
 ## Architecture
 
+**Version:** 0.1.0 (early release, functional and tested)
+
 This is a [FastMCP](https://github.com/jlowin/fastmcp) 3.x server that bridges Claude (or any MCP client) to DAZ Studio via the **DazScriptServer** HTTP plugin. DAZ Studio must be running locally with DazScriptServer active on port 18811.
 
 ### Request flow
@@ -181,19 +207,29 @@ MCP client → FastMCP tool → httpx.AsyncClient → DazScriptServer (HTTP) →
 
 - **Single file server**: all tools live in `src/vangard_daz_mcp/server.py`. The `mcp` FastMCP instance is the module-level singleton.
 - **Shared HTTP client**: a single `httpx.AsyncClient` is created at startup via the `lifespan` async context manager and stored in the module-level `_http_client` global. FastMCP 3.x removed `server.state`; the global variable is the correct pattern.
-- **`_execute()` helper**: all high-level tools go through this single coroutine which handles POST, HTTP errors, and script-level `success: false` → `ToolError` conversion.
-- **DazScript constants**: embedded scripts are module-level string constants (`_SCENE_INFO_SCRIPT` etc.) so they can be read and edited without hunting through function bodies.
-- **Configuration**: `DAZ_HOST`, `DAZ_PORT`, `DAZ_TIMEOUT` environment variables are read at module import time. Changing them requires a server restart.
+- **Authentication**: API token loaded with priority: `DAZ_API_TOKEN` env var → `~/.daz3d/dazscriptserver_token.txt` file → empty string (no auth). Token is read once at startup and sent via `X-API-Token` header on all requests.
+- **Script registry**: High-level tools register their DazScript implementations with DazScriptServer at startup via `POST /scripts/register`. Subsequent calls use `POST /scripts/:id/execute` (no script retransmission). On 404 (DAZ Studio restarted, registry cleared), the server auto-reregisters and retries.
+- **`_execute()` helper**: low-level execution helper used by `daz_execute`. Sends `POST /execute` with inline script, handles HTTP errors and `success: false` → `ToolError`.
+- **`_execute_by_id()` helper**: high-level execution helper used by all structured tools. Calls registered scripts by ID, auto-reregisters on 404, converts failures to `ToolError`.
+- **DazScript constants**: embedded scripts are module-level string constants (`_SCENE_INFO_SCRIPT` etc.) and registered in `_REGISTRY` dict. This keeps script logic visible and editable without hunting through function bodies.
+- **Configuration**: `DAZ_HOST`, `DAZ_PORT`, `DAZ_TIMEOUT`, `DAZ_API_TOKEN` environment variables are read at module import time. Changing them requires a server restart.
 
 ### DazScriptServer API surface
 
-| Endpoint | Used by |
-|----------|---------|
-| `GET /status` | `daz_status` |
-| `POST /execute` with `script` | `daz_execute`, all high-level tools |
-| `POST /execute` with `scriptFile` | `daz_execute_file` |
+| Endpoint | Used by | Purpose |
+|----------|---------|---------|
+| `GET /status` | `daz_status` | Check connectivity and version |
+| `POST /execute` with `script` | `daz_execute` | Execute inline DazScript |
+| `POST /execute` with `scriptFile` | `daz_execute_file` | Execute script file from disk |
+| `POST /scripts/register` | `_register_scripts()` (startup) | Register named scripts for later execution |
+| `POST /scripts/:id/execute` | All high-level tools | Execute previously registered script by ID |
 
-Both execute endpoints accept an optional `args` JSON object accessible inside the script as the variable `args`.
+**Script registry workflow:**
+1. At startup, `_register_scripts()` registers 5 named scripts (`vangard-scene-info`, `vangard-get-node`, etc.)
+2. High-level tools call `POST /scripts/:id/execute` with just args (no script body)
+3. On 404 (DAZ Studio restarted), `_execute_by_id()` calls `_register_scripts()` and retries
+
+**Arguments:** Both `/execute` and `/scripts/:id/execute` accept an optional `args` JSON object accessible inside the script as the variable `args`.
 
 ### Testing
 
