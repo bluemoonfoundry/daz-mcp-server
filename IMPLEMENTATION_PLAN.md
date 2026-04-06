@@ -1581,6 +1581,50 @@ daz_replay_macro("portrait_setup", parameters={"subject": "Alice"})
 
 ---
 
+### Phase 1.5: Asynchronous Operations (2 weeks) - **HIGH PRIORITY**
+
+**Focus:** Non-blocking long-running operations (renders, animations)
+
+**Status:** CONFIRMED FEASIBLE - DAZ SDK has `killRender()` for cancellation
+
+1. **DazScriptServer Plugin Changes** (Week 1)
+   - Request registry (in-memory, serial execution)
+   - Async endpoints: `/execute/async`, `/requests/{id}/status`, `/requests/{id}/result`
+   - Cancellation support using `DzRenderer::killRender()`
+   - TTL cleanup (1 hour)
+   - Time estimation based on render history
+
+2. **MCP Server Async Tools** (Week 2)
+   - `daz_render_async` - Non-blocking render
+   - `daz_render_with_camera_async` - Camera-specific async render
+   - `daz_batch_render_cameras_async` - Queue multiple camera renders
+   - `daz_render_animation_async` - Animation rendering (hours-long)
+   - `daz_get_request_status` - Poll progress
+   - `daz_get_request_result` - Retrieve result
+   - `daz_cancel_request` - Cancel operation
+   - `daz_list_requests` - List all requests
+   - `daz_set_render_quality` - Draft/preview/good/final presets
+
+**Deliverables:**
+- 9 new MCP tools
+- DazScriptServer async execution support
+- Request management system with cancellation
+- Render history and time estimation
+- Documentation with usage patterns
+- Test suite
+
+**Success Criteria:**
+- Can queue 8 renders and monitor progress
+- Can cancel slow render mid-execution
+- Test render workflow (draft→adjust→final) works smoothly
+- Animation rendering reports frame progress
+- Time estimation within 30% accuracy after 10 renders
+- No memory leaks from abandoned requests
+
+**Implementation Details:** See `ASYNC_OPERATIONS.md` for complete technical specifications.
+
+---
+
 ### Phase 2: Quality of Life (3-4 weeks)
 
 **Focus:** Usability and content discovery
