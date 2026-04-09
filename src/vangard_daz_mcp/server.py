@@ -1,5 +1,6 @@
 """MCP server wrapping the DazScriptServer HTTP API for DAZ Studio."""
 
+import asyncio
 import json
 import os
 from contextlib import asynccontextmanager
@@ -181,6 +182,37 @@ async def _execute_by_id(script_id: str, args: dict[str, Any] | None = None) -> 
     return data.get("result")
 
 
+async def _execute_by_id_async(
+    script_id: str,
+    args: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    """Submit a registered script for async execution; returns immediately with request_id.
+
+    On 404 (DAZ Studio restarted and cleared the registry) re-registers once and retries,
+    same as _execute_by_id.  Does NOT check success/error fields — the response shape is
+    {request_id, status, submitted_at}.
+    """
+    client = _get_client()
+    payload: dict[str, Any] = {}
+    if args is not None:
+        payload["args"] = args
+
+    try:
+        response = await client.post(f"/scripts/{script_id}/async", json=payload)
+    except (httpx.ConnectError, httpx.ConnectTimeout, httpx.TimeoutException) as exc:
+        _handle_network_error(exc)
+
+    if response.status_code == 404:
+        await _register_scripts(client)
+        try:
+            response = await client.post(f"/scripts/{script_id}/async", json=payload)
+        except (httpx.ConnectError, httpx.ConnectTimeout, httpx.TimeoutException) as exc:
+            _handle_network_error(exc)
+
+    _check_response(response)
+    return response.json()
+
+
 # ---------------------------------------------------------------------------
 # Embedded DazScript fragments
 #
@@ -197,6 +229,7 @@ async def _execute_by_id(script_id: str, args: dict[str, Any] | None = None) -> 
 # Uses skeleton list (characters + clothing) rather than all nodes (potentially thousands).
 _SCENE_INFO_SCRIPT = """\
 (function(){
+    var args = getArguments()[0] || {};
     var figures = [];
     for (var i = 0; i < Scene.getNumSkeletons(); i++) {
         var s = Scene.getSkeleton(i);
@@ -229,6 +262,7 @@ _SCENE_INFO_SCRIPT = """\
 # Searches by label first, then internal name.
 _GET_NODE_SCRIPT = """\
 (function(){
+    var args = getArguments()[0] || {};
     var n = Scene.findNodeByLabel(args.nodeLabel);
     if (!n) n = Scene.findNode(args.nodeLabel);
     if (!n) throw new Error("Node not found: " + args.nodeLabel);
@@ -246,6 +280,7 @@ _GET_NODE_SCRIPT = """\
 # Matches propertyName against both display label and internal name.
 _SET_PROPERTY_SCRIPT = """\
 (function(){
+    var args = getArguments()[0] || {};
     var n = Scene.findNodeByLabel(args.nodeLabel);
     if (!n) n = Scene.findNode(args.nodeLabel);
     if (!n) throw new Error("Node not found: " + args.nodeLabel);
@@ -268,6 +303,7 @@ _SET_PROPERTY_SCRIPT = """\
 # Render options are set directly on the DzRenderOptions object (Qt property syntax).
 _RENDER_SCRIPT = """\
 (function(){
+    var args = getArguments()[0] || {};
     var renderMgr = App.getRenderMgr();
     var opts = renderMgr.getRenderOptions();
     if (args.outputPath) {
@@ -285,6 +321,7 @@ _RENDER_SCRIPT = """\
 # openFile(path, false) → replace current scene
 _LOAD_FILE_SCRIPT = """\
 (function(){
+    var args = getArguments()[0] || {};
     App.getContentMgr().openFile(args.filePath, args.merge);
     return { success: true, file: args.filePath };
 })()
@@ -296,6 +333,7 @@ _LOAD_FILE_SCRIPT = """\
 # Lists all numeric properties (morphs) on a node
 _LIST_MORPHS_SCRIPT = """\
 (function(){
+    var args = getArguments()[0] || {};
     var node = Scene.findNodeByLabel(args.nodeLabel);
     if (!node) node = Scene.findNode(args.nodeLabel);
     if (!node) throw new Error("Node not found: " + args.nodeLabel);
@@ -340,6 +378,7 @@ _LIST_MORPHS_SCRIPT = """\
 # Searches for morphs matching a pattern
 _SEARCH_MORPHS_SCRIPT = """\
 (function(){
+    var args = getArguments()[0] || {};
     var node = Scene.findNodeByLabel(args.nodeLabel);
     if (!node) node = Scene.findNode(args.nodeLabel);
     if (!node) throw new Error("Node not found: " + args.nodeLabel);
@@ -391,6 +430,7 @@ _SEARCH_MORPHS_SCRIPT = """\
 # Gets complete hierarchy tree for a node
 _GET_NODE_HIERARCHY_SCRIPT = """\
 (function(){
+    var args = getArguments()[0] || {};
     var node = Scene.findNodeByLabel(args.nodeLabel);
     if (!node) node = Scene.findNode(args.nodeLabel);
     if (!node) throw new Error("Node not found: " + args.nodeLabel);
@@ -440,6 +480,7 @@ _GET_NODE_HIERARCHY_SCRIPT = """\
 # Lists direct children of a node
 _LIST_CHILDREN_SCRIPT = """\
 (function(){
+    var args = getArguments()[0] || {};
     var node = Scene.findNodeByLabel(args.nodeLabel);
     if (!node) node = Scene.findNode(args.nodeLabel);
     if (!node) throw new Error("Node not found: " + args.nodeLabel);
@@ -467,6 +508,7 @@ _LIST_CHILDREN_SCRIPT = """\
 # Gets parent node of a node
 _GET_PARENT_SCRIPT = """\
 (function(){
+    var args = getArguments()[0] || {};
     var node = Scene.findNodeByLabel(args.nodeLabel);
     if (!node) node = Scene.findNode(args.nodeLabel);
     if (!node) throw new Error("Node not found: " + args.nodeLabel);
@@ -490,6 +532,7 @@ _GET_PARENT_SCRIPT = """\
 # Sets parent of a node
 _SET_PARENT_SCRIPT = """\
 (function(){
+    var args = getArguments()[0] || {};
     var node = Scene.findNodeByLabel(args.nodeLabel);
     if (!node) node = Scene.findNode(args.nodeLabel);
     if (!node) throw new Error("Node not found: " + args.nodeLabel);
@@ -529,6 +572,7 @@ _SET_PARENT_SCRIPT = """\
 # Makes character look at a world-space point with cascading body involvement
 _LOOK_AT_POINT_SCRIPT = """\
 (function(){
+    var args = getArguments()[0] || {};
     function findBone(fig, name) {
         function search(node) {
             if (node.getName() === name) return node;
@@ -632,6 +676,7 @@ _LOOK_AT_POINT_SCRIPT = """\
 # Makes source character look at target character's head position
 _LOOK_AT_CHARACTER_SCRIPT = """\
 (function(){
+    var args = getArguments()[0] || {};
     function findBone(fig, name) {
         function search(node) {
             if (node.getName() === name) return node;
@@ -740,6 +785,7 @@ _LOOK_AT_CHARACTER_SCRIPT = """\
 # Position arm/hand to reach toward world-space point using pseudo-IK
 _REACH_TOWARD_SCRIPT = """\
 (function(){
+    var args = getArguments()[0] || {};
     function findBone(fig, name) {
         function search(node) {
             if (node.getName() === name) return node;
@@ -842,6 +888,7 @@ _REACH_TOWARD_SCRIPT = """\
 # Coordinate two characters for interactive poses
 _INTERACTIVE_POSE_SCRIPT = """\
 (function(){
+    var args = getArguments()[0] || {};
     function findBone(fig, name) {
         function search(node) {
             if (node.getName() === name) return node;
@@ -999,6 +1046,7 @@ _INTERACTIVE_POSE_SCRIPT = """\
 # Batch property setting with individual error handling for each operation
 _BATCH_SET_PROPERTIES_SCRIPT = """\
 (function(){
+    var args = getArguments()[0] || {};
     var operations = args.operations || [];
     var results = [];
     var successCount = 0;
@@ -1052,6 +1100,7 @@ _BATCH_SET_PROPERTIES_SCRIPT = """\
 # Apply same transform properties to multiple nodes
 _BATCH_TRANSFORM_SCRIPT = """\
 (function(){
+    var args = getArguments()[0] || {};
     var nodeLabels = args.nodeLabels || [];
     var transforms = args.transforms || {};
     var results = [];
@@ -1107,6 +1156,7 @@ _BATCH_TRANSFORM_SCRIPT = """\
 # Show or hide multiple nodes
 _BATCH_VISIBILITY_SCRIPT = """\
 (function(){
+    var args = getArguments()[0] || {};
     var nodeLabels = args.nodeLabels || [];
     var visible = args.visible !== undefined ? args.visible : true;
     var results = [];
@@ -1148,6 +1198,7 @@ _BATCH_VISIBILITY_SCRIPT = """\
 # Select multiple nodes (replace or add to current selection)
 _BATCH_SELECT_SCRIPT = """\
 (function(){
+    var args = getArguments()[0] || {};
     var nodeLabels = args.nodeLabels || [];
     var addToSelection = args.addToSelection !== undefined ? args.addToSelection : false;
     var selected = [];
@@ -1181,6 +1232,7 @@ _BATCH_SELECT_SCRIPT = """\
 # Set which camera is active in the viewport
 _SET_ACTIVE_CAMERA_SCRIPT = """\
 (function(){
+    var args = getArguments()[0] || {};
     var cam = Scene.findNodeByLabel(args.cameraLabel);
     if (!cam) cam = Scene.findNode(args.cameraLabel);
     if (!cam) throw new Error("Camera not found: " + args.cameraLabel);
@@ -1210,6 +1262,7 @@ _SET_ACTIVE_CAMERA_SCRIPT = """\
 # Position camera orbiting around a target node at specified angle and distance
 _ORBIT_CAMERA_AROUND_SCRIPT = """\
 (function(){
+    var args = getArguments()[0] || {};
     var cam = Scene.findNodeByLabel(args.cameraLabel);
     if (!cam) cam = Scene.findNode(args.cameraLabel);
     if (!cam) throw new Error("Camera not found: " + args.cameraLabel);
@@ -1257,6 +1310,7 @@ _ORBIT_CAMERA_AROUND_SCRIPT = """\
 # Frame camera to show a node by positioning at calculated distance
 _FRAME_CAMERA_TO_NODE_SCRIPT = """\
 (function(){
+    var args = getArguments()[0] || {};
     var cam = Scene.findNodeByLabel(args.cameraLabel);
     if (!cam) cam = Scene.findNode(args.cameraLabel);
     if (!cam) throw new Error("Camera not found: " + args.cameraLabel);
@@ -1265,11 +1319,13 @@ _FRAME_CAMERA_TO_NODE_SCRIPT = """\
     if (!node) node = Scene.findNode(args.nodeLabel);
     if (!node) throw new Error("Node not found: " + args.nodeLabel);
 
-    // Get node bounding box
-    var bbox = node.getSceneBoundingBox();
+    // Get node bounding box (getWSBoundingBox is on DzNode; getSize() returns scalar diagonal)
+    var bbox = node.getWSBoundingBox();
     var center = bbox.getCenter();
-    var size = bbox.getSize();
-    var maxDim = Math.max(size.x, Math.max(size.y, size.z));
+    var sizeX = bbox.maxX - bbox.minX;
+    var sizeY = bbox.maxY - bbox.minY;
+    var sizeZ = bbox.maxZ - bbox.minZ;
+    var maxDim = Math.max(sizeX, Math.max(sizeY, sizeZ));
 
     // Calculate distance based on object size or use provided distance
     var distance = args.distance !== undefined ? args.distance : maxDim * 2.5;
@@ -1292,7 +1348,7 @@ _FRAME_CAMERA_TO_NODE_SCRIPT = """\
         node: node.getLabel(),
         position: {x: camX, y: camY, z: camZ},
         nodeCenter: {x: center.x, y: center.y, z: center.z},
-        nodeSize: {x: size.x, y: size.y, z: size.z}
+        nodeSize: {x: sizeX, y: sizeY, z: sizeZ}
     };
 })()
 """
@@ -1302,6 +1358,7 @@ _FRAME_CAMERA_TO_NODE_SCRIPT = """\
 # Save camera position and rotation as preset data
 _SAVE_CAMERA_PRESET_SCRIPT = """\
 (function(){
+    var args = getArguments()[0] || {};
     var cam = Scene.findNodeByLabel(args.cameraLabel);
     if (!cam) cam = Scene.findNode(args.cameraLabel);
     if (!cam) throw new Error("Camera not found: " + args.cameraLabel);
@@ -1331,6 +1388,7 @@ _SAVE_CAMERA_PRESET_SCRIPT = """\
 # Restore camera position and rotation from preset data
 _LOAD_CAMERA_PRESET_SCRIPT = """\
 (function(){
+    var args = getArguments()[0] || {};
     var cam = Scene.findNodeByLabel(args.cameraLabel);
     if (!cam) cam = Scene.findNode(args.cameraLabel);
     if (!cam) throw new Error("Camera not found: " + args.cameraLabel);
@@ -1360,6 +1418,7 @@ _LOAD_CAMERA_PRESET_SCRIPT = """\
 # Render from specific camera (doesn't change active viewport camera)
 _RENDER_WITH_CAMERA_SCRIPT = """\
 (function(){
+    var args = getArguments()[0] || {};
     var cam = Scene.findNodeByLabel(args.cameraLabel);
     if (!cam) cam = Scene.findNode(args.cameraLabel);
     if (!cam) throw new Error("Camera not found: " + args.cameraLabel);
@@ -1401,6 +1460,7 @@ _RENDER_WITH_CAMERA_SCRIPT = """\
 # Get current render settings
 _GET_RENDER_SETTINGS_SCRIPT = """\
 (function(){
+    var args = getArguments()[0] || {};
     var renderMgr = App.getRenderMgr();
     var opts = renderMgr.getRenderOptions();
 
@@ -1428,6 +1488,7 @@ _GET_RENDER_SETTINGS_SCRIPT = """\
 # Render from multiple cameras in sequence
 _BATCH_RENDER_CAMERAS_SCRIPT = """\
 (function(){
+    var args = getArguments()[0] || {};
     var cameras = args.cameras || [];
     var outputDir = args.outputDir || "";
     var baseFilename = args.baseFilename || "render";
@@ -1485,6 +1546,7 @@ _BATCH_RENDER_CAMERAS_SCRIPT = """\
 # Render animation frame range
 _RENDER_ANIMATION_SCRIPT = """\
 (function(){
+    var args = getArguments()[0] || {};
     var startFrame = args.startFrame !== undefined ? args.startFrame : Scene.getAnimRange().getStart();
     var endFrame = args.endFrame !== undefined ? args.endFrame : Scene.getAnimRange().getEnd();
     var outputDir = args.outputDir || "";
@@ -1556,6 +1618,7 @@ _RENDER_ANIMATION_SCRIPT = """\
 # Set a keyframe on a property at specified frame
 _SET_KEYFRAME_SCRIPT = """\
 (function(){
+    var args = getArguments()[0] || {};
     var node = Scene.findNodeByLabel(args.nodeLabel);
     if (!node) node = Scene.findNode(args.nodeLabel);
     if (!node) throw new Error("Node not found: " + args.nodeLabel);
@@ -1593,6 +1656,7 @@ _SET_KEYFRAME_SCRIPT = """\
 # Get all keyframes for a property
 _GET_KEYFRAMES_SCRIPT = """\
 (function(){
+    var args = getArguments()[0] || {};
     var node = Scene.findNodeByLabel(args.nodeLabel);
     if (!node) node = Scene.findNode(args.nodeLabel);
     if (!node) throw new Error("Node not found: " + args.nodeLabel);
@@ -1630,6 +1694,7 @@ _GET_KEYFRAMES_SCRIPT = """\
 # Remove a keyframe at specified frame
 _REMOVE_KEYFRAME_SCRIPT = """\
 (function(){
+    var args = getArguments()[0] || {};
     var node = Scene.findNodeByLabel(args.nodeLabel);
     if (!node) node = Scene.findNode(args.nodeLabel);
     if (!node) throw new Error("Node not found: " + args.nodeLabel);
@@ -1674,6 +1739,7 @@ _REMOVE_KEYFRAME_SCRIPT = """\
 # Remove all keyframes from a property
 _CLEAR_ANIMATION_SCRIPT = """\
 (function(){
+    var args = getArguments()[0] || {};
     var node = Scene.findNodeByLabel(args.nodeLabel);
     if (!node) node = Scene.findNode(args.nodeLabel);
     if (!node) throw new Error("Node not found: " + args.nodeLabel);
@@ -1710,6 +1776,7 @@ _CLEAR_ANIMATION_SCRIPT = """\
 # Set current animation frame
 _SET_FRAME_SCRIPT = """\
 (function(){
+    var args = getArguments()[0] || {};
     var frame = args.frame;
     var previousFrame = Scene.getFrame();
     Scene.setFrame(frame);
@@ -1727,15 +1794,17 @@ _SET_FRAME_SCRIPT = """\
 # Set animation frame range
 _SET_FRAME_RANGE_SCRIPT = """\
 (function(){
+    var args = getArguments()[0] || {};
     var startFrame = args.startFrame;
     var endFrame = args.endFrame;
 
+    var timeStep = Scene.getTimeStep();
     var anim = Scene.getAnimRange();
-    var previousStart = anim.getStart();
-    var previousEnd = anim.getEnd();
+    // DzTimeRange: .start and .end are tick-count properties (not methods)
+    var previousStart = Math.round(anim.start / timeStep);
+    var previousEnd   = Math.round(anim.end   / timeStep);
 
-    anim.setStart(startFrame);
-    anim.setEnd(endFrame);
+    Scene.setAnimRange(new DzTimeRange(startFrame * timeStep, endFrame * timeStep));
 
     return {
         success: true,
@@ -1752,11 +1821,15 @@ _SET_FRAME_RANGE_SCRIPT = """\
 # Get animation timeline info
 _GET_ANIMATION_INFO_SCRIPT = """\
 (function(){
+    var args = getArguments()[0] || {};
     var currentFrame = Scene.getFrame();
-    var anim = Scene.getAnimRange();
-    var startFrame = anim.getStart();
-    var endFrame = anim.getEnd();
-    var fps = Scene.getFPS();
+    var timeStep     = Scene.getTimeStep();
+    var anim         = Scene.getAnimRange();
+    // DzTimeRange: .start and .end are tick-count properties (not methods)
+    var startFrame = Math.round(anim.start / timeStep);
+    var endFrame   = Math.round(anim.end   / timeStep);
+    // DAZ Studio uses 4800 ticks/second; getFPS() does not exist
+    var fps = Math.round(4800 / timeStep);
 
     return {
         currentFrame: currentFrame,
@@ -1766,6 +1839,1233 @@ _GET_ANIMATION_INFO_SCRIPT = """\
         totalFrames: endFrame - startFrame + 1,
         durationSeconds: (endFrame - startFrame + 1) / fps
     };
+})()
+"""
+
+# ---------------------------------------------------------------------------
+# Phase 1: Spatial Query Scripts
+# ---------------------------------------------------------------------------
+
+# args: {nodeLabel}
+# Returns: {node, world_position, local_position, rotation, scale}
+_GET_WORLD_POSITION_SCRIPT = """\
+(function(){
+    var args = getArguments()[0] || {};
+    var node = Scene.findNodeByLabel(args.nodeLabel);
+    if (!node) node = Scene.findNode(args.nodeLabel);
+    if (!node) throw new Error("Node not found: " + args.nodeLabel);
+
+    var wsPos = node.getWSPos();
+    var lPos = node.getLocalPos ? node.getLocalPos() : node.getOrigin();
+    var wsRot = node.getWSRot();
+    var wsScale = node.getWSScale();
+
+    return {
+        node: node.getLabel(),
+        world_position: { x: wsPos.x, y: wsPos.y, z: wsPos.z },
+        local_position: { x: lPos.x, y: lPos.y, z: lPos.z },
+        rotation: { x: wsRot.x, y: wsRot.y, z: wsRot.z },
+        scale: { x: wsScale.x, y: wsScale.y, z: wsScale.z }
+    };
+})()
+"""
+
+# args: {nodeLabel}
+# Returns: {node, min, max, center, width, height, depth}
+_GET_BOUNDING_BOX_SCRIPT = """\
+(function(){
+    var args = getArguments()[0] || {};
+    var node = Scene.findNodeByLabel(args.nodeLabel);
+    if (!node) node = Scene.findNode(args.nodeLabel);
+    if (!node) throw new Error("Node not found: " + args.nodeLabel);
+
+    var bbox = node.getWSBoundingBox();
+    return {
+        node: node.getLabel(),
+        min: { x: bbox.minX, y: bbox.minY, z: bbox.minZ },
+        max: { x: bbox.maxX, y: bbox.maxY, z: bbox.maxZ },
+        center: {
+            x: (bbox.minX + bbox.maxX) / 2,
+            y: (bbox.minY + bbox.maxY) / 2,
+            z: (bbox.minZ + bbox.maxZ) / 2
+        },
+        width:  bbox.maxX - bbox.minX,
+        height: bbox.maxY - bbox.minY,
+        depth:  bbox.maxZ - bbox.minZ
+    };
+})()
+"""
+
+# args: {node1Label, node2Label}
+# Returns: {node1, node2, distance, vector, horizontal_distance, vertical_distance}
+_CALCULATE_DISTANCE_SCRIPT = """\
+(function(){
+    var args = getArguments()[0] || {};
+    var n1 = Scene.findNodeByLabel(args.node1Label);
+    if (!n1) n1 = Scene.findNode(args.node1Label);
+    if (!n1) throw new Error("Node not found: " + args.node1Label);
+
+    var n2 = Scene.findNodeByLabel(args.node2Label);
+    if (!n2) n2 = Scene.findNode(args.node2Label);
+    if (!n2) throw new Error("Node not found: " + args.node2Label);
+
+    var p1 = n1.getWSPos();
+    var p2 = n2.getWSPos();
+
+    var dx = p2.x - p1.x;
+    var dy = p2.y - p1.y;
+    var dz = p2.z - p1.z;
+
+    var distance = Math.sqrt(dx*dx + dy*dy + dz*dz);
+    var horizontal_distance = Math.sqrt(dx*dx + dz*dz);
+    var vertical_distance = Math.abs(dy);
+
+    return {
+        node1: n1.getLabel(),
+        node2: n2.getLabel(),
+        distance: distance,
+        vector: { dx: dx, dy: dy, dz: dz },
+        horizontal_distance: horizontal_distance,
+        vertical_distance: vertical_distance
+    };
+})()
+"""
+
+# args: {node1Label, node2Label}
+# Returns: {node1, node2, distance, direction, angle_horizontal, angle_vertical,
+#           relative_position, overlapping}
+# Provides natural language spatial relationship between two nodes.
+# Angles are from node1's perspective looking toward node2.
+# angle_horizontal: 0=front(+Z), 90=right, 180=back, -90=left (in node1 local space)
+# angle_vertical: positive=above, negative=below
+_GET_SPATIAL_RELATIONSHIP_SCRIPT = """\
+(function(){
+    var args = getArguments()[0] || {};
+    var n1 = Scene.findNodeByLabel(args.node1Label);
+    if (!n1) n1 = Scene.findNode(args.node1Label);
+    if (!n1) throw new Error("Node not found: " + args.node1Label);
+
+    var n2 = Scene.findNodeByLabel(args.node2Label);
+    if (!n2) n2 = Scene.findNode(args.node2Label);
+    if (!n2) throw new Error("Node not found: " + args.node2Label);
+
+    var p1 = n1.getWSPos();
+    var p2 = n2.getWSPos();
+
+    var dx = p2.x - p1.x;
+    var dy = p2.y - p1.y;
+    var dz = p2.z - p1.z;
+
+    var distance = Math.sqrt(dx*dx + dy*dy + dz*dz);
+    var horizontal_distance = Math.sqrt(dx*dx + dz*dz);
+
+    // Horizontal angle: 0=+Z(front for Genesis), 90=+X(right), -90=-X(left), 180=back
+    var angle_horizontal = Math.atan2(dx, dz) * 180 / Math.PI;
+    // Vertical angle: positive=above node1, negative=below
+    var angle_vertical = Math.atan2(dy, horizontal_distance) * 180 / Math.PI;
+
+    // Direction label
+    var absH = Math.abs(angle_horizontal);
+    var hDir = "";
+    if (absH < 22.5) hDir = "front";
+    else if (absH < 67.5) hDir = angle_horizontal > 0 ? "front-right" : "front-left";
+    else if (absH < 112.5) hDir = angle_horizontal > 0 ? "right" : "left";
+    else if (absH < 157.5) hDir = angle_horizontal > 0 ? "back-right" : "back-left";
+    else hDir = "back";
+
+    var vDir = "";
+    if (angle_vertical > 15) vDir = " above";
+    else if (angle_vertical < -15) vDir = " below";
+
+    // Bounding box overlap check
+    var bb1 = n1.getWSBoundingBox();
+    var bb2 = n2.getWSBoundingBox();
+    var overlapping = (
+        bb1.minX <= bb2.maxX && bb1.maxX >= bb2.minX &&
+        bb1.minY <= bb2.maxY && bb1.maxY >= bb2.minY &&
+        bb1.minZ <= bb2.maxZ && bb1.maxZ >= bb2.minZ
+    );
+
+    var n2Label = n2.getLabel();
+    var n1Label = n1.getLabel();
+    var relPos = n2Label + " is " + hDir + vDir + " of " + n1Label +
+                 " (" + Math.round(distance) + " cm away)";
+
+    return {
+        node1: n1Label,
+        node2: n2Label,
+        distance: distance,
+        direction: hDir + vDir,
+        angle_horizontal: angle_horizontal,
+        angle_vertical: angle_vertical,
+        relative_position: relPos,
+        overlapping: overlapping
+    };
+})()
+"""
+
+# args: {node1Label, node2Label}
+# Returns: {node1, node2, overlapping, penetration_depth, suggestion}
+_CHECK_OVERLAP_SCRIPT = """\
+(function(){
+    var args = getArguments()[0] || {};
+    var n1 = Scene.findNodeByLabel(args.node1Label);
+    if (!n1) n1 = Scene.findNode(args.node1Label);
+    if (!n1) throw new Error("Node not found: " + args.node1Label);
+
+    var n2 = Scene.findNodeByLabel(args.node2Label);
+    if (!n2) n2 = Scene.findNode(args.node2Label);
+    if (!n2) throw new Error("Node not found: " + args.node2Label);
+
+    var bb1 = n1.getWSBoundingBox();
+    var bb2 = n2.getWSBoundingBox();
+
+    var overlapX = Math.min(bb1.maxX, bb2.maxX) - Math.max(bb1.minX, bb2.minX);
+    var overlapY = Math.min(bb1.maxY, bb2.maxY) - Math.max(bb1.minY, bb2.minY);
+    var overlapZ = Math.min(bb1.maxZ, bb2.maxZ) - Math.max(bb1.minZ, bb2.minZ);
+
+    var overlapping = overlapX > 0 && overlapY > 0 && overlapZ > 0;
+    var penetration_depth = 0;
+    var suggestion = "";
+
+    if (overlapping) {
+        // Penetration depth = minimum overlap axis
+        penetration_depth = Math.min(overlapX, overlapY, overlapZ);
+
+        // Suggest moving n2 along the axis of least penetration
+        var p1 = n1.getWSPos();
+        var p2 = n2.getWSPos();
+        var dx = p2.x - p1.x;
+        var dz = p2.z - p1.z;
+        var moveAmount = Math.round(penetration_depth + 5);
+
+        if (Math.abs(dx) >= Math.abs(dz)) {
+            var dir = dx >= 0 ? "+" : "-";
+            suggestion = "Move " + n2.getLabel() + " " + moveAmount +
+                         " cm in " + dir + "X to resolve collision";
+        } else {
+            var dir2 = dz >= 0 ? "+" : "-";
+            suggestion = "Move " + n2.getLabel() + " " + moveAmount +
+                         " cm in " + dir2 + "Z to resolve collision";
+        }
+    }
+
+    return {
+        node1: n1.getLabel(),
+        node2: n2.getLabel(),
+        overlapping: overlapping,
+        penetration_depth: penetration_depth,
+        suggestion: suggestion
+    };
+})()
+"""
+
+# ---------------------------------------------------------------------------
+# Phase 1: Property Introspection Scripts
+# ---------------------------------------------------------------------------
+
+# args: {nodeLabel, propertyType}
+# propertyType: "all" | "numeric" | "transform" | "bool" | "string"
+# Returns: {node, properties:[{label,name,type,value,min,max,path,is_animatable}], count}
+_INSPECT_PROPERTIES_SCRIPT = """\
+(function(){
+    var args = getArguments()[0] || {};
+    var node = Scene.findNodeByLabel(args.nodeLabel);
+    if (!node) node = Scene.findNode(args.nodeLabel);
+    if (!node) throw new Error("Node not found: " + args.nodeLabel);
+
+    var typeFilter = args.propertyType || "all";
+
+    var TRANSFORM_NAMES = {
+        "XTranslate": 1, "YTranslate": 1, "ZTranslate": 1,
+        "XRotate": 1, "YRotate": 1, "ZRotate": 1,
+        "Scale": 1, "XScale": 1, "YScale": 1, "ZScale": 1
+    };
+
+    var props = [];
+    for (var i = 0; i < node.getNumProperties(); i++) {
+        var prop = node.getProperty(i);
+        var className = prop.className();
+        var isNumeric = prop.inherits("DzNumericProperty");
+        var isBool = className === "DzBoolProperty";
+        var isTransform = TRANSFORM_NAMES[prop.getName()] === 1;
+        var isString = className === "DzStringProperty";
+
+        var include = false;
+        if (typeFilter === "all") include = true;
+        else if (typeFilter === "numeric" && isNumeric) include = true;
+        else if (typeFilter === "transform" && isTransform) include = true;
+        else if (typeFilter === "bool" && isBool) include = true;
+        else if (typeFilter === "string" && isString) include = true;
+        else if (typeFilter === "morph" && isNumeric && !isTransform) include = true;
+
+        if (!include) continue;
+
+        var entry = {
+            label: prop.getLabel(),
+            name: prop.getName(),
+            type: className,
+            path: prop.getPath ? prop.getPath() : "",
+            is_animatable: prop.isAnimatable ? prop.isAnimatable() : false
+        };
+
+        if (isNumeric) {
+            entry.value = prop.getValue();
+            entry.min = prop.getMin ? prop.getMin() : null;
+            entry.max = prop.getMax ? prop.getMax() : null;
+        } else if (isString && prop.getValue) {
+            entry.value = prop.getValue();
+            entry.min = null;
+            entry.max = null;
+        } else {
+            entry.value = null;
+            entry.min = null;
+            entry.max = null;
+        }
+
+        props.push(entry);
+    }
+
+    return { node: node.getLabel(), properties: props, count: props.length };
+})()
+"""
+
+# args: {nodeLabel, propertyName}
+# Returns: {label, name, type, current_value, default_value, min, max,
+#           is_animatable, path}
+_GET_PROPERTY_METADATA_SCRIPT = """\
+(function(){
+    var args = getArguments()[0] || {};
+    var node = Scene.findNodeByLabel(args.nodeLabel);
+    if (!node) node = Scene.findNode(args.nodeLabel);
+    if (!node) throw new Error("Node not found: " + args.nodeLabel);
+
+    var prop = null;
+    for (var i = 0; i < node.getNumProperties(); i++) {
+        var p = node.getProperty(i);
+        if (p.getLabel() === args.propertyName || p.getName() === args.propertyName) {
+            prop = p; break;
+        }
+    }
+    if (!prop) throw new Error("Property not found: " + args.propertyName +
+                                " on " + args.nodeLabel);
+
+    var isNumeric = prop.inherits("DzNumericProperty");
+
+    return {
+        label: prop.getLabel(),
+        name: prop.getName(),
+        type: prop.className(),
+        current_value: isNumeric ? prop.getValue() : null,
+        default_value: (isNumeric && prop.getDefaultValue) ? prop.getDefaultValue() : null,
+        min: (isNumeric && prop.getMin) ? prop.getMin() : null,
+        max: (isNumeric && prop.getMax) ? prop.getMax() : null,
+        is_animatable: prop.isAnimatable ? prop.isAnimatable() : false,
+        path: prop.getPath ? prop.getPath() : "",
+        node: node.getLabel()
+    };
+})()
+"""
+
+# ---------------------------------------------------------------------------
+# Phase 1: Lighting Preset Script
+# ---------------------------------------------------------------------------
+
+# args: {preset, subjectLabel}
+# preset: "three-point" | "rembrandt" | "butterfly" | "split" | "loop"
+# Returns: {preset, subject, lights_created:[{label,type,position}], environment_mode}
+# Creates lights relative to subject bounding box center.
+# Genesis figures face +Z so "front" = positive Z side.
+_APPLY_LIGHTING_PRESET_SCRIPT = """\
+(function(){
+    var args = getArguments()[0] || {};
+    var preset = args.preset || "three-point";
+    var subjectLabel = args.subjectLabel;
+
+    // Get subject center if provided
+    var subjectCenter = { x: 0, y: 150, z: 0 };
+    var subjectHeight = 170;
+    if (subjectLabel) {
+        var subjectNode = Scene.findNodeByLabel(subjectLabel);
+        if (!subjectNode) subjectNode = Scene.findNode(subjectLabel);
+        if (subjectNode) {
+            var bbox = subjectNode.getWSBoundingBox();
+            subjectCenter = {
+                x: (bbox.minX + bbox.maxX) / 2,
+                y: (bbox.minY + bbox.maxY) / 2,
+                z: (bbox.minZ + bbox.maxZ) / 2
+            };
+            subjectHeight = bbox.maxY - bbox.minY;
+        }
+    }
+
+    var faceHeight = subjectCenter.y + subjectHeight * 0.2;  // ~head height
+    var R = subjectHeight * 1.2;  // light orbit radius
+
+    // Lighting configurations: [label, flux, azimuthDeg, elevDeg, lightClass, shadowSoftness]
+    // azimuth: 0=front(+Z), 90=right(+X), 180=back, -90=left
+    var configs = {
+        "three-point": [
+            ["Key Light",  2000, 45,   35,  "DzSpotLight", 30],
+            ["Fill Light",  800, -45,  20,  "DzSpotLight", 60],
+            ["Rim Light",  1200, 180,  45,  "DzDistantLight", 20]
+        ],
+        "rembrandt": [
+            ["Key Light",  2200, 45,   45,  "DzSpotLight", 20],
+            ["Fill Light",  400, -90,  10,  "DzSpotLight", 80]
+        ],
+        "butterfly": [
+            ["Key Light",  2000,  0,   45,  "DzSpotLight", 25],
+            ["Fill Light",  500,  0,   -5,  "DzSpotLight", 80]
+        ],
+        "split": [
+            ["Key Light",  2200, 90,   15,  "DzSpotLight", 15],
+            ["Rim Light",   800, -90,  20,  "DzSpotLight", 40]
+        ],
+        "loop": [
+            ["Key Light",  2000, 35,   30,  "DzSpotLight", 35],
+            ["Fill Light",  700, -50,  15,  "DzSpotLight", 70],
+            ["Rim Light",   900, 160,  40,  "DzSpotLight", 25]
+        ]
+    };
+
+    var lightDefs = configs[preset];
+    if (!lightDefs) throw new Error("Unknown preset: " + preset +
+        ". Valid: three-point, rembrandt, butterfly, split, loop");
+
+    // Remove existing preset lights with same names to avoid duplicates
+    var existingLabels = {};
+    for (var d = 0; d < lightDefs.length; d++) {
+        existingLabels[lightDefs[d][0]] = 1;
+    }
+    for (var ni = 0; ni < Scene.getNumLights(); ni++) {
+        var existingLight = Scene.getLight(ni);
+        if (existingLabels[existingLight.getLabel()]) {
+            Scene.removeNode(existingLight);
+            ni--;
+        }
+    }
+
+    var created = [];
+
+    for (var i = 0; i < lightDefs.length; i++) {
+        var def = lightDefs[i];
+        var label     = def[0];
+        var flux      = def[1];
+        var azimuthDeg = def[2];
+        var elevDeg   = def[3];
+        var lightClass = def[4];
+        var softness  = def[5];
+
+        var azRad = azimuthDeg * Math.PI / 180;
+        var elRad = elevDeg * Math.PI / 180;
+
+        var lx = subjectCenter.x + R * Math.sin(azRad) * Math.cos(elRad);
+        var ly = subjectCenter.y + R * Math.sin(elRad) + subjectHeight * 0.1;
+        var lz = subjectCenter.z + R * Math.cos(azRad) * Math.cos(elRad);
+
+        var light = null;
+        if (lightClass === "DzSpotLight") {
+            light = new DzSpotLight();
+        } else {
+            light = new DzDistantLight();
+        }
+
+        Scene.addNode(light);
+        light.setLabel(label);
+
+        var fluxProp = light.findProperty("Flux");
+        if (fluxProp) fluxProp.setValue(flux);
+
+        var softProp = light.findProperty("Shadow Softness");
+        if (softProp) softProp.setValue(softness);
+
+        var xtp = light.findProperty("XTranslate");
+        var ytp = light.findProperty("YTranslate");
+        var ztp = light.findProperty("ZTranslate");
+        if (xtp) xtp.setValue(lx);
+        if (ytp) ytp.setValue(ly);
+        if (ztp) ztp.setValue(lz);
+
+        light.aimAt(new DzVec3(subjectCenter.x, faceHeight, subjectCenter.z));
+
+        created.push({
+            label: label,
+            type: lightClass,
+            position: { x: Math.round(lx), y: Math.round(ly), z: Math.round(lz) },
+            flux: flux
+        });
+    }
+
+    // Set environment to scene-lights-only
+    var envNode = Scene.getNode(1);
+    if (envNode) {
+        var envMode = envNode.findProperty("Environment Mode");
+        if (envMode) envMode.setValue(3);
+    }
+
+    return {
+        preset: preset,
+        subject: subjectLabel || null,
+        lights_created: created,
+        environment_mode: "Scene Only (3)"
+    };
+})()
+"""
+
+# ---------------------------------------------------------------------------
+# Phase 1: Scene Validation Script
+# ---------------------------------------------------------------------------
+
+# args: none
+# Returns: {valid, issues:[{type,severity,nodes,description,suggestion}],
+#           warnings:[...], score, score_breakdown}
+_VALIDATE_SCENE_SCRIPT = """\
+(function(){
+    var args = getArguments()[0] || {};
+    var issues = [];
+    var warnings = [];
+
+    // --- 1. Collision detection between figures (bounding box AABB) ---
+    var figures = [];
+    for (var i = 0; i < Scene.getNumSkeletons(); i++) {
+        var skel = Scene.getSkeleton(i);
+        var bb = skel.getWSBoundingBox();
+        figures.push({ label: skel.getLabel(), bb: bb });
+    }
+
+    for (var a = 0; a < figures.length; a++) {
+        for (var b = a + 1; b < figures.length; b++) {
+            var f1 = figures[a];
+            var f2 = figures[b];
+            var overlapX = Math.min(f1.bb.maxX, f2.bb.maxX) - Math.max(f1.bb.minX, f2.bb.minX);
+            var overlapY = Math.min(f1.bb.maxY, f2.bb.maxY) - Math.max(f1.bb.minY, f2.bb.minY);
+            var overlapZ = Math.min(f1.bb.maxZ, f2.bb.maxZ) - Math.max(f1.bb.minZ, f2.bb.minZ);
+
+            if (overlapX > 0 && overlapY > 0 && overlapZ > 0) {
+                var depth = Math.round(Math.min(overlapX, overlapY, overlapZ));
+                issues.push({
+                    type: "collision",
+                    severity: "high",
+                    nodes: [f1.label, f2.label],
+                    description: f1.label + " and " + f2.label +
+                                 " bounding boxes overlap by ~" + depth + " cm",
+                    suggestion: "Move one character away to resolve interpenetration"
+                });
+            }
+        }
+    }
+
+    // --- 2. Lighting checks ---
+    var numLights = Scene.getNumLights();
+    var envNode = Scene.getNode(1);
+    var envMode = envNode ? envNode.findProperty("Environment Mode") : null;
+    var envModeVal = envMode ? envMode.getValue() : 0;
+    var hasEnvLight = (envModeVal !== 3);  // not scene-only → env dome contributes
+
+    if (numLights === 0 && !hasEnvLight) {
+        issues.push({
+            type: "no-lights",
+            severity: "high",
+            nodes: [],
+            description: "Scene has no lights and environment lighting is disabled",
+            suggestion: "Use daz_apply_lighting_preset('three-point') to add lights"
+        });
+    } else if (numLights === 1) {
+        warnings.push({
+            type: "poor-lighting",
+            severity: "medium",
+            description: "Scene has only one light source, may cause harsh shadows",
+            suggestion: "Add a fill light at low intensity to soften shadows"
+        });
+    }
+
+    // --- 3. Camera framing check ---
+    var numCameras = Scene.getNumCameras();
+    if (numCameras === 0) {
+        warnings.push({
+            type: "no-camera",
+            severity: "medium",
+            description: "Scene has no cameras (will use default perspective view)",
+            suggestion: "Add a camera with daz_execute('var c = new DzBasicCamera(); Scene.addNode(c);')"
+        });
+    }
+
+    // --- 4. Empty scene check ---
+    var numFigures = Scene.getNumSkeletons();
+    if (numFigures === 0) {
+        warnings.push({
+            type: "no-figures",
+            severity: "low",
+            description: "Scene has no figures/characters",
+            suggestion: "Load a character with daz_load_file()"
+        });
+    }
+
+    // --- Score calculation ---
+    var lightScore = 100;
+    if (numLights === 0 && !hasEnvLight) lightScore = 0;
+    else if (numLights === 1) lightScore = 50;
+
+    var collisionScore = issues.filter(function(i){ return i.type === "collision"; }).length === 0 ? 100 : 30;
+    var cameraScore = numCameras > 0 ? 100 : 60;
+    var figureScore = numFigures > 0 ? 100 : 60;
+
+    var score = Math.round((lightScore + collisionScore + cameraScore + figureScore) / 4);
+
+    return {
+        valid: issues.length === 0,
+        issues: issues,
+        warnings: warnings,
+        score: score,
+        score_breakdown: {
+            lighting: lightScore,
+            collision: collisionScore,
+            camera: cameraScore,
+            figures: figureScore
+        },
+        summary: {
+            figures: numFigures,
+            cameras: numCameras,
+            lights: numLights,
+            environment_lighting: hasEnvLight
+        }
+    };
+})()
+"""
+
+# args: {preset, maxSamples, renderQuality}
+# Returns: {preset, propertiesSet: [{property, value}], note}
+# Sets Iray render quality via Max Samples and Render Quality properties on the
+# active renderer options.  Falls back gracefully if properties are not found.
+_SET_RENDER_QUALITY_SCRIPT = """\
+(function(){
+    var args = getArguments()[0] || {};
+    var renderMgr = App.getRenderMgr();
+    if (!renderMgr) throw "No render manager available";
+
+    // getOptionHelper() returns a DzElement (renderer's option node) which has findProperty
+    var optHelper = renderMgr.getOptionHelper ? renderMgr.getOptionHelper() : null;
+
+    var targets = ["Max Samples", "Render Quality"];
+    var targetValues = {"Max Samples": args.maxSamples, "Render Quality": args.renderQuality};
+
+    var propertiesSet = [];
+    var notFound = [];
+
+    for (var i = 0; i < targets.length; i++) {
+        var name = targets[i];
+        var prop = optHelper ? optHelper.findProperty(name) : null;
+        if (prop) {
+            prop.setValue(targetValues[name]);
+            propertiesSet.push({property: name, value: prop.getValue()});
+        } else {
+            notFound.push(name);
+        }
+    }
+
+    var result = {preset: args.preset, propertiesSet: propertiesSet};
+    if (notFound.length > 0) {
+        result.note = "Properties not found on active renderer option helper: " + notFound.join(", ");
+    }
+    return result;
+})()
+"""
+
+# ---------------------------------------------------------------------------
+# Phase 2 script constants
+# ---------------------------------------------------------------------------
+
+_SET_EMOTION_SCRIPT = """\
+(function(){
+    var args = getArguments()[0] || {};
+    var node = Scene.findNodeByLabel(args.nodeLabel);
+    if (!node) node = Scene.findNode(args.nodeLabel);
+    if (!node) throw new Error("Node not found: " + args.nodeLabel);
+
+    var intensity = args.intensity || 0.7;
+    var applied = [];
+    var notFound = [];
+
+    // Apply morph candidates — each entry: {names: [...], value: float}
+    var morphList = args.morphList || [];
+    for (var i = 0; i < morphList.length; i++) {
+        var entry = morphList[i];
+        var targetValue = entry.value * intensity;
+        var found = false;
+        for (var j = 0; j < entry.names.length; j++) {
+            var prop = node.findProperty(entry.names[j]);
+            if (prop && prop.inherits("DzNumericProperty")) {
+                prop.setValue(targetValue);
+                applied.push({morph: entry.names[j], value: prop.getValue()});
+                found = true;
+                break;
+            }
+        }
+        if (!found) notFound.push(entry.names[0] || "unknown");
+    }
+
+    // Apply body adjustments (bone rotations)
+    var bodyApplied = [];
+    var bodyAdjustments = args.bodyAdjustments || [];
+    for (var k = 0; k < bodyAdjustments.length; k++) {
+        var adj = bodyAdjustments[k];
+        // Try to find the bone as a child of the figure
+        var bone = null;
+        for (var b = 0; b < node.getNumNodeChildren(); b++) {
+            var child = node.getNodeChild(b);
+            if (child && (child.getLabel() === adj.bone || child.getName() === adj.bone)) {
+                bone = child;
+                break;
+            }
+        }
+        if (!bone) bone = Scene.findNodeByLabel(adj.bone);
+        if (bone) {
+            var boneProp = bone.findProperty(adj.property);
+            if (boneProp) {
+                boneProp.setValue(adj.value * intensity);
+                bodyApplied.push({bone: adj.bone, property: adj.property, value: boneProp.getValue()});
+            }
+        }
+    }
+
+    return {
+        character: node.getLabel(),
+        emotion: args.emotion,
+        intensity: intensity,
+        applied_morphs: applied,
+        body_adjustments: bodyApplied,
+        not_found: notFound
+    };
+})()
+"""
+
+_LIST_CATEGORIES_SCRIPT = """\
+(function(){
+    var args = getArguments()[0] || {};
+    var contentMgr = App.getContentMgr();
+    var parentPath = (args.parentPath || "").replace(/^\\/|\\/$/g, "");
+    var categories = [];
+    var seen = {};
+
+    for (var i = 0; i < contentMgr.getNumContentDirectories(); i++) {
+        var dir = contentMgr.getContentDirectory(i);
+        if (!dir) continue;
+        var basePath = dir.fullPath;
+        var searchPath = parentPath ? basePath + "/" + parentPath : basePath;
+        var d = new DzDir(searchPath);
+        if (!d.exists()) continue;
+
+        var subdirs = d.entryList([], DzDir.Dirs | DzDir.NoDotAndDotDot);
+        for (var j = 0; j < subdirs.length; j++) {
+            var name = subdirs[j];
+            if (seen[name]) continue;
+            seen[name] = true;
+            var subdir = new DzDir(d.absoluteFilePath(name));
+            var dufFiles = subdir.entryList(["*.duf"], DzDir.Files);
+            categories.push({
+                name: name,
+                path: parentPath ? parentPath + "/" + name : name,
+                duf_count: dufFiles.length
+            });
+        }
+    }
+
+    categories.sort(function(a, b) { return a.name < b.name ? -1 : a.name > b.name ? 1 : 0; });
+    return {parent: args.parentPath || "/", categories: categories, count: categories.length};
+})()
+"""
+
+_BROWSE_CATEGORY_SCRIPT = """\
+(function(){
+    var args = getArguments()[0] || {};
+    var contentMgr = App.getContentMgr();
+    var categoryPath = (args.categoryPath || "").replace(/^\\/|\\/$/g, "");
+    var items = [];
+    var seen = {};
+
+    for (var i = 0; i < contentMgr.getNumContentDirectories(); i++) {
+        var dir = contentMgr.getContentDirectory(i);
+        if (!dir) continue;
+        var basePath = dir.fullPath;
+        var searchPath = categoryPath ? basePath + "/" + categoryPath : basePath;
+        var d = new DzDir(searchPath);
+        if (!d.exists()) continue;
+
+        var files = d.entryList(["*.duf"], DzDir.Files);
+        for (var j = 0; j < files.length; j++) {
+            var fname = files[j];
+            if (seen[fname]) continue;
+            seen[fname] = true;
+            items.push({
+                name: fname.replace(/\\.duf$/i, ""),
+                filename: fname,
+                full_path: searchPath + "/" + fname
+            });
+        }
+    }
+
+    items.sort(function(a, b) { return a.name < b.name ? -1 : a.name > b.name ? 1 : 0; });
+    return {category: args.categoryPath || "/", items: items, count: items.length};
+})()
+"""
+
+_APPLY_COMPOSITION_RULE_SCRIPT = """\
+(function(){
+    var args = getArguments()[0] || {};
+    var cam = Scene.findNodeByLabel(args.cameraLabel);
+    if (!cam) throw new Error("Camera not found: " + args.cameraLabel);
+
+    var subject = Scene.findNodeByLabel(args.subjectLabel);
+    if (!subject) subject = Scene.findNode(args.subjectLabel);
+    if (!subject) throw new Error("Subject not found: " + args.subjectLabel);
+
+    var rule = args.rule || "rule-of-thirds";
+
+    var bbox = subject.getWSBoundingBox();
+    var subCenter = bbox ? {
+        x: (bbox.minX + bbox.maxX) / 2,
+        y: (bbox.minY + bbox.maxY) / 2,
+        z: (bbox.minZ + bbox.maxZ) / 2
+    } : {x: 0, y: 85, z: 0};
+    var subHeight = bbox ? bbox.maxY - bbox.minY : 170;
+
+    // Determine working distance (maintain current or use default)
+    var camPos = cam.getWSPos();
+    var dx = camPos.x - subCenter.x;
+    var dz = camPos.z - subCenter.z;
+    var hDist = Math.sqrt(dx*dx + dz*dz);
+    if (hDist < 50) hDist = 250;
+
+    var camX, camY, camZ, aimY, explanation;
+
+    if (rule === "rule-of-thirds") {
+        camX = subCenter.x - hDist * 0.3;
+        camY = subCenter.y + subHeight * 0.1;
+        camZ = subCenter.z + hDist;
+        aimY = subHeight * 0.85;
+        explanation = "Subject on right vertical third at eye level";
+    } else if (rule === "golden-ratio") {
+        camX = subCenter.x - hDist * 0.236;
+        camY = subCenter.y + subHeight * 0.118;
+        camZ = subCenter.z + hDist;
+        aimY = subHeight * 0.85;
+        explanation = "Subject at golden ratio intersection (1.618 proportion)";
+    } else if (rule === "center-frame") {
+        camX = subCenter.x;
+        camY = subCenter.y + subHeight * 0.1;
+        camZ = subCenter.z + hDist;
+        aimY = subHeight * 0.85;
+        explanation = "Subject centered in frame";
+    } else if (rule === "leading-lines") {
+        camX = subCenter.x + hDist * 0.2;
+        camY = Math.max(5, subCenter.y - subHeight * 0.05);
+        camZ = subCenter.z + hDist * 0.85;
+        aimY = subHeight * 0.9;
+        explanation = "Low-angle with horizontal offset creating diagonal leading lines";
+    } else {
+        throw new Error("Unknown rule: " + rule + ". Valid: rule-of-thirds, golden-ratio, center-frame, leading-lines");
+    }
+
+    var xp = cam.findProperty("XTranslate");
+    var yp = cam.findProperty("YTranslate");
+    var zp = cam.findProperty("ZTranslate");
+    if (xp) xp.setValue(camX);
+    if (yp) yp.setValue(camY);
+    if (zp) zp.setValue(camZ);
+    cam.aimAt(new DzVec3(subCenter.x, aimY, subCenter.z));
+
+    return {
+        camera: cam.getLabel(),
+        subject: subject.getLabel(),
+        rule: rule,
+        camera_position: {x: Math.round(camX*10)/10, y: Math.round(camY*10)/10, z: Math.round(camZ*10)/10},
+        explanation: explanation
+    };
+})()
+"""
+
+_FRAME_SHOT_SCRIPT = """\
+(function(){
+    var args = getArguments()[0] || {};
+    var cam = Scene.findNodeByLabel(args.cameraLabel);
+    if (!cam) throw new Error("Camera not found: " + args.cameraLabel);
+
+    var subject = Scene.findNodeByLabel(args.subjectLabel);
+    if (!subject) subject = Scene.findNode(args.subjectLabel);
+    if (!subject) throw new Error("Subject not found: " + args.subjectLabel);
+
+    var shotType = args.shotType || "medium-shot";
+
+    var bbox = subject.getWSBoundingBox();
+    var subHeight = bbox ? bbox.maxY - bbox.minY : 170;
+    var subBottom = bbox ? bbox.minY : 0;
+    var subCenterX = bbox ? (bbox.minX + bbox.maxX) / 2 : 0;
+    var subCenterZ = bbox ? (bbox.minZ + bbox.maxZ) / 2 : 0;
+
+    // {dist, camHeightFrac relative to bottom, aimHeightFrac, framing description}
+    var shots = {
+        "extreme-close-up": {dist: 25,  camH: 0.95, aimH: 0.95, framing: "eyes and mouth detail"},
+        "close-up":          {dist: 50,  camH: 0.93, aimH: 0.93, framing: "face and head"},
+        "medium-close-up":   {dist: 90,  camH: 0.90, aimH: 0.90, framing: "head and shoulders"},
+        "medium-shot":       {dist: 140, camH: 0.82, aimH: 0.80, framing: "waist up"},
+        "medium-full":       {dist: 200, camH: 0.72, aimH: 0.70, framing: "knees up"},
+        "full-shot":         {dist: 400, camH: 0.60, aimH: 0.55, framing: "entire body with breathing room"},
+        "wide-shot":         {dist: 700, camH: 0.55, aimH: 0.50, framing: "body within environment"}
+    };
+
+    if (!shots[shotType]) {
+        throw new Error("Unknown shot type: " + shotType +
+            ". Valid: extreme-close-up, close-up, medium-close-up, medium-shot, medium-full, full-shot, wide-shot");
+    }
+
+    var s = shots[shotType];
+    var camHeight = subBottom + subHeight * s.camH;
+    var aimHeight = subBottom + subHeight * s.aimH;
+
+    var xp = cam.findProperty("XTranslate");
+    var yp = cam.findProperty("YTranslate");
+    var zp = cam.findProperty("ZTranslate");
+    if (xp) xp.setValue(subCenterX);
+    if (yp) yp.setValue(camHeight);
+    if (zp) zp.setValue(subCenterZ + s.dist);
+    cam.aimAt(new DzVec3(subCenterX, aimHeight, subCenterZ));
+
+    return {
+        camera: cam.getLabel(),
+        subject: subject.getLabel(),
+        shot_type: shotType,
+        distance: s.dist,
+        camera_height: Math.round(camHeight * 10) / 10,
+        framing: s.framing
+    };
+})()
+"""
+
+_APPLY_CAMERA_ANGLE_SCRIPT = """\
+(function(){
+    var args = getArguments()[0] || {};
+    var cam = Scene.findNodeByLabel(args.cameraLabel);
+    if (!cam) throw new Error("Camera not found: " + args.cameraLabel);
+
+    var subject = Scene.findNodeByLabel(args.subjectLabel);
+    if (!subject) subject = Scene.findNode(args.subjectLabel);
+    if (!subject) throw new Error("Subject not found: " + args.subjectLabel);
+
+    var angle = args.angle || "eye-level";
+
+    var bbox = subject.getWSBoundingBox();
+    var subHeight = bbox ? bbox.maxY - bbox.minY : 170;
+    var subBottom = bbox ? bbox.minY : 0;
+    var subCenterX = bbox ? (bbox.minX + bbox.maxX) / 2 : 0;
+    var subCenterZ = bbox ? (bbox.minZ + bbox.maxZ) / 2 : 0;
+    var eyeHeight = subBottom + subHeight * 0.93;
+
+    // Maintain current horizontal camera distance from subject
+    var camPos = cam.getWSPos();
+    var dx = camPos.x - subCenterX;
+    var dz = camPos.z - subCenterZ;
+    var hDist = Math.sqrt(dx * dx + dz * dz);
+    if (hDist < 50) hDist = 250;
+    var normX = dx / hDist;
+    var normZ = dz / hDist;
+
+    var camX = subCenterX + normX * hDist;
+    var camZ = subCenterZ + normZ * hDist;
+    var camY, aimY, note;
+
+    if (angle === "eye-level") {
+        camY = eyeHeight;
+        aimY = eyeHeight;
+        note = "Camera at eye height — neutral perspective";
+    } else if (angle === "high-angle") {
+        camY = eyeHeight + subHeight * 0.5;
+        aimY = subBottom + subHeight * 0.55;
+        note = "Camera above subject — creates vulnerable or diminished feel";
+    } else if (angle === "low-angle") {
+        camY = subBottom + subHeight * 0.15;
+        aimY = eyeHeight;
+        note = "Camera below eye level — creates powerful or dominant feel";
+    } else if (angle === "dutch-angle") {
+        camY = eyeHeight;
+        aimY = eyeHeight;
+        var rollProp = cam.findProperty("ZRotate");
+        if (rollProp) rollProp.setValue(15);
+        note = "Camera tilted 15° (dutch angle) — creates unease or tension";
+    } else if (angle === "overhead") {
+        camX = subCenterX;
+        camY = subBottom + subHeight * 1.8;
+        camZ = subCenterZ;
+        aimY = subBottom + subHeight * 0.5;
+        note = "Bird's eye view directly overhead";
+    } else if (angle === "worms-eye") {
+        camY = subBottom + 5;
+        aimY = eyeHeight;
+        note = "Ground level looking up — extreme dramatic low angle";
+    } else if (angle === "over-shoulder") {
+        camX = subCenterX + hDist * 0.3;
+        camY = eyeHeight;
+        camZ = subCenterZ - hDist * 0.4;
+        aimY = eyeHeight;
+        note = "Over-the-shoulder perspective — classic conversation/reaction shot";
+    } else {
+        throw new Error("Unknown angle: " + angle +
+            ". Valid: eye-level, high-angle, low-angle, dutch-angle, overhead, worms-eye, over-shoulder");
+    }
+
+    var xp = cam.findProperty("XTranslate");
+    var yp = cam.findProperty("YTranslate");
+    var zp = cam.findProperty("ZTranslate");
+    if (xp) xp.setValue(camX);
+    if (yp) yp.setValue(camY);
+    if (zp) zp.setValue(camZ);
+    cam.aimAt(new DzVec3(subCenterX, aimY !== undefined ? aimY : eyeHeight, subCenterZ));
+
+    return {
+        camera: cam.getLabel(),
+        subject: subject.getLabel(),
+        angle: angle,
+        camera_position: {x: Math.round(camX*10)/10, y: Math.round(camY*10)/10, z: Math.round(camZ*10)/10},
+        note: note
+    };
+})()
+"""
+
+_SAVE_SCENE_STATE_SCRIPT = """\
+(function(){
+    var args = getArguments()[0] || {};
+    var nodes = [];
+    var transformKeys = ["XTranslate", "YTranslate", "ZTranslate", "XRotate", "YRotate", "ZRotate", "Scale"];
+    var transformSet = {XTranslate:1, YTranslate:1, ZTranslate:1,
+                        XRotate:1, YRotate:1, ZRotate:1,
+                        Scale:1, XScale:1, YScale:1, ZScale:1};
+
+    function captureTransforms(node) {
+        var t = {};
+        for (var i = 0; i < transformKeys.length; i++) {
+            var p = node.findProperty(transformKeys[i]);
+            if (p) t[transformKeys[i]] = p.getValue();
+        }
+        return t;
+    }
+
+    // Skeletons / figures
+    for (var i = 0; i < Scene.getNumSkeletons(); i++) {
+        var skel = Scene.getSkeleton(i);
+        var morphs = [];
+        for (var p = 0; p < skel.getNumProperties(); p++) {
+            var mp = skel.getProperty(p);
+            if (mp.inherits("DzFloatProperty") && !transformSet[mp.getName()]) {
+                var v = mp.getValue();
+                if (v !== 0) morphs.push({name: mp.getName(), value: v});
+            }
+        }
+        nodes.push({label: skel.getLabel(), type: "skeleton",
+                    transforms: captureTransforms(skel), active_morphs: morphs, extra: {}});
+    }
+
+    // Cameras
+    for (var ci = 0; ci < Scene.getNumCameras(); ci++) {
+        var cam = Scene.getCamera(ci);
+        nodes.push({label: cam.getLabel(), type: "camera",
+                    transforms: captureTransforms(cam), active_morphs: [], extra: {}});
+    }
+
+    // Lights
+    for (var li = 0; li < Scene.getNumLights(); li++) {
+        var light = Scene.getLight(li);
+        var extra = {};
+        var lightProps = ["Flux", "Shadow Softness", "Spread Angle"];
+        for (var lk = 0; lk < lightProps.length; lk++) {
+            var lp = light.findProperty(lightProps[lk]);
+            if (lp) extra[lightProps[lk]] = lp.getValue();
+        }
+        nodes.push({label: light.getLabel(), type: "light",
+                    transforms: captureTransforms(light), active_morphs: [], extra: extra});
+    }
+
+    return {checkpoint: args.checkpointName, nodes: nodes, node_count: nodes.length};
+})()
+"""
+
+_RESTORE_SCENE_STATE_SCRIPT = """\
+(function(){
+    var args = getArguments()[0] || {};
+    var nodes = args.nodes || [];
+    var restored = [];
+    var errors = [];
+
+    for (var i = 0; i < nodes.length; i++) {
+        var nd = nodes[i];
+        var node = Scene.findNodeByLabel(nd.label);
+        if (!node) { errors.push("Node not found: " + nd.label); continue; }
+
+        // Restore transforms
+        var transforms = nd.transforms || {};
+        for (var key in transforms) {
+            var prop = node.findProperty(key);
+            if (prop) prop.setValue(transforms[key]);
+        }
+
+        // Restore active morphs
+        var morphs = nd.active_morphs || [];
+        for (var m = 0; m < morphs.length; m++) {
+            var mp = node.findProperty(morphs[m].name);
+            if (mp) mp.setValue(morphs[m].value);
+        }
+
+        // Restore extra properties (lights)
+        var extra = nd.extra || {};
+        for (var ek in extra) {
+            var ep = node.findProperty(ek);
+            if (ep) ep.setValue(extra[ek]);
+        }
+
+        restored.push(nd.label);
+    }
+
+    return {checkpoint: args.checkpointName, restored: restored, errors: errors};
+})()
+"""
+
+_GET_SCENE_LAYOUT_SCRIPT = """\
+(function(){
+    var args = getArguments()[0] || {};
+    var includeTypes = args.includeTypes || ["figures", "cameras", "lights", "props"];
+    var incl = {};
+    for (var t = 0; t < includeTypes.length; t++) incl[includeTypes[t]] = true;
+
+    var nodeList = [];
+
+    function bboxData(node) {
+        var bb = node.getWSBoundingBox();
+        if (!bb) return null;
+        return {
+            width:  Math.round((bb.maxX - bb.minX) * 10) / 10,
+            height: Math.round((bb.maxY - bb.minY) * 10) / 10,
+            depth:  Math.round((bb.maxZ - bb.minZ) * 10) / 10,
+            center: {
+                x: Math.round((bb.minX + bb.maxX) / 2 * 10) / 10,
+                y: Math.round((bb.minY + bb.maxY) / 2 * 10) / 10,
+                z: Math.round((bb.minZ + bb.maxZ) / 2 * 10) / 10
+            }
+        };
+    }
+
+    function posData(node) {
+        var p = node.getWSPos();
+        return {x: Math.round(p.x*10)/10, y: Math.round(p.y*10)/10, z: Math.round(p.z*10)/10};
+    }
+
+    if (incl["figures"]) {
+        for (var i = 0; i < Scene.getNumSkeletons(); i++) {
+            var s = Scene.getSkeleton(i);
+            var e = {label: s.getLabel(), type: "figure", position: posData(s)};
+            var bb = bboxData(s);
+            if (bb) e.bounds = bb;
+            nodeList.push(e);
+        }
+    }
+
+    if (incl["cameras"]) {
+        for (var ci = 0; ci < Scene.getNumCameras(); ci++) {
+            var c = Scene.getCamera(ci);
+            nodeList.push({label: c.getLabel(), type: "camera", position: posData(c)});
+        }
+    }
+
+    if (incl["lights"]) {
+        for (var li = 0; li < Scene.getNumLights(); li++) {
+            var l = Scene.getLight(li);
+            var le = {label: l.getLabel(), type: "light", position: posData(l), nodeClass: l.className()};
+            var fp = l.findProperty("Flux");
+            if (fp) le.flux = fp.getValue();
+            nodeList.push(le);
+        }
+    }
+
+    if (incl["props"]) {
+        // Enumerate non-skeleton/camera/light nodes (skip root [0] and env [1])
+        var skelLabels = {};
+        for (var si = 0; si < Scene.getNumSkeletons(); si++) skelLabels[Scene.getSkeleton(si).getLabel()] = true;
+
+        for (var ni = 2; ni < Scene.getNumNodes(); ni++) {
+            var n = Scene.getNode(ni);
+            if (!n) continue;
+            var cls = n.className();
+            if (cls.indexOf("Camera") >= 0 || cls.indexOf("Light") >= 0) continue;
+            if (cls.indexOf("Skeleton") >= 0 || cls.indexOf("Figure") >= 0) continue;
+            if (skelLabels[n.getLabel()]) continue;
+            // Skip bones (parent is a skeleton)
+            var parent = n.getNodeParent();
+            if (parent) {
+                var pcls = parent.className();
+                if (pcls.indexOf("Skeleton") >= 0 || pcls.indexOf("Figure") >= 0) continue;
+            }
+            var pe = {label: n.getLabel(), type: "prop", position: posData(n)};
+            var pbb = bboxData(n);
+            if (pbb) pe.bounds = pbb;
+            nodeList.push(pe);
+        }
+    }
+
+    return {nodes: nodeList, count: nodeList.length, include_types: includeTypes};
+})()
+"""
+
+_FIND_NEARBY_NODES_SCRIPT = """\
+(function(){
+    var args = getArguments()[0] || {};
+    var center = Scene.findNodeByLabel(args.nodeLabel);
+    if (!center) center = Scene.findNode(args.nodeLabel);
+    if (!center) throw new Error("Node not found: " + args.nodeLabel);
+
+    var radius = args.radius || 100;
+    var includeTypes = args.includeTypes || null;
+    var cp = center.getWSPos();
+
+    var nearby = [];
+
+    for (var i = 0; i < Scene.getNumNodes(); i++) {
+        var n = Scene.getNode(i);
+        if (!n || n.elementID === center.elementID) continue;
+
+        var np = n.getWSPos();
+        var dx = np.x - cp.x;
+        var dy = np.y - cp.y;
+        var dz = np.z - cp.z;
+        var dist = Math.sqrt(dx*dx + dy*dy + dz*dz);
+        if (dist > radius) continue;
+
+        var cls = n.className();
+        var nodeType = "prop";
+        if (cls.indexOf("Camera") >= 0) nodeType = "camera";
+        else if (cls.indexOf("Light") >= 0) nodeType = "light";
+        else if (cls.indexOf("Skeleton") >= 0 || cls.indexOf("Figure") >= 0) nodeType = "figure";
+
+        if (includeTypes && includeTypes.indexOf(nodeType) < 0) continue;
+
+        var hAngle = Math.atan2(dx, dz) * 180 / Math.PI;
+        var dir;
+        if      (hAngle > -22.5  && hAngle <=  22.5)  dir = "front";
+        else if (hAngle >  22.5  && hAngle <=  67.5)  dir = "front-right";
+        else if (hAngle >  67.5  && hAngle <= 112.5)  dir = "right";
+        else if (hAngle > 112.5  && hAngle <= 157.5)  dir = "back-right";
+        else if (hAngle >  157.5 || hAngle <= -157.5) dir = "back";
+        else if (hAngle > -157.5 && hAngle <= -112.5) dir = "back-left";
+        else if (hAngle > -112.5 && hAngle <=  -67.5) dir = "left";
+        else                                            dir = "front-left";
+
+        nearby.push({
+            label: n.getLabel(),
+            type: nodeType,
+            distance: Math.round(dist * 10) / 10,
+            direction: dir
+        });
+    }
+
+    nearby.sort(function(a, b) { return a.distance - b.distance; });
+    return {center_node: center.getLabel(), radius: radius, nearby_nodes: nearby, count: nearby.length};
 })()
 """
 
@@ -1912,7 +3212,205 @@ _REGISTRY: dict[str, tuple[str, str]] = {
         "Render animation frame range as image sequence",
         _RENDER_ANIMATION_SCRIPT,
     ),
+    # Phase 1: Spatial queries
+    "vangard-get-world-position": (
+        "Get world-space position, local position, rotation, and scale of a node",
+        _GET_WORLD_POSITION_SCRIPT,
+    ),
+    "vangard-get-bounding-box": (
+        "Get bounding box (min, max, center, dimensions) of a node",
+        _GET_BOUNDING_BOX_SCRIPT,
+    ),
+    "vangard-calculate-distance": (
+        "Calculate distance and direction vector between two nodes",
+        _CALCULATE_DISTANCE_SCRIPT,
+    ),
+    "vangard-get-spatial-relationship": (
+        "Get natural language spatial relationship between two nodes",
+        _GET_SPATIAL_RELATIONSHIP_SCRIPT,
+    ),
+    "vangard-check-overlap": (
+        "Check if two nodes have overlapping bounding boxes",
+        _CHECK_OVERLAP_SCRIPT,
+    ),
+    # Phase 1: Property introspection
+    "vangard-inspect-properties": (
+        "List all properties on a node with metadata (type, value, min, max)",
+        _INSPECT_PROPERTIES_SCRIPT,
+    ),
+    "vangard-get-property-metadata": (
+        "Get detailed metadata for a single property on a node",
+        _GET_PROPERTY_METADATA_SCRIPT,
+    ),
+    # Phase 1: Lighting presets
+    "vangard-apply-lighting-preset": (
+        "Create a professional lighting setup (three-point, rembrandt, butterfly, split, loop)",
+        _APPLY_LIGHTING_PRESET_SCRIPT,
+    ),
+    # Phase 1: Scene validation
+    "vangard-validate-scene": (
+        "Validate scene for common issues: collisions, lighting, camera, figure presence",
+        _VALIDATE_SCENE_SCRIPT,
+    ),
+    # Phase 1.5: Render quality preset (used by daz_set_render_quality)
+    "vangard-set-render-quality": (
+        "Set Iray render quality preset (draft/preview/good/final) via Max Samples and Render Quality properties",
+        _SET_RENDER_QUALITY_SCRIPT,
+    ),
+    # Phase 2: Emotional direction
+    "vangard-set-emotion": (
+        "Apply emotion morphs and body language adjustments to a character",
+        _SET_EMOTION_SCRIPT,
+    ),
+    # Phase 2: Content library
+    "vangard-list-categories": (
+        "List content library subdirectories under a parent path across all content directories",
+        _LIST_CATEGORIES_SCRIPT,
+    ),
+    "vangard-browse-category": (
+        "List .duf files in a content library category path across all content directories",
+        _BROWSE_CATEGORY_SCRIPT,
+    ),
+    # Phase 2: Scene composition
+    "vangard-apply-composition-rule": (
+        "Position camera to frame subject using a photography composition rule",
+        _APPLY_COMPOSITION_RULE_SCRIPT,
+    ),
+    "vangard-frame-shot": (
+        "Frame camera to subject using a standard cinematic shot type",
+        _FRAME_SHOT_SCRIPT,
+    ),
+    "vangard-apply-camera-angle": (
+        "Apply a standard camera angle preset relative to a subject",
+        _APPLY_CAMERA_ANGLE_SCRIPT,
+    ),
+    # Phase 2: Checkpoint system
+    "vangard-save-scene-state": (
+        "Serialize all node transforms, morphs, and light properties for checkpoint storage",
+        _SAVE_SCENE_STATE_SCRIPT,
+    ),
+    "vangard-restore-scene-state": (
+        "Restore node transforms, morphs, and light properties from a checkpoint snapshot",
+        _RESTORE_SCENE_STATE_SCRIPT,
+    ),
+    # Phase 2: Scene layout & proximity
+    "vangard-get-scene-layout": (
+        "Get spatial map of all scene nodes (figures, cameras, lights, props) with positions and bounds",
+        _GET_SCENE_LAYOUT_SCRIPT,
+    ),
+    "vangard-find-nearby-nodes": (
+        "Find all nodes within a radius of a target node",
+        _FIND_NEARBY_NODES_SCRIPT,
+    ),
 }
+
+
+# ---------------------------------------------------------------------------
+# Phase 2: Python-side emotion definitions and checkpoint state
+# ---------------------------------------------------------------------------
+
+# Emotion → list of {names: [...], value: float} (first match per list wins)
+# Multiple candidate names handle morph naming differences across figure generations.
+_EMOTION_DEFINITIONS: dict[str, dict] = {
+    "happy": {
+        "morphs": [
+            {"names": ["PHMSmile", "Smile", "CTRLSmile", "MouthSmile", "SmileSimple"], "value": 0.85},
+            {"names": ["PHMEyesSquint", "EyesSquint", "EyeSquintL", "SquintEyes"], "value": 0.25},
+        ],
+        "body": [{"bone": "chestUpper", "property": "XRotate", "value": 3.0}],
+    },
+    "sad": {
+        "morphs": [
+            {"names": ["PHMFrown", "Frown", "MouthFrown", "CTRLFrown", "FrownSimple"], "value": 0.75},
+            {"names": ["PHMBrowInnerDown", "BrowDownL", "BrowDown", "CTRLBrowDown", "BrowInnerDown"], "value": 0.6},
+            {"names": ["PHMEyesSquint", "EyesSquint", "EyeSquintL"], "value": 0.3},
+        ],
+        "body": [{"bone": "chestUpper", "property": "XRotate", "value": -6.0}],
+    },
+    "angry": {
+        "morphs": [
+            {"names": ["PHMFrown", "Frown", "MouthFrown", "CTRLFrown"], "value": 0.5},
+            {"names": ["PHMBrowDown", "BrowDown", "BrowDownLeft", "CTRLBrowDown", "BrowDownR"], "value": 0.85},
+            {"names": ["PHMNoseWrinkle", "NoseWrinkle", "NoseSneerL", "NoseSneer"], "value": 0.4},
+            {"names": ["PHMEyesTighten", "EyesTighten", "EyeSquintL", "CheekSquintL"], "value": 0.4},
+        ],
+        "body": [{"bone": "chestUpper", "property": "XRotate", "value": -3.0}],
+    },
+    "surprised": {
+        "morphs": [
+            {"names": ["PHMBrowUp", "BrowUp", "BrowInnerUpL", "CTRLBrowUp", "BrowsUp"], "value": 0.85},
+            {"names": ["PHMEyesWide", "EyesWide", "EyeOpenL", "EyeWideL"], "value": 0.75},
+            {"names": ["PHMMouthOpen", "MouthOpen", "CTRLMouthOpen", "JawOpen"], "value": 0.6},
+        ],
+        "body": [],
+    },
+    "fearful": {
+        "morphs": [
+            {"names": ["PHMBrowUp", "BrowUp", "BrowInnerUpL", "CTRLBrowUp"], "value": 0.7},
+            {"names": ["PHMEyesWide", "EyesWide", "EyeOpenL", "EyeWideL"], "value": 0.6},
+            {"names": ["PHMMouthOpen", "MouthOpen", "CTRLMouthOpen", "JawOpen"], "value": 0.3},
+        ],
+        "body": [{"bone": "chestUpper", "property": "XRotate", "value": -4.0}],
+    },
+    "disgusted": {
+        "morphs": [
+            {"names": ["PHMNoseWrinkle", "NoseWrinkle", "NoseSneerL", "NoseSneer"], "value": 0.75},
+            {"names": ["PHMFrown", "Frown", "MouthFrown", "CTRLFrown"], "value": 0.4},
+            {"names": ["PHMUpperLipUp", "UpperLipUp", "MouthUpperUp_L", "LipUpperUp_L"], "value": 0.3},
+        ],
+        "body": [],
+    },
+    "neutral": {
+        "morphs": [],
+        "body": [],
+    },
+    "excited": {
+        "morphs": [
+            {"names": ["PHMSmile", "Smile", "CTRLSmile", "MouthSmile"], "value": 1.0},
+            {"names": ["PHMBrowUp", "BrowUp", "CTRLBrowUp", "BrowsUp"], "value": 0.5},
+            {"names": ["PHMEyesWide", "EyesWide", "EyeOpenL"], "value": 0.4},
+            {"names": ["PHMMouthOpen", "MouthOpen", "CTRLMouthOpen", "JawOpen"], "value": 0.4},
+        ],
+        "body": [{"bone": "chestUpper", "property": "XRotate", "value": 5.0}],
+    },
+    "bored": {
+        "morphs": [
+            {"names": ["PHMEyesClosed", "EyesClosed", "EyeClosedL", "CTRLEyesClosed"], "value": 0.4},
+            {"names": ["PHMFrown", "Frown", "MouthFrown"], "value": 0.2},
+        ],
+        "body": [{"bone": "chestUpper", "property": "XRotate", "value": -4.0}],
+    },
+    "confident": {
+        "morphs": [
+            {"names": ["PHMSmile", "Smile", "MouthSmile", "CTRLSmile"], "value": 0.3},
+        ],
+        "body": [{"bone": "chestUpper", "property": "XRotate", "value": 4.0}],
+    },
+    "shy": {
+        "morphs": [
+            {"names": ["PHMSmile", "Smile", "MouthSmile"], "value": 0.2},
+            {"names": ["PHMEyesSquint", "EyesSquint", "EyeSquintL"], "value": 0.15},
+        ],
+        "body": [{"bone": "chestUpper", "property": "XRotate", "value": -5.0}],
+    },
+    "loving": {
+        "morphs": [
+            {"names": ["PHMSmile", "Smile", "MouthSmile", "CTRLSmile"], "value": 0.6},
+            {"names": ["PHMEyesSquint", "EyesSquint", "EyeSquintL"], "value": 0.35},
+        ],
+        "body": [{"bone": "chestUpper", "property": "XRotate", "value": 2.0}],
+    },
+    "contemptuous": {
+        "morphs": [
+            {"names": ["PHMSmileR", "SmileR", "MouthSmileR", "MouthSmile_R"], "value": 0.5},
+            {"names": ["PHMFrownL", "FrownL", "MouthFrownL", "MouthFrown_L"], "value": 0.3},
+        ],
+        "body": [],
+    },
+}
+
+# In-memory checkpoint store: {name → {"nodes": [...], "timestamp": int}}
+_CHECKPOINTS: dict[str, dict] = {}
 
 
 # ---------------------------------------------------------------------------
@@ -3591,6 +5089,1261 @@ async def daz_render_animation(
         args["camera"] = camera
 
     return await _execute_by_id("vangard-render-animation", args)
+
+
+# ---------------------------------------------------------------------------
+# Tools — Phase 1: Spatial Queries
+# ---------------------------------------------------------------------------
+
+@mcp.tool()
+async def daz_get_world_position(node_label: str) -> dict[str, Any]:
+    """Get world-space position, local position, rotation, and scale of a node.
+
+    Useful for understanding where nodes are in 3D space before making
+    relative positioning decisions.
+
+    Args:
+        node_label: Display label of the node (e.g. "Genesis 9", "Camera 1")
+
+    Returns:
+        {
+            "node": "Genesis 9",
+            "world_position": {"x": 0.0, "y": 0.0, "z": 0.0},
+            "local_position": {"x": 0.0, "y": 0.0, "z": 0.0},
+            "rotation": {"x": 0.0, "y": 0.0, "z": 0.0},
+            "scale": {"x": 1.0, "y": 1.0, "z": 1.0}
+        }
+    """
+    return await _execute_by_id("vangard-get-world-position", {"nodeLabel": node_label})
+
+
+@mcp.tool()
+async def daz_get_bounding_box(node_label: str) -> dict[str, Any]:
+    """Get the axis-aligned bounding box of a node.
+
+    Returns min/max corners, center point, and dimensions. Use this to
+    auto-calculate camera distance, detect collisions, or anchor lights
+    relative to a character's actual size.
+
+    Args:
+        node_label: Display label of the node
+
+    Returns:
+        {
+            "node": "Genesis 9",
+            "min": {"x": -30.0, "y": 0.0, "z": -15.0},
+            "max": {"x": 30.0, "y": 175.0, "z": 15.0},
+            "center": {"x": 0.0, "y": 87.5, "z": 0.0},
+            "width": 60.0,
+            "height": 175.0,
+            "depth": 30.0
+        }
+    """
+    return await _execute_by_id("vangard-get-bounding-box", {"nodeLabel": node_label})
+
+
+@mcp.tool()
+async def daz_calculate_distance(
+    node1_label: str,
+    node2_label: str,
+) -> dict[str, Any]:
+    """Calculate the distance between two nodes.
+
+    Returns total distance, horizontal distance, vertical distance, and the
+    direction vector. All distances in centimeters.
+
+    Args:
+        node1_label: Display label of the first node
+        node2_label: Display label of the second node
+
+    Returns:
+        {
+            "node1": "Genesis 9",
+            "node2": "Camera 1",
+            "distance": 250.5,
+            "vector": {"dx": 0.0, "dy": 50.0, "dz": 245.0},
+            "horizontal_distance": 245.0,
+            "vertical_distance": 50.0
+        }
+    """
+    return await _execute_by_id("vangard-calculate-distance", {
+        "node1Label": node1_label,
+        "node2Label": node2_label,
+    })
+
+
+@mcp.tool()
+async def daz_get_spatial_relationship(
+    node1_label: str,
+    node2_label: str,
+) -> dict[str, Any]:
+    """Get the spatial relationship between two nodes in natural language.
+
+    Returns direction (front, back, left, right, above, below), angles,
+    distance, and whether their bounding boxes overlap.
+
+    Horizontal angle uses DAZ coordinate system: 0°=front(+Z for Genesis figures),
+    90°=right(+X), 180°=back(-Z), -90°=left(-X).
+
+    Args:
+        node1_label: The reference node (e.g. "Genesis 9")
+        node2_label: The target node to describe relative to node1 (e.g. "Camera 1")
+
+    Returns:
+        {
+            "node1": "Genesis 9",
+            "node2": "Camera 1",
+            "distance": 250.5,
+            "direction": "front",
+            "angle_horizontal": 5.0,
+            "angle_vertical": 12.0,
+            "relative_position": "Camera 1 is front above of Genesis 9 (250 cm away)",
+            "overlapping": false
+        }
+    """
+    return await _execute_by_id("vangard-get-spatial-relationship", {
+        "node1Label": node1_label,
+        "node2Label": node2_label,
+    })
+
+
+@mcp.tool()
+async def daz_check_overlap(
+    node1_label: str,
+    node2_label: str,
+) -> dict[str, Any]:
+    """Check if two nodes have overlapping bounding boxes (collision detection).
+
+    Uses axis-aligned bounding box (AABB) intersection. Returns whether they
+    overlap, the penetration depth, and a suggestion for resolving the collision.
+
+    Args:
+        node1_label: Display label of the first node
+        node2_label: Display label of the second node
+
+    Returns:
+        {
+            "node1": "Alice",
+            "node2": "Bob",
+            "overlapping": true,
+            "penetration_depth": 15.0,
+            "suggestion": "Move Bob 20 cm in +X direction to resolve collision"
+        }
+    """
+    return await _execute_by_id("vangard-check-overlap", {
+        "node1Label": node1_label,
+        "node2Label": node2_label,
+    })
+
+
+# ---------------------------------------------------------------------------
+# Tools — Phase 1: Property Introspection
+# ---------------------------------------------------------------------------
+
+@mcp.tool()
+async def daz_inspect_properties(
+    node_label: str,
+    property_type: str = "all",
+) -> dict[str, Any]:
+    """List all properties on a node with their types, values, and constraints.
+
+    Use this to discover what properties are available on a node before
+    using daz_set_property. Much more reliable than guessing property names.
+
+    Args:
+        node_label: Display label of the node
+        property_type: Filter type — one of:
+            "all"       - all properties
+            "numeric"   - all numeric (float/bool) properties
+            "transform" - XTranslate/YTranslate/ZTranslate/XRotate/YRotate/ZRotate/Scale
+            "morph"     - numeric properties that are not transforms
+            "bool"      - boolean properties only
+            "string"    - string properties only
+
+    Returns:
+        {
+            "node": "Spotlight 1",
+            "properties": [
+                {
+                    "label": "Luminous Flux (Lumen)",
+                    "name": "Flux",
+                    "type": "DzFloatProperty",
+                    "value": 1500.0,
+                    "min": 0.0,
+                    "max": 100000.0,
+                    "path": "Light/Photometrics",
+                    "is_animatable": true
+                }
+            ],
+            "count": 45
+        }
+    """
+    return await _execute_by_id("vangard-inspect-properties", {
+        "nodeLabel": node_label,
+        "propertyType": property_type,
+    })
+
+
+@mcp.tool()
+async def daz_get_property_metadata(
+    node_label: str,
+    property_name: str,
+) -> dict[str, Any]:
+    """Get detailed metadata for a single named property on a node.
+
+    Accepts either the display label (e.g. "Luminous Flux (Lumen)") or the
+    internal name (e.g. "Flux"). Use this to validate a value is within
+    min/max range before setting it.
+
+    Args:
+        node_label: Display label of the node
+        property_name: Property label or internal name
+
+    Returns:
+        {
+            "label": "Luminous Flux (Lumen)",
+            "name": "Flux",
+            "type": "DzFloatProperty",
+            "current_value": 1500.0,
+            "default_value": 1500.0,
+            "min": 0.0,
+            "max": 100000.0,
+            "is_animatable": true,
+            "path": "Light/Photometrics",
+            "node": "Spotlight 1"
+        }
+    """
+    return await _execute_by_id("vangard-get-property-metadata", {
+        "nodeLabel": node_label,
+        "propertyName": property_name,
+    })
+
+
+@mcp.tool()
+async def daz_validate_script(script: str) -> dict[str, Any]:
+    """Check a DazScript string for known anti-patterns before execution.
+
+    Performs static analysis only — no script is sent to DAZ Studio.
+    Returns errors for known crash/timeout patterns and warnings for
+    deprecated or error-prone usage.
+
+    Args:
+        script: DazScript (JavaScript) source code to validate
+
+    Returns:
+        {
+            "valid": false,
+            "errors": [
+                {
+                    "line": 3,
+                    "pattern": "DzNewCameraAction",
+                    "message": "Action classes pop modal dialogs and cause timeouts",
+                    "suggestion": "Use: var cam = new DzBasicCamera(); Scene.addNode(cam);"
+                }
+            ],
+            "warnings": [...],
+            "suggestions": [...]
+        }
+    """
+    lines = script.splitlines()
+    errors = []
+    warnings_list = []
+    suggestions = []
+
+    _ANTI_PATTERNS = [
+        # (regex_fragment, is_error, message, suggestion)
+        (
+            "DzNewCameraAction",
+            True,
+            "Action classes pop modal dialogs and cause timeouts",
+            "Use: var cam = new DzBasicCamera(); Scene.addNode(cam);",
+        ),
+        (
+            "DzNewLightAction",
+            True,
+            "Action classes pop modal dialogs and cause timeouts",
+            "Use: var light = new DzSpotLight(); Scene.addNode(light);",
+        ),
+        (
+            r'findProperty\s*\(\s*["\']Point At["\']',
+            True,
+            "'Point At' property does not link nodes correctly via setValue",
+            "Use: node.aimAt(new DzVec3(x, y, z));",
+        ),
+        (
+            r"DzFileInfo\s*\(",
+            True,
+            "DzFileInfo constructor is not available in the scripting environment",
+            "Use DzDir or App.getContentMgr() for file operations",
+        ),
+        (
+            r"^\s*return\s",
+            True,
+            "Bare top-level return is not allowed in DazScript",
+            "Wrap the script in an IIFE: (function(){ return ...; })()",
+        ),
+        (
+            r"getElementID\s*\(",
+            False,
+            "node.getElementID() is not a method — elementID is a property",
+            "Use: node.elementID  (not node.getElementID())",
+        ),
+        (
+            r"setImageSize\s*\(",
+            False,
+            "setImageSize() is not reliably exposed in DazScript",
+            "Set image dimensions in DAZ Studio UI instead",
+        ),
+        (
+            r"Scene\.findNode\s*\(",
+            False,
+            "Scene.findNode() matches by internal name; multiple nodes can share a name",
+            "Prefer Scene.findNodeByLabel() for unique label-based lookup",
+        ),
+    ]
+
+    import re
+
+    has_iife = "(function()" in script or "(function (" in script
+
+    for line_idx, line in enumerate(lines, start=1):
+        for pattern, is_error, message, suggestion in _ANTI_PATTERNS:
+            if re.search(pattern, line):
+                entry = {
+                    "line": line_idx,
+                    "pattern": pattern,
+                    "message": message,
+                    "suggestion": suggestion,
+                }
+                if is_error:
+                    errors.append(entry)
+                else:
+                    warnings_list.append(entry)
+
+    if "return" in script and not has_iife:
+        suggestions.append(
+            "Script uses 'return' but is not wrapped in an IIFE — "
+            "wrap in (function(){ ... })() to return values to the caller"
+        )
+
+    if "Scene.getNumNodes()" in script:
+        suggestions.append(
+            "Avoid iterating all nodes via getNumNodes() — scenes can have 3000+ nodes. "
+            "Use Scene.findNodeByLabel(), getNumSkeletons(), getNumCameras(), or getNumLights() instead"
+        )
+
+    return {
+        "valid": len(errors) == 0,
+        "errors": errors,
+        "warnings": warnings_list,
+        "suggestions": suggestions,
+    }
+
+
+# ---------------------------------------------------------------------------
+# Tools — Phase 1: Lighting Presets & Scene Validation
+# ---------------------------------------------------------------------------
+
+@mcp.tool()
+async def daz_apply_lighting_preset(
+    preset: str,
+    subject_label: str | None = None,
+) -> dict[str, Any]:
+    """Create a professional photography lighting setup in one command.
+
+    Removes any existing lights with the same names, creates new lights
+    at positions calculated relative to the subject's bounding box,
+    aims each light at the subject's face height, and sets the environment
+    to scene-lights-only mode (disables the dome).
+
+    Available presets:
+        three-point  - Key (front-right) + Fill (front-left) + Rim (back).
+                       The most versatile general-purpose lighting setup.
+        rembrandt    - Key (45° side, high) + dim Fill. Creates triangle of
+                       light under opposite eye. Dramatic portrait lighting.
+        butterfly    - Key directly in front, high. Glamour/beauty lighting.
+                       Creates butterfly shadow under the nose.
+        split        - Key directly to one side (90°). Half face lit, half in
+                       shadow. Moody, high-contrast.
+        loop         - Key (35° side) + Fill + Rim. Natural-looking portrait.
+                       Small loop shadow on opposite cheek.
+
+    Args:
+        preset: Lighting preset name (see above)
+        subject_label: Optional node label to anchor lights around. If omitted,
+                       lights are placed relative to scene origin at 170cm height.
+
+    Returns:
+        {
+            "preset": "three-point",
+            "subject": "Genesis 9",
+            "lights_created": [
+                {"label": "Key Light", "type": "DzSpotLight",
+                 "position": {"x": 150, "y": 180, "z": 150}, "flux": 2000}
+            ],
+            "environment_mode": "Scene Only (3)"
+        }
+    """
+    args: dict[str, Any] = {"preset": preset}
+    if subject_label is not None:
+        args["subjectLabel"] = subject_label
+    return await _execute_by_id("vangard-apply-lighting-preset", args)
+
+
+@mcp.tool()
+async def daz_validate_scene() -> dict[str, Any]:
+    """Validate the current scene for common issues before rendering.
+
+    Checks:
+    - Character/figure bounding box collisions (interpenetration)
+    - Lighting presence and quality
+    - Camera presence
+    - Empty scene (no figures)
+
+    Returns a score (0-100) and breakdown by category, plus actionable
+    suggestions for any issues found.
+
+    Returns:
+        {
+            "valid": true,
+            "issues": [
+                {
+                    "type": "collision",
+                    "severity": "high",
+                    "nodes": ["Alice", "Bob"],
+                    "description": "Alice and Bob bounding boxes overlap by ~15 cm",
+                    "suggestion": "Move one character away to resolve interpenetration"
+                }
+            ],
+            "warnings": [...],
+            "score": 75,
+            "score_breakdown": {
+                "lighting": 100,
+                "collision": 30,
+                "camera": 100,
+                "figures": 100
+            },
+            "summary": {
+                "figures": 2,
+                "cameras": 1,
+                "lights": 3,
+                "environment_lighting": false
+            }
+        }
+    """
+    return await _execute_by_id("vangard-validate-scene")
+
+
+# ---------------------------------------------------------------------------
+# Tools — Phase 1.5: Async Operations
+#
+# These tools return immediately with a request_id.  The actual script runs
+# serially on DAZ Studio's main thread (DAZ is single-threaded).
+#
+# Typical workflow:
+#   req = await daz_render_async("/renders/final.png")
+#   result = await daz_get_request_result(req["request_id"], wait=True)
+#
+# Or with polling:
+#   req = await daz_render_async("/renders/final.png")
+#   while True:
+#       status = await daz_get_request_status(req["request_id"])
+#       if status["status"] in ("completed", "failed", "cancelled"):
+#           break
+#       await asyncio.sleep(5)
+#
+# IMPORTANT: While a render is running, DAZ Studio's scene is locked.
+# Do not attempt to modify the scene until the request has completed.
+# ---------------------------------------------------------------------------
+
+
+@mcp.tool()
+async def daz_render_async(
+    output_path: str | None = None,
+) -> dict[str, Any]:
+    """Start a render asynchronously — returns immediately with a request_id.
+
+    Use daz_get_request_status() to poll progress and daz_get_request_result()
+    to retrieve the final result.
+
+    IMPORTANT: The scene is locked while the render runs. Do not modify the
+    scene until the request status is "completed", "failed", or "cancelled".
+
+    Args:
+        output_path: Optional file path for the rendered image.
+
+    Returns:
+        {"request_id": "script-XXXXXXXX", "status": "queued", "submitted_at": "..."}
+    """
+    args: dict[str, Any] = {}
+    if output_path is not None:
+        args["outputPath"] = output_path
+    return await _execute_by_id_async("vangard-render", args)
+
+
+@mcp.tool()
+async def daz_render_with_camera_async(
+    camera_label: str,
+    output_path: str | None = None,
+) -> dict[str, Any]:
+    """Start a camera-specific render asynchronously — returns immediately with a request_id.
+
+    Renders from the specified camera without changing the active viewport camera.
+    Use daz_get_request_status() to poll and daz_get_request_result() for the result.
+
+    Args:
+        camera_label: Display label of the camera to render from.
+        output_path: Optional file path for the rendered image.
+
+    Returns:
+        {"request_id": "script-XXXXXXXX", "status": "queued", "submitted_at": "..."}
+    """
+    args: dict[str, Any] = {"cameraLabel": camera_label}
+    if output_path is not None:
+        args["outputPath"] = output_path
+    return await _execute_by_id_async("vangard-render-with-camera", args)
+
+
+@mcp.tool()
+async def daz_batch_render_cameras_async(
+    cameras: list[str],
+    output_dir: str,
+    base_filename: str = "render",
+) -> dict[str, Any]:
+    """Queue renders from multiple cameras — each becomes its own async request.
+
+    Submits one async render per camera and returns all request IDs immediately.
+    Renders execute serially (DAZ is single-threaded), so they queue behind any
+    already-running request. Each camera render is independently cancellable.
+
+    Args:
+        cameras: List of camera display labels.
+        output_dir: Directory where rendered images are saved.
+        base_filename: Filename prefix. Output is <base_filename>_<camera>.png.
+
+    Returns:
+        {
+            "request_ids": ["script-XXXXXXXX", ...],
+            "total": 3,
+            "cameras": ["Cam_0", "Cam_45", "Cam_90"]
+        }
+
+    Example:
+        batch = await daz_batch_render_cameras_async(
+            cameras=["Cam_0", "Cam_45", "Cam_90"],
+            output_dir="/renders/turntable"
+        )
+        # Monitor all renders
+        for req_id in batch["request_ids"]:
+            result = await daz_get_request_result(req_id, wait=True)
+    """
+    import os as _os
+    request_ids: list[str] = []
+    for cam in cameras:
+        output_path = _os.path.join(output_dir, f"{base_filename}_{cam}.png")
+        result = await _execute_by_id_async(
+            "vangard-render-with-camera",
+            {"cameraLabel": cam, "outputPath": output_path},
+        )
+        request_ids.append(result["request_id"])
+
+    return {
+        "request_ids": request_ids,
+        "total": len(request_ids),
+        "cameras": cameras,
+    }
+
+
+@mcp.tool()
+async def daz_render_animation_async(
+    output_dir: str,
+    start_frame: int | None = None,
+    end_frame: int | None = None,
+    filename_pattern: str = "frame",
+    camera: str | None = None,
+) -> dict[str, Any]:
+    """Start an animation render asynchronously — returns immediately with a request_id.
+
+    Queues a full animation render (all frames as an image sequence). This can
+    take hours; use daz_get_request_status() to monitor progress and
+    daz_get_request_result() to confirm completion.
+
+    Args:
+        output_dir: Directory where frame images are saved.
+        start_frame: First frame (default: animation range start).
+        end_frame: Last frame (default: animation range end).
+        filename_pattern: Filename prefix (default: "frame"). Frame number appended.
+        camera: Optional camera label (default: current render camera).
+
+    Returns:
+        {"request_id": "script-XXXXXXXX", "status": "queued", "submitted_at": "..."}
+    """
+    args: dict[str, Any] = {
+        "outputDir": output_dir,
+        "filenamePattern": filename_pattern,
+    }
+    if start_frame is not None:
+        args["startFrame"] = start_frame
+    if end_frame is not None:
+        args["endFrame"] = end_frame
+    if camera is not None:
+        args["camera"] = camera
+    return await _execute_by_id_async("vangard-render-animation", args)
+
+
+@mcp.tool()
+async def daz_get_request_status(request_id: str) -> dict[str, Any]:
+    """Get the current status of an async request (non-blocking, always fast).
+
+    Safe to call frequently — reads directly from the server's in-memory map
+    without executing any DazScript.
+
+    Args:
+        request_id: Request ID returned by an async submission tool.
+
+    Returns:
+        {
+            "request_id": "script-XXXXXXXX",
+            "status": "running",   # queued | running | completed | failed | cancelled
+            "progress": 0.0,       # 0.0 while running (DAZ single-frame renders have no
+                                   # mid-frame progress), 1.0 when complete
+            "elapsed_ms": 45000,   # present while running
+            "queue_position": 2    # present while queued
+        }
+    """
+    client = _get_client()
+    try:
+        response = await client.get(f"/requests/{request_id}/status")
+    except (httpx.ConnectError, httpx.ConnectTimeout, httpx.TimeoutException) as exc:
+        _handle_network_error(exc)
+    if response.status_code == 404:
+        raise ToolError(f"Request not found: {request_id}")
+    _check_response(response)
+    return response.json()
+
+
+@mcp.tool()
+async def daz_get_request_result(
+    request_id: str,
+    wait: bool = True,
+    timeout_seconds: int = 3600,
+) -> dict[str, Any]:
+    """Get the result of a completed async request.
+
+    Args:
+        request_id: Request ID returned by an async submission tool.
+        wait: If True (default), block until the request finishes (up to timeout).
+              If False, return immediately with current status even if not done.
+        timeout_seconds: Max seconds to wait when wait=True (default 3600 = 1 hour).
+
+    Returns when complete:
+        {
+            "request_id": "script-XXXXXXXX",
+            "status": "completed",
+            "success": true,
+            "result": {...},        # same as sync tool result
+            "output": [...],        # captured DazScript print() output
+            "error": null,
+            "duration_ms": 267000,
+            "completed_at": "2026-04-08T..."
+        }
+
+    Raises ToolError if the request failed.
+    """
+    client = _get_client()
+    params: dict[str, Any] = {
+        "wait": "true" if wait else "false",
+        "timeout": timeout_seconds,
+    }
+    try:
+        response = await client.get(
+            f"/requests/{request_id}/result",
+            params=params,
+            timeout=timeout_seconds + 10.0,  # slightly longer than server timeout
+        )
+    except (httpx.ConnectError, httpx.ConnectTimeout, httpx.TimeoutException) as exc:
+        _handle_network_error(exc)
+    _check_response(response)
+
+    data = response.json()
+    status = data.get("status", "unknown")
+    if status == "failed":
+        raise ToolError(f"Async request failed: {data.get('error', 'unknown error')}")
+    if status == "cancelled":
+        raise ToolError("Async request was cancelled")
+    return data
+
+
+@mcp.tool()
+async def daz_cancel_request(request_id: str) -> dict[str, Any]:
+    """Cancel a queued or running async request.
+
+    For queued requests: cancellation is immediate.
+    For running renders: sends a killRender() signal; may take a few seconds
+    to take effect.
+
+    Args:
+        request_id: Request ID returned by an async submission tool.
+
+    Returns:
+        {"request_id": "...", "status": "cancelled", "cancelled_at": "..."}
+
+    Raises ToolError if the request is already finished (completed/failed/cancelled)
+    or not found.
+    """
+    client = _get_client()
+    try:
+        response = await client.delete(f"/requests/{request_id}")
+    except (httpx.ConnectError, httpx.ConnectTimeout, httpx.TimeoutException) as exc:
+        _handle_network_error(exc)
+    _check_response(response)
+    return response.json()
+
+
+@mcp.tool()
+async def daz_list_requests(
+    status_filter: str | None = None,
+) -> dict[str, Any]:
+    """List all tracked async requests and their current statuses.
+
+    Args:
+        status_filter: Optional filter — one of "queued", "running",
+                       "completed", "failed", "cancelled". Returns all if omitted.
+
+    Returns:
+        {
+            "requests": [
+                {"request_id": "...", "status": "...", "progress": 0.0, "submitted_at": "..."},
+                ...
+            ],
+            "total": 5,
+            "queued": 2,
+            "running": 1,
+            "completed": 2,
+            "failed": 0,
+            "cancelled": 0
+        }
+    """
+    client = _get_client()
+    params: dict[str, Any] = {}
+    if status_filter is not None:
+        params["status"] = status_filter
+    try:
+        response = await client.get("/requests", params=params)
+    except (httpx.ConnectError, httpx.ConnectTimeout, httpx.TimeoutException) as exc:
+        _handle_network_error(exc)
+    _check_response(response)
+    return response.json()
+
+
+@mcp.tool()
+async def daz_set_render_quality(preset: str) -> dict[str, Any]:
+    """Set the Iray render quality preset.
+
+    Adjusts Max Samples and Render Quality on the active renderer, trading
+    speed for quality. Use "draft" for quick composition checks and "final"
+    for production renders.
+
+    Presets:
+        draft   - Very fast (seconds–2 min). Low quality. For quick checks.
+        preview - Fast (2–5 min). Moderate quality. For composition review.
+        good    - Slow (10–20 min). Good quality. For client review.
+        final   - Very slow (30 min–2 hr). Maximum quality. For final output.
+
+    Args:
+        preset: One of "draft", "preview", "good", "final".
+
+    Returns:
+        {
+            "preset": "draft",
+            "propertiesSet": [
+                {"property": "Max Samples", "value": 100},
+                {"property": "Render Quality", "value": 0.5}
+            ],
+            "note": "..."    # present only if some properties were not found
+        }
+
+    Example:
+        # Quick test render
+        daz_set_render_quality("draft")
+        daz_render("/test.png")
+
+        # Final quality async render
+        daz_set_render_quality("final")
+        req = await daz_render_async("/final.png")
+        result = await daz_get_request_result(req["request_id"], wait=True)
+    """
+    _presets: dict[str, dict[str, float]] = {
+        "draft":   {"maxSamples": 100,  "renderQuality": 0.5},
+        "preview": {"maxSamples": 500,  "renderQuality": 0.75},
+        "good":    {"maxSamples": 2000, "renderQuality": 0.9},
+        "final":   {"maxSamples": 5000, "renderQuality": 1.0},
+    }
+    if preset not in _presets:
+        valid = ", ".join(f'"{k}"' for k in _presets)
+        raise ToolError(f"Unknown render quality preset: '{preset}'. Valid presets: {valid}")
+
+    args = {"preset": preset, **_presets[preset]}
+    return await _execute_by_id("vangard-set-render-quality", args)
+
+
+# ---------------------------------------------------------------------------
+# Non-tool helper — daz_wait_for_request
+#
+# Not exposed as an MCP tool (no @mcp.tool() decorator).  Intended for use
+# in Python scripts that coordinate multiple async operations.
+# ---------------------------------------------------------------------------
+
+async def daz_wait_for_request(
+    request_id: str,
+    poll_interval_seconds: float = 5.0,
+    timeout_seconds: float = 3600.0,
+) -> dict[str, Any]:
+    """Poll an async request until it completes (or times out).
+
+    Polls daz_get_request_status() every poll_interval_seconds until the
+    request reaches a terminal state, then returns the full result.
+
+    Args:
+        request_id: Request ID from an async submission tool.
+        poll_interval_seconds: Seconds between status checks (default 5).
+        timeout_seconds: Maximum total wait time (default 3600 = 1 hour).
+
+    Returns:
+        Full result dict from daz_get_request_result() on success.
+
+    Raises:
+        ToolError: If the request failed or was cancelled.
+        asyncio.TimeoutError: If the timeout is exceeded.
+    """
+    import time
+    deadline = time.monotonic() + timeout_seconds
+
+    while True:
+        status = await daz_get_request_status(request_id)
+        state = status.get("status", "unknown")
+
+        if state == "completed":
+            return await daz_get_request_result(request_id, wait=False)
+        if state == "failed":
+            raise ToolError(f"Async request failed: {status.get('error', 'unknown error')}")
+        if state == "cancelled":
+            raise ToolError("Async request was cancelled")
+
+        if time.monotonic() >= deadline:
+            raise asyncio.TimeoutError(
+                f"Async request {request_id!r} did not complete within {timeout_seconds}s"
+            )
+
+        await asyncio.sleep(poll_interval_seconds)
+
+
+# ---------------------------------------------------------------------------
+# Tools — Phase 2: Emotional direction
+# ---------------------------------------------------------------------------
+
+@mcp.tool()
+async def daz_set_emotion(
+    character_label: str,
+    emotion: str,
+    intensity: float = 0.7,
+) -> dict[str, Any]:
+    """Apply an emotional expression to a character using morph candidates + body adjustment.
+
+    Args:
+        character_label: Node label of the character to affect.
+        emotion: One of: happy, sad, angry, surprised, fearful, disgusted, neutral,
+                 excited, bored, confident, shy, loving, contemptuous.
+        intensity: Scale factor 0.0–1.0 applied to all morph and body values (default 0.7).
+
+    Returns:
+        Dict with applied_morphs, body_adjustments, and not_found lists.
+
+    Notes:
+        Morph candidates are tried in order; first match per slot wins. Not-found morphs
+        are reported but do not raise errors — figures vary in available morphs.
+    """
+    valid = sorted(_EMOTION_DEFINITIONS.keys())
+    if emotion not in _EMOTION_DEFINITIONS:
+        raise ToolError(
+            f"Unknown emotion: '{emotion}'. Valid emotions: {', '.join(valid)}"
+        )
+    if not (0.0 <= intensity <= 1.0):
+        raise ToolError(f"intensity must be between 0.0 and 1.0, got {intensity}")
+
+    definition = _EMOTION_DEFINITIONS[emotion]
+    return await _execute_by_id("vangard-set-emotion", {
+        "nodeLabel": character_label,
+        "emotion": emotion,
+        "intensity": intensity,
+        "morphList": definition["morphs"],
+        "bodyAdjustments": definition["body"],
+    })
+
+
+# ---------------------------------------------------------------------------
+# Tools — Phase 2: Content library navigation
+# ---------------------------------------------------------------------------
+
+@mcp.tool()
+async def daz_list_categories(parent_path: str = "") -> dict[str, Any]:
+    """List content library category subdirectories under a parent path.
+
+    Searches across all configured DAZ content directories and deduplicates by name.
+
+    Args:
+        parent_path: Relative path within content directories to list (e.g. "People/Genesis 9").
+                     Leave empty to list top-level categories.
+
+    Returns:
+        Dict with parent, categories (list of {name, path, duf_count}), and count.
+
+    Example:
+        daz_list_categories()                      # top-level: People, Props, Environments...
+        daz_list_categories("People/Genesis 9")    # sub-folders: Characters, Clothing, Hair...
+    """
+    return await _execute_by_id("vangard-list-categories", {"parentPath": parent_path})
+
+
+@mcp.tool()
+async def daz_browse_category(category_path: str, sort_by: str = "name") -> dict[str, Any]:
+    """List .duf content files in a content library category path.
+
+    Searches all configured DAZ content directories and deduplicates by filename.
+
+    Args:
+        category_path: Relative path within content directories (e.g. "People/Genesis 9/Hair").
+        sort_by: Sort order — only "name" is currently supported (alphabetical).
+
+    Returns:
+        Dict with category, items (list of {name, filename, full_path}), and count.
+
+    Example:
+        daz_browse_category("People/Genesis 9/Hair")
+        daz_browse_category("Props/Furniture")
+    """
+    return await _execute_by_id("vangard-browse-category", {"categoryPath": category_path})
+
+
+@mcp.tool()
+async def daz_get_content_info(file_path: str) -> dict[str, Any]:
+    """Read metadata from a .duf content file without loading it into the scene.
+
+    Parses the JSON structure of a .duf file to extract name, type, contributor,
+    and other available metadata fields.
+
+    Args:
+        file_path: Absolute path to a .duf file on disk.
+
+    Returns:
+        Dict with name, type, file_version, contributor, revision, modified, and
+        any scene-level asset info found in the file.
+
+    Raises:
+        ToolError: If the file does not exist, is not readable, or is not valid JSON.
+    """
+    import json as _json
+
+    path = Path(file_path)
+    if not path.exists():
+        raise ToolError(f"File not found: {file_path}")
+    if not path.suffix.lower() == ".duf":
+        raise ToolError(f"Not a .duf file: {file_path}")
+
+    try:
+        with open(path, encoding="utf-8") as f:
+            data = _json.load(f)
+    except (OSError, _json.JSONDecodeError) as e:
+        raise ToolError(f"Failed to read {file_path}: {e}") from e
+
+    asset_info = data.get("asset_info", {})
+    contributor = asset_info.get("contributor", {})
+
+    result: dict[str, Any] = {
+        "path": str(path),
+        "name": path.stem,
+        "file_version": data.get("file_version", "unknown"),
+        "asset_id": asset_info.get("id", ""),
+        "type": asset_info.get("type", "unknown"),
+        "revision": asset_info.get("revision", ""),
+        "modified": asset_info.get("modified", ""),
+        "contributor": {
+            "author": contributor.get("author", ""),
+            "studio": contributor.get("studio", ""),
+            "website": contributor.get("website", ""),
+        },
+    }
+
+    # Try to extract a human-readable description from common locations
+    if "scene" in data:
+        scene = data["scene"]
+        nodes = scene.get("nodes", [])
+        if nodes:
+            first = nodes[0]
+            result["label"] = first.get("label", path.stem)
+            if "description" in first:
+                result["description"] = first["description"]
+
+    return result
+
+
+# ---------------------------------------------------------------------------
+# Tools — Phase 2: Scene composition / cinematography
+# ---------------------------------------------------------------------------
+
+@mcp.tool()
+async def daz_apply_composition_rule(
+    camera_label: str,
+    subject_label: str,
+    rule: str = "rule-of-thirds",
+) -> dict[str, Any]:
+    """Position camera so subject is framed according to a photography composition rule.
+
+    The camera maintains approximately its current horizontal distance from the subject
+    while adjusting position and aim to satisfy the chosen rule.
+
+    Args:
+        camera_label: Node label of the camera to reposition.
+        subject_label: Node label of the subject to frame.
+        rule: One of:
+            - "rule-of-thirds"  — Subject on right vertical third at eye level (default)
+            - "golden-ratio"    — Subject at the golden section (1.618 proportion)
+            - "center-frame"    — Subject centred, symmetric framing
+            - "leading-lines"   — Low angle with diagonal offset toward subject
+
+    Returns:
+        Dict with camera, subject, rule, camera_position, and explanation string.
+    """
+    return await _execute_by_id("vangard-apply-composition-rule", {
+        "cameraLabel": camera_label,
+        "subjectLabel": subject_label,
+        "rule": rule,
+    })
+
+
+@mcp.tool()
+async def daz_frame_shot(
+    camera_label: str,
+    subject_label: str,
+    shot_type: str = "medium-shot",
+) -> dict[str, Any]:
+    """Frame camera to subject using a standard cinematic shot type.
+
+    Calculates camera distance and height from the subject's bounding box,
+    then positions and aims the camera accordingly. Genesis figures face +Z,
+    so the camera is placed in front (positive Z direction).
+
+    Args:
+        camera_label: Node label of the camera to reposition.
+        subject_label: Node label of the subject to frame.
+        shot_type: One of:
+            - "extreme-close-up"  — Eyes/mouth detail (~25 cm)
+            - "close-up"          — Face and head (~50 cm)
+            - "medium-close-up"   — Head and shoulders (~90 cm)
+            - "medium-shot"       — Waist up (~140 cm)
+            - "medium-full"       — Knees up (~200 cm)
+            - "full-shot"         — Entire body (~400 cm)
+            - "wide-shot"         — Body within environment (~700 cm)
+
+    Returns:
+        Dict with camera, subject, shot_type, distance, camera_height, and framing description.
+    """
+    return await _execute_by_id("vangard-frame-shot", {
+        "cameraLabel": camera_label,
+        "subjectLabel": subject_label,
+        "shotType": shot_type,
+    })
+
+
+@mcp.tool()
+async def daz_apply_camera_angle(
+    camera_label: str,
+    subject_label: str,
+    angle: str = "eye-level",
+) -> dict[str, Any]:
+    """Apply a standard camera angle preset relative to a subject.
+
+    Maintains the camera's current horizontal distance from the subject while
+    adjusting vertical position and aim to achieve the specified angle. If the
+    camera is closer than 50 cm it defaults to 250 cm.
+
+    Args:
+        camera_label: Node label of the camera to reposition.
+        subject_label: Node label of the subject.
+        angle: One of:
+            - "eye-level"      — Camera at subject's eye height (neutral, default)
+            - "high-angle"     — Camera above subject (~1.5× head height), looking down
+            - "low-angle"      — Camera at shin level, looking up (powerful/dominant)
+            - "dutch-angle"    — Eye level with 15° Z-roll (unsettling, tense)
+            - "overhead"       — Camera directly above (bird's-eye view)
+            - "worms-eye"      — Camera at ground level looking straight up
+            - "over-shoulder"  — Camera behind and to one side of subject
+
+    Returns:
+        Dict with camera, subject, angle, camera_position, and descriptive note.
+    """
+    return await _execute_by_id("vangard-apply-camera-angle", {
+        "cameraLabel": camera_label,
+        "subjectLabel": subject_label,
+        "angle": angle,
+    })
+
+
+# ---------------------------------------------------------------------------
+# Tools — Phase 2: Scene checkpoint system
+# ---------------------------------------------------------------------------
+
+@mcp.tool()
+async def daz_save_scene_state(checkpoint_name: str) -> dict[str, Any]:
+    """Save current scene state as a named in-memory checkpoint.
+
+    Captures transforms (position, rotation, scale), active morphs, and light
+    properties for all skeletons, cameras, and lights in the scene. Use this
+    before experimental changes so you can restore with daz_restore_scene_state.
+
+    Args:
+        checkpoint_name: Unique name for this checkpoint (e.g. "before_lighting_test").
+                         Overwrites any existing checkpoint with the same name.
+
+    Returns:
+        Dict with checkpoint_name, node_count, and saved_at (ISO timestamp).
+
+    Notes:
+        Checkpoints are stored in the MCP server process memory and are lost if
+        the server is restarted. They do not save materials, geometry, or HDR domes.
+    """
+    import datetime as _dt
+
+    result = await _execute_by_id("vangard-save-scene-state", {
+        "checkpointName": checkpoint_name,
+    })
+
+    now = _dt.datetime.utcnow().isoformat() + "Z"
+    _CHECKPOINTS[checkpoint_name] = {
+        "nodes": result.get("nodes", []),
+        "saved_at": now,
+        "node_count": result.get("node_count", 0),
+    }
+
+    return {
+        "checkpoint_name": checkpoint_name,
+        "node_count": result.get("node_count", 0),
+        "saved_at": now,
+    }
+
+
+@mcp.tool()
+async def daz_restore_scene_state(checkpoint_name: str) -> dict[str, Any]:
+    """Restore scene state from a previously saved checkpoint.
+
+    Applies the transforms, morphs, and light properties captured by
+    daz_save_scene_state back to the scene. Nodes that no longer exist
+    are skipped and reported in the errors list.
+
+    Args:
+        checkpoint_name: Name of the checkpoint to restore.
+
+    Returns:
+        Dict with checkpoint_name, restored (list of node labels), and errors.
+
+    Raises:
+        ToolError: If no checkpoint with the given name exists.
+    """
+    if checkpoint_name not in _CHECKPOINTS:
+        available = sorted(_CHECKPOINTS.keys())
+        avail_str = ", ".join(f'"{n}"' for n in available) if available else "(none saved)"
+        raise ToolError(
+            f"Checkpoint '{checkpoint_name}' not found. Available: {avail_str}"
+        )
+
+    cp = _CHECKPOINTS[checkpoint_name]
+    result = await _execute_by_id("vangard-restore-scene-state", {
+        "checkpointName": checkpoint_name,
+        "nodes": cp["nodes"],
+    })
+    return result
+
+
+@mcp.tool()
+async def daz_list_checkpoints() -> dict[str, Any]:
+    """List all saved scene state checkpoints in the current session.
+
+    Returns:
+        Dict with checkpoints (list of {name, node_count, saved_at}) and count.
+
+    Notes:
+        Checkpoints are in-process memory; they are cleared when the server restarts.
+    """
+    items = [
+        {
+            "name": name,
+            "node_count": data["node_count"],
+            "saved_at": data["saved_at"],
+        }
+        for name, data in sorted(_CHECKPOINTS.items())
+    ]
+    return {"checkpoints": items, "count": len(items)}
+
+
+# ---------------------------------------------------------------------------
+# Tools — Phase 2: Scene layout & proximity
+# ---------------------------------------------------------------------------
+
+@mcp.tool()
+async def daz_get_scene_layout(
+    include_types: list[str] | None = None,
+) -> dict[str, Any]:
+    """Get a spatial map of all scene nodes with positions and bounding boxes.
+
+    Provides a bird's-eye view of where everything is positioned in the scene,
+    useful for reasoning about character spacing, prop placement, and camera coverage.
+
+    Args:
+        include_types: List of node type strings to include. Defaults to all types.
+                       Valid values: "figures", "cameras", "lights", "props".
+
+    Returns:
+        Dict with nodes (list of {label, type, position, bounds?}) and count.
+
+    Example:
+        daz_get_scene_layout()                              # everything
+        daz_get_scene_layout(["figures", "cameras"])        # characters + cameras only
+        daz_get_scene_layout(["lights"])                    # just lights with flux values
+    """
+    types = include_types or ["figures", "cameras", "lights", "props"]
+    return await _execute_by_id("vangard-get-scene-layout", {"includeTypes": types})
+
+
+@mcp.tool()
+async def daz_find_nearby_nodes(
+    node_label: str,
+    radius: float = 100.0,
+    include_types: list[str] | None = None,
+) -> dict[str, Any]:
+    """Find all scene nodes within a specified radius of a target node.
+
+    Uses world-space positions to calculate distances. Returns nodes sorted
+    nearest-first with cardinal direction labels.
+
+    Args:
+        node_label: Label of the centre node to search around.
+        radius: Search radius in centimetres (default 100 cm).
+        include_types: Filter by type — "figures", "cameras", "lights", "props".
+                       None means return all types within radius.
+
+    Returns:
+        Dict with center_node, radius, nearby_nodes (list of {label, type, distance, direction}),
+        and count.
+
+    Example:
+        daz_find_nearby_nodes("Genesis 9", radius=150)           # everything within 1.5 m
+        daz_find_nearby_nodes("Chair", radius=80, include_types=["figures"])  # people near chair
+    """
+    return await _execute_by_id("vangard-find-nearby-nodes", {
+        "nodeLabel": node_label,
+        "radius": radius,
+        "includeTypes": include_types,
+    })
 
 
 def main() -> None:

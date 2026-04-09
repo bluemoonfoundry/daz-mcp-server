@@ -20,7 +20,7 @@ uv run vangard-daz-mcp
 
 ## Available MCP Tools
 
-This server exposes 39 tools to MCP clients:
+This server exposes 70 tools to MCP clients:
 
 ### Documentation Tools
 
@@ -534,6 +534,178 @@ ffmpeg -framerate 30 -i frame_%04d.png -vf "scale=640:-1" output.gif
 - 120-frame animation: 1-10 hours
 - Multi-camera batch (8 cameras): 4-40 minutes
 - Increase `DAZ_TIMEOUT` env var for long renders: `DAZ_TIMEOUT=300` (5 minutes) or more
+
+### Phase 1 Tools
+
+#### Spatial Query Tools
+
+| Tool | Description |
+|------|-------------|
+| `daz_get_world_position` | Get world-space position, local position, rotation, and scale of a node |
+| `daz_get_bounding_box` | Get bounding box (min/max corners, center, width/height/depth) of a node |
+| `daz_calculate_distance` | Calculate distance and direction vector between two nodes (cm) |
+| `daz_get_spatial_relationship` | Natural language spatial relationship between two nodes (direction, angle, overlap) |
+| `daz_check_overlap` | Check if two nodes have overlapping bounding boxes with penetration depth |
+
+**Common use cases:**
+- "Where is the character's hand in world space?"
+- "How far is the camera from Genesis 9?"
+- "Is Bob in front of or behind Alice?"
+- "Are these two characters interpenetrating?"
+
+#### Property Introspection Tools
+
+| Tool | Description |
+|------|-------------|
+| `daz_inspect_properties` | List all properties on a node; filter by type (numeric, transform, morph, bool, string, all) |
+| `daz_get_property_metadata` | Get detailed metadata (min, max, default, type, path) for a single named property |
+| `daz_validate_script` | Static analysis of DazScript for known anti-patterns (no DAZ Studio connection needed) |
+
+**Common use cases:**
+- "What properties can I set on this spotlight?"
+- "What is the valid range for Flux on a light?"
+- "Check this script for errors before running it"
+
+**`daz_inspect_properties` filter types:** `all`, `numeric`, `transform`, `morph`, `bool`, `string`
+
+#### Lighting Preset Tools
+
+| Tool | Description |
+|------|-------------|
+| `daz_apply_lighting_preset` | Create a professional lighting setup in one command |
+| `daz_validate_scene` | Validate scene for collisions, lighting, cameras, and figures; returns score |
+
+**Lighting presets:**
+- `three-point` — Key (front-right) + Fill (front-left) + Rim (back). General-purpose.
+- `rembrandt` — Key (45° side, high) + dim Fill. Dramatic portrait lighting.
+- `butterfly` — Key (directly front, high). Glamour/beauty lighting.
+- `split` — Key (90° side). Half face lit, half in shadow. Moody.
+- `loop` — Key (35° side) + Fill + Rim. Natural-looking portrait.
+
+All presets:
+- Position lights relative to the subject's actual bounding box
+- Aim lights at the subject's face height
+- Set environment mode to Scene Only (disables dome)
+- Remove existing lights with the same names before recreating
+
+**`daz_validate_scene` checks:**
+- Bounding box collisions between figures (severity: high)
+- No lights / single light source (severity: high/medium)
+- No cameras in scene (severity: medium)
+- No figures in scene (severity: low)
+- Returns score 0-100 and per-category breakdown
+
+### Phase 2 Tools
+
+#### Emotional Direction
+
+| Tool | Description |
+|------|-------------|
+| `daz_set_emotion` | Apply an emotional expression to a character (morphs + body language) |
+
+**Supported emotions:** `happy`, `sad`, `angry`, `surprised`, `fearful`, `disgusted`, `neutral`, `excited`, `bored`, `confident`, `shy`, `loving`, `contemptuous`
+
+**How it works:**
+- Python side defines per-emotion morph candidate lists (multiple names tried in order — first match wins)
+- Handles morph naming differences between Genesis 8 / Genesis 9 / other figures
+- Scales all morph and bone rotation values by `intensity` (0.0–1.0, default 0.7)
+- Reports non-found morphs in `not_found` list without raising errors
+
+**Common use cases:**
+- "Make Alice look happy" → `daz_set_emotion("Alice", "happy")`
+- "Give Bob a subtle confident look" → `daz_set_emotion("Bob", "confident", intensity=0.4)`
+
+#### Content Library Navigation
+
+| Tool | Description |
+|------|-------------|
+| `daz_list_categories` | List subdirectories in content library under a parent path |
+| `daz_browse_category` | List .duf files in a content library category path |
+| `daz_get_content_info` | Read metadata from a .duf file without loading it |
+
+**Content directory traversal:**
+- `daz_list_categories` and `daz_browse_category` search all configured DAZ content directories
+- Results are deduplicated by name across multiple library roots
+- `daz_get_content_info` reads the .duf JSON directly in Python (no DAZ Studio connection needed)
+
+**Common use cases:**
+- "What Genesis 9 hair is available?" → `daz_list_categories("People/Genesis 9")` then `daz_browse_category("People/Genesis 9/Hair")`
+- "What does this file require?" → `daz_get_content_info("/path/to/file.duf")`
+
+#### Scene Composition / Cinematography
+
+| Tool | Description |
+|------|-------------|
+| `daz_apply_composition_rule` | Position camera using a photography composition rule |
+| `daz_frame_shot` | Frame camera to subject using a standard cinematic shot type |
+| `daz_apply_camera_angle` | Apply a standard camera angle preset relative to a subject |
+
+**`daz_apply_composition_rule` rules:**
+- `rule-of-thirds` — Subject on right vertical third at eye level (default)
+- `golden-ratio` — Subject at 1.618 golden section
+- `center-frame` — Subject centered, symmetric
+- `leading-lines` — Low angle with diagonal offset
+
+**`daz_frame_shot` shot types:**
+- `extreme-close-up` → 25 cm (eyes/mouth detail)
+- `close-up` → 50 cm (face)
+- `medium-close-up` → 90 cm (head and shoulders)
+- `medium-shot` → 140 cm (waist up)
+- `medium-full` → 200 cm (knees up)
+- `full-shot` → 400 cm (whole body)
+- `wide-shot` → 700 cm (body + environment)
+
+**`daz_apply_camera_angle` angles:**
+- `eye-level` — Neutral (default)
+- `high-angle` — Above subject, looking down (vulnerable)
+- `low-angle` — Below eye level, looking up (powerful)
+- `dutch-angle` — Eye level + 15° Z-roll (unsettling)
+- `overhead` — Directly above (bird's-eye)
+- `worms-eye` — Ground level looking up
+- `over-shoulder` — Behind and to one side
+
+All composition tools maintain the camera's current horizontal distance from the subject and use `camera.aimAt()` to orient correctly.
+
+#### Scene Checkpoint System
+
+| Tool | Description |
+|------|-------------|
+| `daz_save_scene_state` | Save current transforms, morphs, and light properties as a named checkpoint |
+| `daz_restore_scene_state` | Restore scene state from a named checkpoint |
+| `daz_list_checkpoints` | List all saved checkpoints in the current session |
+
+**What is captured:**
+- All skeleton/figure: transform properties (XTranslate, YTranslate, ZTranslate, XRotate, YRotate, ZRotate, Scale) + all active (non-zero) morph values
+- All cameras: transform properties
+- All lights: transform properties + Flux, Shadow Softness, Spread Angle
+
+**What is NOT captured:** Materials, geometry, HDR dome settings, parenting relationships
+
+**Important:** Checkpoints are stored in MCP server process memory. They are lost if the server restarts.
+
+```python
+# Safe experimentation workflow
+daz_save_scene_state("before_lighting_test")
+daz_apply_lighting_preset("rembrandt", "Genesis 9")   # experiment...
+# Don't like it?
+daz_restore_scene_state("before_lighting_test")
+```
+
+#### Scene Layout & Proximity
+
+| Tool | Description |
+|------|-------------|
+| `daz_get_scene_layout` | Full spatial map of all scene nodes with positions and bounding boxes |
+| `daz_find_nearby_nodes` | Find all nodes within a radius of a target node |
+
+**`daz_get_scene_layout` include_types filter:** `"figures"`, `"cameras"`, `"lights"`, `"props"`
+
+**`daz_find_nearby_nodes` direction labels:** `front`, `front-right`, `right`, `back-right`, `back`, `back-left`, `left`, `front-left`
+
+**Common use cases:**
+- "Show me where everything is" → `daz_get_scene_layout()`
+- "What props are near Alice?" → `daz_find_nearby_nodes("Alice", radius=200, include_types=["props"])`
+- "How far is Bob from the chair?" → `daz_find_nearby_nodes("Chair", radius=500, include_types=["figures"])`
 
 ### Updating Documentation
 

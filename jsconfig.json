@@ -1,0 +1,13 @@
+{
+  "compilerOptions": {
+    "module": "commonjs",
+    "target": "ES5",
+    "checkJs": false,
+    "lib": ["es5"]
+  },
+   "include": [
+    "**/*.dsa",
+    "**/*.ds",
+    "daz_script_spec_vscode.d.ts" 
+   ]
+}

@@ -1,6 +1,6 @@
 # vangard-daz-mcp
 
-**Version 0.1.0** | MCP Server for DAZ Studio
+**Version 0.2.0** | MCP Server for DAZ Studio
 
 A [Model Context Protocol (MCP)](https://modelcontextprotocol.io) server that exposes DAZ Studio operations to Claude and other MCP clients. Built on [FastMCP](https://github.com/jlowin/fastmcp) and wraps the [DazScriptServer](https://github.com/bluemoonfoundry/daz-script-server) HTTP plugin.
 
@@ -9,10 +9,19 @@ A [Model Context Protocol (MCP)](https://modelcontextprotocol.io) server that ex
 ## What Is This?
 
 This MCP server allows Claude (via Claude Desktop or other MCP clients) to control DAZ Studio directly:
-- Query scene information (figures, cameras, lights)
+- Query scene information (figures, cameras, lights, spatial positions)
 - Read and modify node properties (transforms, morphs)
-- Load content files
-- Trigger renders
+- Discover and apply morphs, including searching by name pattern
+- Traverse and manipulate scene hierarchies (parent/child, skeleton)
+- Apply emotional expressions to characters
+- Coordinate multi-character interactions (look-at, reach-toward, hug, handshake)
+- Execute batch operations (set multiple properties in one call, 5-10x faster)
+- Control cameras and viewport (orbit, frame, presets)
+- Create keyframe animations and export as image sequences
+- Trigger synchronous or asynchronous renders with cancellation support
+- Apply professional lighting presets and cinematography composition rules
+- Browse and query the DAZ content library
+- Save and restore named scene checkpoints
 - Execute arbitrary DazScript code
 - Access comprehensive DazScript documentation and examples
 
@@ -144,6 +153,10 @@ Get DazScript documentation, examples, and best practices.
 - `morphs` - Morph discovery, searching, value ranges, and management
 - `hierarchy` - Scene hierarchy, parent-child relationships, parenting operations
 - `interaction` - Multi-character interaction, look-at mechanics, world-space posing
+- `batch` - Batch operations patterns and performance optimization
+- `viewport` - Viewport and camera control, spherical positioning, presets
+- `animation` - Keyframe animation, timeline control, image sequence export
+- `rendering` - Rendering workflows, multi-camera, batch render, animation export
 
 **Returns:** Formatted documentation with examples
 
@@ -166,7 +179,7 @@ Check DAZ Studio connectivity and version.
 ```json
 {
   "running": true,
-  "version": "1.2.0"
+  "version": "1.3.0"
 }
 ```
 
@@ -1297,6 +1310,774 @@ daz_render_animation(
 
 ---
 
+### 📐 Spatial Query Tools
+
+These tools let you query the world-space position, size, and relationships of scene nodes.
+
+#### `daz_get_world_position`
+Get world-space position, local position, rotation, and scale of a node.
+
+**Arguments:**
+- `node_label` (string): Node display label or internal name
+
+**Returns:**
+```json
+{
+  "node": "Genesis 9",
+  "worldPosition": {"x": 0, "y": 0, "z": 0},
+  "localPosition": {"x": 0, "y": 0, "z": 0},
+  "rotation": {"x": 0, "y": 0, "z": 0},
+  "scale": {"x": 1, "y": 1, "z": 1}
+}
+```
+
+**Use when:** Finding exact world coordinates of a character or prop before placing another object relative to it.
+
+---
+
+#### `daz_get_bounding_box`
+Get bounding box (min/max corners, center, dimensions) of a node.
+
+**Arguments:**
+- `node_label` (string): Node display label or internal name
+
+**Returns:**
+```json
+{
+  "node": "Genesis 9",
+  "min": {"x": -30, "y": 0, "z": -15},
+  "max": {"x": 30, "y": 170, "z": 15},
+  "center": {"x": 0, "y": 85, "z": 0},
+  "width": 60, "height": 170, "depth": 30
+}
+```
+
+**Use when:** Auto-framing cameras, checking object sizes, placing objects on surfaces.
+
+---
+
+#### `daz_calculate_distance`
+Calculate distance and direction vector between two nodes.
+
+**Arguments:**
+- `from_label` (string): Source node
+- `to_label` (string): Target node
+
+**Returns:**
+```json
+{
+  "from": "Alice",
+  "to": "Bob",
+  "distance": 120.5,
+  "direction": {"x": 0.707, "y": 0, "z": 0.707}
+}
+```
+
+**Use when:** Checking if two characters are within interaction range, positioning props relative to figures.
+
+---
+
+#### `daz_get_spatial_relationship`
+Natural-language spatial relationship between two nodes.
+
+**Arguments:**
+- `from_label` (string): Reference node
+- `to_label` (string): Target node
+
+**Returns:**
+```json
+{
+  "from": "Camera 1",
+  "to": "Genesis 9",
+  "distance": 300.0,
+  "direction": "in front of",
+  "angle": 5.2,
+  "overlap": false
+}
+```
+
+**Use when:** Describing scene layout in natural language, verifying camera placement.
+
+---
+
+#### `daz_check_overlap`
+Check if two nodes have overlapping bounding boxes.
+
+**Arguments:**
+- `node1_label` (string): First node
+- `node2_label` (string): Second node
+
+**Returns:**
+```json
+{
+  "overlapping": true,
+  "penetrationDepth": {"x": 2.1, "y": 0, "z": 0}
+}
+```
+
+**Use when:** Detecting interpenetration between characters, validating poses before rendering.
+
+---
+
+### 🔬 Property Introspection Tools
+
+#### `daz_inspect_properties`
+List all properties on a node, optionally filtered by type.
+
+**Arguments:**
+- `node_label` (string): Node display label or internal name
+- `filter_type` (string, default `"all"`): One of `"all"`, `"numeric"`, `"transform"`, `"morph"`, `"bool"`, `"string"`
+
+**Returns:**
+```json
+{
+  "node": "Spot Light 1",
+  "properties": [
+    {"label": "Flux", "name": "Flux", "type": "numeric", "value": 1500},
+    {"label": "Shadow Softness", "name": "Shadow Softness", "type": "numeric", "value": 0.5}
+  ],
+  "count": 2
+}
+```
+
+**Use when:** Discovering what properties are settable on a node (lights, cameras, props).
+
+**Example:**
+```
+# List all numeric properties on a spotlight
+daz_inspect_properties("Spot Light 1", filter_type="numeric")
+
+# List transform properties only
+daz_inspect_properties("Genesis 9", filter_type="transform")
+```
+
+---
+
+#### `daz_get_property_metadata`
+Get detailed metadata (min, max, default, type, path) for a single property.
+
+**Arguments:**
+- `node_label` (string): Node display label or internal name
+- `property_name` (string): Property label or internal name
+
+**Returns:**
+```json
+{
+  "node": "Spot Light 1",
+  "property": "Flux",
+  "type": "numeric",
+  "value": 1500,
+  "default": 1500,
+  "min": 0,
+  "max": 100000,
+  "path": "General/Luminous Flux"
+}
+```
+
+**Use when:** Finding valid ranges before setting a property, validating property names.
+
+---
+
+#### `daz_validate_script`
+Static analysis of DazScript code for known anti-patterns. Does not require a DAZ Studio connection.
+
+**Arguments:**
+- `script` (string): DazScript source code to analyze
+
+**Returns:**
+```json
+{
+  "valid": false,
+  "issues": [
+    {"severity": "error", "line": 3, "message": "Bare return at top level — wrap in IIFE"},
+    {"severity": "warning", "line": 7, "message": "getElementID() is not a function — use .elementID property"}
+  ],
+  "issueCount": 2
+}
+```
+
+**Use when:** Before running a custom script via `daz_execute`, to catch common mistakes early.
+
+---
+
+### 💡 Lighting Preset Tools
+
+#### `daz_apply_lighting_preset`
+Create a professional lighting setup in one command.
+
+**Arguments:**
+- `preset` (string): Lighting preset name
+- `subject_label` (string): Node to light (preset positions lights relative to subject's bounding box)
+
+**Presets:**
+- `three-point` — Key (front-right) + Fill (front-left) + Rim (back). General-purpose.
+- `rembrandt` — Key (45° side, high) + dim Fill. Dramatic portrait.
+- `butterfly` — Key (directly front, high). Glamour/beauty lighting.
+- `split` — Key (90° side). Half face lit, half in shadow. Moody.
+- `loop` — Key (35° side) + Fill + Rim. Natural-looking portrait.
+
+**Returns:**
+```json
+{
+  "success": true,
+  "preset": "three-point",
+  "subject": "Genesis 9",
+  "lights": ["Key Light", "Fill Light", "Rim Light"]
+}
+```
+
+All presets: aim lights at the subject's face height, set environment mode to Scene Only, and remove existing lights with the same names first.
+
+**Use when:** Setting up a scene for rendering without manually positioning individual lights.
+
+**Example:**
+```
+# Classic portrait lighting
+daz_apply_lighting_preset("three-point", "Genesis 9")
+
+# Dramatic moody lighting
+daz_apply_lighting_preset("rembrandt", "Genesis 9")
+```
+
+---
+
+#### `daz_validate_scene`
+Validate scene quality for rendering — checks lighting, cameras, collisions.
+
+**Returns:**
+```json
+{
+  "score": 75,
+  "issues": [
+    {"category": "lighting", "severity": "medium", "message": "Only one light source — consider adding fill or rim light"},
+    {"category": "collision", "severity": "high", "message": "Alice and Bob bounding boxes overlap by 5cm"}
+  ],
+  "breakdown": {
+    "lighting": 60,
+    "cameras": 100,
+    "figures": 100,
+    "collisions": 50
+  }
+}
+```
+
+**Score:** 0-100. Issues reduce the score. Checks: bounding box collisions between figures, insufficient lighting, no cameras, no figures.
+
+**Use when:** Before rendering to catch common setup problems.
+
+---
+
+### 🎭 Emotional Direction
+
+#### `daz_set_emotion`
+Apply an emotional expression to a character (morphs + body language).
+
+**Arguments:**
+- `character_label` (string): Character display label
+- `emotion` (string): Emotion name
+- `intensity` (float, default `0.7`): Strength of the expression (0.0–1.0)
+
+**Supported emotions:** `happy`, `sad`, `angry`, `surprised`, `fearful`, `disgusted`, `neutral`, `excited`, `bored`, `confident`, `shy`, `loving`, `contemptuous`
+
+**Returns:**
+```json
+{
+  "success": true,
+  "character": "Genesis 9",
+  "emotion": "happy",
+  "intensity": 0.7,
+  "applied": ["PHMSmile", "PHMBrowsUp", "chest_forward"],
+  "notFound": ["PHMEyeSquintL"]
+}
+```
+
+Missing morphs (due to figure generation differences) are reported in `not_found` without raising an error.
+
+**Use when:** Quickly applying a recognizable expression instead of manually searching for morph names.
+
+**Example:**
+```
+# Apply full happy expression
+daz_set_emotion("Alice", "happy")
+
+# Subtle confident look
+daz_set_emotion("Bob", "confident", intensity=0.4)
+```
+
+---
+
+### 📚 Content Library Navigation
+
+#### `daz_list_categories`
+List subdirectories in the content library under a parent path.
+
+**Arguments:**
+- `parent_path` (string, default `""`): Path relative to content library root (e.g., `"People/Genesis 9"`)
+
+**Returns:**
+```json
+{
+  "path": "People/Genesis 9",
+  "categories": ["Characters", "Hair", "Clothing", "Expressions"],
+  "count": 4
+}
+```
+
+**Use when:** Browsing the content library to discover available categories.
+
+**Example:**
+```
+# List top-level categories
+daz_list_categories("")
+
+# Browse Genesis 9 subcategories
+daz_list_categories("People/Genesis 9")
+```
+
+---
+
+#### `daz_browse_category`
+List `.duf` files in a content library category.
+
+**Arguments:**
+- `category_path` (string): Path relative to content library root
+- `sort_by` (string, default `"name"`): Sort order: `"name"` or `"date"`
+
+**Returns:**
+```json
+{
+  "path": "People/Genesis 9/Hair",
+  "files": [
+    {"name": "Ade Hair", "path": "/Library/People/Genesis 9/Hair/Ade Hair.duf"},
+    {"name": "Braid Updo", "path": "/Library/People/Genesis 9/Hair/Braid Updo.duf"}
+  ],
+  "count": 2
+}
+```
+
+**Use when:** Finding content file paths to load with `daz_load_file`.
+
+---
+
+#### `daz_get_content_info`
+Read metadata from a `.duf` file without loading it.
+
+**Arguments:**
+- `file_path` (string): Absolute path to `.duf` file
+
+**Returns:**
+```json
+{
+  "name": "Ade Hair",
+  "type": "wearable",
+  "requires": ["Genesis 9"],
+  "author": "Daz Originals",
+  "description": "Long flowing hair for Genesis 9"
+}
+```
+
+**Use when:** Checking compatibility or requirements before loading content.
+
+---
+
+### 🎬 Scene Composition / Cinematography
+
+#### `daz_apply_composition_rule`
+Position camera using a photography composition rule.
+
+**Arguments:**
+- `camera_label` (string): Camera to position
+- `subject_label` (string): Subject to compose around
+- `rule` (string, default `"rule-of-thirds"`): Composition rule
+
+**Rules:**
+- `rule-of-thirds` — Subject on right vertical third at eye level
+- `golden-ratio` — Subject at 1.618 golden section
+- `center-frame` — Subject centered, symmetric
+- `leading-lines` — Low angle with diagonal offset
+
+**Returns:**
+```json
+{
+  "success": true,
+  "camera": "Camera 1",
+  "subject": "Genesis 9",
+  "rule": "rule-of-thirds"
+}
+```
+
+---
+
+#### `daz_frame_shot`
+Frame camera using a standard cinematic shot type.
+
+**Arguments:**
+- `camera_label` (string): Camera to position
+- `subject_label` (string): Subject to frame
+- `shot_type` (string): Shot type name
+
+**Shot types and distances:**
+- `extreme-close-up` — 25 cm (eyes/mouth detail)
+- `close-up` — 50 cm (face)
+- `medium-close-up` — 90 cm (head and shoulders)
+- `medium-shot` — 140 cm (waist up)
+- `medium-full` — 200 cm (knees up)
+- `full-shot` — 400 cm (whole body)
+- `wide-shot` — 700 cm (body + environment)
+
+**Returns:**
+```json
+{
+  "success": true,
+  "camera": "Camera 1",
+  "subject": "Genesis 9",
+  "shotType": "medium-shot",
+  "distance": 140
+}
+```
+
+**Example:**
+```
+# Frame a portrait shot
+daz_frame_shot("Camera 1", "Genesis 9", "close-up")
+
+# Frame full body
+daz_frame_shot("Camera 1", "Genesis 9", "full-shot")
+```
+
+---
+
+#### `daz_apply_camera_angle`
+Apply a standard camera angle preset relative to a subject.
+
+**Arguments:**
+- `camera_label` (string): Camera to position
+- `subject_label` (string): Subject to angle toward
+- `angle` (string, default `"eye-level"`): Camera angle preset
+
+**Angles:**
+- `eye-level` — Neutral, camera at subject's eye height
+- `high-angle` — Above subject, looking down (vulnerable)
+- `low-angle` — Below eye level, looking up (powerful)
+- `dutch-angle` — Eye level + 15° Z-roll (unsettling)
+- `overhead` — Directly above (bird's-eye)
+- `worms-eye` — Ground level looking up
+- `over-shoulder` — Behind and to one side
+
+**Returns:**
+```json
+{
+  "success": true,
+  "camera": "Camera 1",
+  "subject": "Genesis 9",
+  "angle": "low-angle"
+}
+```
+
+---
+
+### 💾 Scene Checkpoint System
+
+#### `daz_save_scene_state`
+Save current scene state (transforms, morphs, light properties) as a named checkpoint.
+
+**Arguments:**
+- `checkpoint_name` (string): Name for this checkpoint
+
+**What is captured:**
+- All figures/skeletons: transform properties + active (non-zero) morph values
+- All cameras: transform properties
+- All lights: transform properties + Flux, Shadow Softness, Spread Angle
+
+**What is NOT captured:** Materials, geometry, HDR dome settings, parenting relationships.
+
+**Returns:**
+```json
+{
+  "success": true,
+  "checkpoint": "before_lighting_test",
+  "nodesCaptured": 5,
+  "savedAt": "2026-04-09T10:15:00"
+}
+```
+
+**Important:** Checkpoints are stored in MCP server process memory and are lost if the server restarts.
+
+**Example:**
+```python
+# Safe experimentation workflow
+daz_save_scene_state("before_lighting_test")
+daz_apply_lighting_preset("rembrandt", "Genesis 9")
+# Don't like it?
+daz_restore_scene_state("before_lighting_test")
+```
+
+---
+
+#### `daz_restore_scene_state`
+Restore scene state from a named checkpoint.
+
+**Arguments:**
+- `checkpoint_name` (string): Name of checkpoint to restore
+
+**Returns:**
+```json
+{
+  "success": true,
+  "checkpoint": "before_lighting_test",
+  "nodesRestored": 5
+}
+```
+
+---
+
+#### `daz_list_checkpoints`
+List all saved checkpoints in the current session.
+
+**Returns:**
+```json
+{
+  "checkpoints": [
+    {"name": "before_lighting_test", "savedAt": "2026-04-09T10:15:00", "nodeCount": 5},
+    {"name": "pose_v2", "savedAt": "2026-04-09T10:32:00", "nodeCount": 5}
+  ],
+  "count": 2
+}
+```
+
+---
+
+### 🗺️ Scene Layout & Proximity
+
+#### `daz_get_scene_layout`
+Full spatial map of all scene nodes with positions and bounding boxes.
+
+**Arguments:**
+- `include_types` (list, optional): Filter by type. Values: `"figures"`, `"cameras"`, `"lights"`, `"props"`. Omit for all types.
+
+**Returns:**
+```json
+{
+  "nodes": [
+    {
+      "label": "Genesis 9", "type": "DzFigure",
+      "position": {"x": 0, "y": 0, "z": 0},
+      "boundingBox": {"min": {...}, "max": {...}, "center": {...}}
+    }
+  ],
+  "count": 8
+}
+```
+
+**Use when:** Getting a complete overview of scene spatial layout before adding or moving objects.
+
+---
+
+#### `daz_find_nearby_nodes`
+Find all nodes within a radius of a target node.
+
+**Arguments:**
+- `target_label` (string): Center node to search around
+- `radius` (float, default `200.0`): Search radius in cm
+- `include_types` (list, optional): Filter by type: `"figures"`, `"cameras"`, `"lights"`, `"props"`
+
+**Returns:**
+```json
+{
+  "target": "Alice",
+  "radius": 200,
+  "nearby": [
+    {"label": "Bob", "type": "DzFigure", "distance": 120.5, "direction": "front-right"},
+    {"label": "Chair", "type": "prop", "distance": 85.0, "direction": "right"}
+  ],
+  "count": 2
+}
+```
+
+**Direction labels:** `front`, `front-right`, `right`, `back-right`, `back`, `back-left`, `left`, `front-left`
+
+**Use when:** Finding all characters or props near a subject, checking interaction range.
+
+---
+
+### ⚡ Async Rendering Tools
+
+For long-running operations (full renders, animation export, multi-camera batch), async tools return immediately with a `request_id`. The script executes serially on DAZ Studio's main thread — the scene is locked while it runs, so subsequent scene modifications queue behind it.
+
+**Key constraint:** DAZ Studio is single-threaded. Async means the HTTP connection is released immediately — execution is still serial.
+
+#### `daz_render_async`
+Submit a render asynchronously. Returns immediately with a `request_id`.
+
+**Arguments:**
+- `output_path` (string, optional): Output file path
+
+**Returns:**
+```json
+{
+  "request_id": "render-a3f2b891",
+  "status": "queued",
+  "submitted_at": "2026-04-09T10:15:00"
+}
+```
+
+---
+
+#### `daz_render_with_camera_async`
+Submit a camera-specific render asynchronously.
+
+**Arguments:**
+- `camera_label` (string): Camera to render from
+- `output_path` (string, optional): Output file path
+
+---
+
+#### `daz_batch_render_cameras_async`
+Submit a multi-camera batch render asynchronously.
+
+**Arguments:**
+- `cameras` (list[string]): Camera labels
+- `output_dir` (string): Output directory
+- `base_filename` (string, default `"render"`): Base filename
+
+---
+
+#### `daz_render_animation_async`
+Submit an animation render asynchronously.
+
+**Arguments:**
+- `output_dir` (string): Output directory
+- `start_frame` (int, optional): First frame
+- `end_frame` (int, optional): Last frame
+- `filename_pattern` (string, default `"frame"`): Filename prefix
+- `camera` (string, optional): Camera to render from
+
+---
+
+#### `daz_get_request_status`
+Poll the status of an async request (non-blocking, lightweight).
+
+**Arguments:**
+- `request_id` (string): Request ID from an async submit tool
+
+**Returns:**
+```json
+{
+  "request_id": "render-a3f2b891",
+  "status": "running",
+  "progress": 0.0,
+  "elapsed_ms": 3200,
+  "queue_position": 0
+}
+```
+
+**Status values:** `queued`, `running`, `completed`, `failed`, `cancelled`
+
+---
+
+#### `daz_get_request_result`
+Fetch the final result of an async request.
+
+**Arguments:**
+- `request_id` (string): Request ID
+- `wait` (bool, default `True`): If True, blocks until complete (up to `timeout_seconds`)
+- `timeout_seconds` (int, default `300`): Max wait time when `wait=True`
+
+**Returns (completed):**
+```json
+{
+  "success": true,
+  "result": {...},
+  "request_id": "render-a3f2b891",
+  "duration_ms": 45230,
+  "completed_at": "2026-04-09T10:15:47",
+  "status": "completed"
+}
+```
+
+---
+
+#### `daz_cancel_request`
+Cancel a queued or running async request.
+
+**Arguments:**
+- `request_id` (string): Request ID to cancel
+
+Queued requests are removed immediately. Running requests set a cancel flag and call `killRender()`.
+
+**Returns:**
+```json
+{
+  "request_id": "render-a3f2b891",
+  "status": "cancelled",
+  "cancelled_at": "2026-04-09T10:15:05"
+}
+```
+
+---
+
+#### `daz_list_requests`
+List all active and recently completed async requests.
+
+**Arguments:**
+- `status_filter` (string, optional): Filter by status: `"queued"`, `"running"`, `"completed"`, `"failed"`, `"cancelled"`
+
+**Returns:**
+```json
+{
+  "requests": [...],
+  "total": 3,
+  "queued": 1,
+  "running": 1,
+  "completed": 1
+}
+```
+
+---
+
+#### `daz_set_render_quality`
+Set render quality preset before rendering.
+
+**Arguments:**
+- `preset` (string): One of `"draft"`, `"preview"`, `"good"`, `"final"`
+
+| Preset | Typical time | Use case |
+|--------|-------------|----------|
+| `draft` | 30s–2min | Quick composition check |
+| `preview` | 2–5min | Client review |
+| `good` | 10–20min | High quality review |
+| `final` | 30min–2hr | Final output |
+
+**Returns:**
+```json
+{
+  "preset": "draft",
+  "settings": {"Max Samples": 100, "Render Quality": 0.5}
+}
+```
+
+---
+
+**Async workflow example:**
+
+```python
+# 1. Set quality and submit
+daz_set_render_quality("final")
+req = daz_render_async("/renders/final.png")
+
+# 2. Poll status
+while True:
+    status = daz_get_request_status(req["request_id"])
+    if status["status"] in ("completed", "failed", "cancelled"):
+        break
+    # come back later...
+
+# 3. Or use wait=True in one step
+result = daz_get_request_result(req["request_id"], wait=True, timeout_seconds=3600)
+```
+
+---
+
 ### ✏️ Modification Tools
 
 #### `daz_set_property`
@@ -1707,10 +2488,13 @@ uv run pytest tests/test_server.py::test_daz_status_ok -v
 ```
 vangard-daz-mcp/
 ├── src/vangard_daz_mcp/
-│   └── server.py          # Single-file MCP server (all tools)
+│   ├── server.py              # Single-file MCP server (all tools)
+│   └── dazscript_docs.json    # DazScript documentation loaded by daz_script_help
 ├── tests/
-│   └── test_server.py     # Test suite with respx mocks
-├── pyproject.toml         # Project config
+│   └── test_server.py         # Test suite with respx mocks
+├── pyproject.toml             # Project config (version, dependencies)
+├── ASYNC_OPERATIONS.md        # Design doc for async rendering system
+├── IMPLEMENTATION_PLAN.md     # Phased feature roadmap
 └── README.md
 ```
 
@@ -1741,9 +2525,10 @@ vangard-daz-mcp/
 
 - DAZ Studio must be running locally (no remote DAZ Studio support)
 - DazScriptServer plugin must be installed and active
-- Single concurrent client (MCP server is single-threaded)
-- Scripts execute on DAZ Studio's main thread (operations are serialized)
-- No support for binary data (images must be saved to disk, not returned directly)
+- All scene operations execute on DAZ Studio's main thread — operations are serialized even with async tools
+- While a render is running, no other scene operations can execute (scene is locked)
+- Scene checkpoints are in-memory only and lost if the MCP server restarts
+- No support for binary data (rendered images must be saved to disk, not returned directly)
 
 ---
 
@@ -1763,11 +2548,11 @@ vangard-daz-mcp/
 
 Contributions welcome! Areas for improvement:
 
-- Additional high-level tools (materials, animation, viewport)
-- Better error messages and recovery strategies
-- Support for binary data (screenshot capture, texture upload)
-- Documentation and examples
-- Integration tests with real DAZ Studio instance
+- Material property tools (read/set surface colors, textures, shader settings)
+- Support for binary data (screenshot capture, returning rendered images directly)
+- Integration tests with a real DAZ Studio instance
+- More DazScript documentation topics in `dazscript_docs.json`
+- Additional lighting presets and emotion definitions
 
 ---
 

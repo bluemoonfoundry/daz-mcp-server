@@ -1,0 +1,8 @@
+
+/// <reference path="daz_script_spec_vscode.d.ts" />
+
+/** @type DzNode  */
+var x = Scene.getNodeList();
+
+x.getLabel();
+
