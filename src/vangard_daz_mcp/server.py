@@ -3983,6 +3983,408 @@ _CREATE_CAMERA_PATH_SCRIPT = """\
 })()
 """
 
+# args: {characterLabel, waypoints: [{position: {x, y, z}, frame: int}], pathType, walkingStyle}
+# pathType: "straight", "curved", "circular"
+# walkingStyle: "casual", "hurried", "sneaking"
+# Returns: {character, waypoints: int, pathType, frameRange, distance}
+# Animate character movement along a path
+_CREATE_CHARACTER_PATH_SCRIPT = """\
+(function(){
+    var args = getArguments()[0] || {};
+    var characterLabel = args.characterLabel;
+    var waypoints = args.waypoints || [];
+    var pathType = args.pathType || "straight";
+    var walkingStyle = args.walkingStyle || "casual";
+
+    // Find character
+    var character = Scene.findNodeByLabel(characterLabel);
+    if (!character) character = Scene.findNode(characterLabel);
+    if (!character) throw new Error("Character not found: " + characterLabel);
+
+    if (waypoints.length < 2) {
+        throw new Error("At least 2 waypoints required");
+    }
+
+    // Helper: Set keyframe
+    function setKeyframe(node, propName, frame, value) {
+        var prop = node.findProperty(propName);
+        if (!prop) return false;
+        var anim = prop.getAnimation();
+        if (!anim) anim = prop.createAnimation();
+        var key = anim.getKey(frame);
+        if (!key) key = anim.addKey(frame);
+        key.value = value;
+        return true;
+    }
+
+    // Sort waypoints by frame
+    waypoints.sort(function(a, b) { return a.frame - b.frame; });
+
+    var keyframesSet = 0;
+    var totalDistance = 0;
+
+    // Set position keyframes and calculate distance
+    for (var i = 0; i < waypoints.length; i++) {
+        var wp = waypoints[i];
+        var pos = wp.position;
+        var frame = wp.frame;
+
+        if (!pos || pos.x === undefined || pos.y === undefined || pos.z === undefined) {
+            throw new Error("Waypoint " + i + " missing position (x, y, z)");
+        }
+        if (frame === undefined) {
+            throw new Error("Waypoint " + i + " missing frame");
+        }
+
+        setKeyframe(character, "XTranslate", frame, pos.x);
+        setKeyframe(character, "YTranslate", frame, pos.y);
+        setKeyframe(character, "ZTranslate", frame, pos.z);
+        keyframesSet += 3;
+
+        // Calculate distance to next waypoint
+        if (i > 0) {
+            var prevPos = waypoints[i - 1].position;
+            var dx = pos.x - prevPos.x;
+            var dy = pos.y - prevPos.y;
+            var dz = pos.z - prevPos.z;
+            totalDistance += Math.sqrt(dx*dx + dy*dy + dz*dz);
+        }
+
+        // Rotate character to face direction of travel
+        if (i < waypoints.length - 1) {
+            var nextPos = waypoints[i + 1].position;
+            var angle = Math.atan2(nextPos.x - pos.x, nextPos.z - pos.z) * 180 / Math.PI;
+            setKeyframe(character, "YRotate", frame, angle);
+            keyframesSet++;
+        }
+    }
+
+    var startFrame = waypoints[0].frame;
+    var endFrame = waypoints[waypoints.length - 1].frame;
+
+    return {
+        character: character.getLabel(),
+        waypointCount: waypoints.length,
+        pathType: pathType,
+        walkingStyle: walkingStyle,
+        keyframesSet: keyframesSet,
+        frameRange: {start: startFrame, end: endFrame},
+        totalDistance: Math.round(totalDistance * 10) / 10,
+        note: "Character will move along path. Walking cycle animation not automatically applied."
+    };
+})()
+"""
+
+# args: {characters: [], arrangement, spacing, facing, centerPosition?}
+# arrangement: "line", "semicircle", "triangle", "conversation-circle"
+# facing: "center", "camera", "forward"
+# Returns: {characters: [{label, position, rotation}], arrangement, spacing}
+# Position multiple characters in formation
+_ARRANGE_CHARACTERS_SCRIPT = """\
+(function(){
+    var args = getArguments()[0] || {};
+    var characterLabels = args.characters || [];
+    var arrangement = args.arrangement || "line";
+    var spacing = args.spacing || 80;
+    var facing = args.facing || "forward";
+    var centerPosition = args.centerPosition || {x: 0, y: 0, z: 0};
+
+    if (characterLabels.length < 2) {
+        throw new Error("At least 2 characters required for arrangement");
+    }
+
+    // Find all characters
+    var characters = [];
+    for (var i = 0; i < characterLabels.length; i++) {
+        var char = Scene.findNodeByLabel(characterLabels[i]);
+        if (!char) char = Scene.findNode(characterLabels[i]);
+        if (!char) throw new Error("Character not found: " + characterLabels[i]);
+        characters.push(char);
+    }
+
+    var count = characters.length;
+    var positions = [];
+    var cx = centerPosition.x;
+    var cy = centerPosition.y;
+    var cz = centerPosition.z;
+
+    // Calculate positions based on arrangement type
+    if (arrangement === "line") {
+        // Straight line along X axis
+        var startX = cx - (spacing * (count - 1)) / 2;
+        for (var i = 0; i < count; i++) {
+            positions.push({
+                x: startX + i * spacing,
+                y: cy,
+                z: cz
+            });
+        }
+
+    } else if (arrangement === "semicircle") {
+        // Arc formation
+        var radius = (spacing * count) / Math.PI;
+        for (var i = 0; i < count; i++) {
+            var angle = (i / (count - 1)) * Math.PI;
+            positions.push({
+                x: cx + radius * Math.sin(angle),
+                y: cy,
+                z: cz - radius * Math.cos(angle)
+            });
+        }
+
+    } else if (arrangement === "triangle") {
+        // Triangular formation
+        if (count === 2) {
+            positions.push({x: cx - spacing/2, y: cy, z: cz});
+            positions.push({x: cx + spacing/2, y: cy, z: cz});
+        } else if (count === 3) {
+            positions.push({x: cx, y: cy, z: cz - spacing * 0.6});
+            positions.push({x: cx - spacing/2, y: cy, z: cz + spacing * 0.3});
+            positions.push({x: cx + spacing/2, y: cy, z: cz + spacing * 0.3});
+        } else {
+            // Arrange in rows
+            var row1 = Math.floor(count / 2);
+            var row2 = count - row1;
+            for (var i = 0; i < row1; i++) {
+                var xOffset = (i - (row1 - 1) / 2) * spacing;
+                positions.push({x: cx + xOffset, y: cy, z: cz - spacing * 0.6});
+            }
+            for (var i = 0; i < row2; i++) {
+                var xOffset = (i - (row2 - 1) / 2) * spacing;
+                positions.push({x: cx + xOffset, y: cy, z: cz + spacing * 0.3});
+            }
+        }
+
+    } else if (arrangement === "conversation-circle") {
+        // Circle facing inward
+        var radius = spacing;
+        for (var i = 0; i < count; i++) {
+            var angle = (i / count) * 2 * Math.PI;
+            positions.push({
+                x: cx + radius * Math.sin(angle),
+                y: cy,
+                z: cz + radius * Math.cos(angle)
+            });
+        }
+
+    } else {
+        throw new Error("Unknown arrangement: " + arrangement +
+            ". Valid: line, semicircle, triangle, conversation-circle");
+    }
+
+    // Apply positions and rotations
+    var results = [];
+    for (var i = 0; i < count; i++) {
+        var char = characters[i];
+        var pos = positions[i];
+
+        // Set position
+        var xp = char.findProperty("XTranslate");
+        var yp = char.findProperty("YTranslate");
+        var zp = char.findProperty("ZTranslate");
+        if (xp) xp.setValue(pos.x);
+        if (yp) yp.setValue(pos.y);
+        if (zp) zp.setValue(pos.z);
+
+        // Calculate rotation based on facing
+        var rotation = 0;
+        if (facing === "center") {
+            // Face toward center
+            var angle = Math.atan2(pos.x - cx, pos.z - cz) * 180 / Math.PI;
+            rotation = angle + 180;
+        } else if (facing === "camera") {
+            // Face camera (assuming camera at +Z)
+            rotation = 0;
+        } else if (facing === "forward") {
+            // Face forward (+Z direction)
+            rotation = 0;
+        }
+
+        var rp = char.findProperty("YRotate");
+        if (rp) rp.setValue(rotation);
+
+        results.push({
+            label: char.getLabel(),
+            position: {x: Math.round(pos.x * 10) / 10, y: Math.round(pos.y * 10) / 10, z: Math.round(pos.z * 10) / 10},
+            rotation: Math.round(rotation * 10) / 10
+        });
+    }
+
+    return {
+        characters: results,
+        arrangement: arrangement,
+        spacing: spacing,
+        facing: facing,
+        count: count
+    };
+})()
+"""
+
+# args: {actionType, characters: [], startFrame, duration}
+# actionType: "handshake", "hug", "fight", "dance"
+# Returns: {actionType, characters: [], positions: [], suggestions: []}
+# Choreograph simple action between characters
+_CHOREOGRAPH_ACTION_SCRIPT = """\
+(function(){
+    var args = getArguments()[0] || {};
+    var actionType = args.actionType;
+    var characterLabels = args.characters || [];
+    var startFrame = args.startFrame || 0;
+    var duration = args.duration || 90;
+
+    if (characterLabels.length < 1) {
+        throw new Error("At least 1 character required");
+    }
+
+    // Find all characters
+    var characters = [];
+    for (var i = 0; i < characterLabels.length; i++) {
+        var char = Scene.findNodeByLabel(characterLabels[i]);
+        if (!char) char = Scene.findNode(characterLabels[i]);
+        if (!char) throw new Error("Character not found: " + characterLabels[i]);
+        characters.push(char);
+    }
+
+    var positions = [];
+    var suggestions = [];
+
+    if (actionType === "handshake") {
+        if (characters.length < 2) {
+            throw new Error("handshake requires 2 characters");
+        }
+
+        var char1 = characters[0];
+        var char2 = characters[1];
+
+        // Position characters facing each other
+        var spacing = 60; // Close enough for handshake
+        var x1 = char1.findProperty("XTranslate");
+        var z1 = char1.findProperty("ZTranslate");
+        var x2 = char2.findProperty("XTranslate");
+        var z2 = char2.findProperty("ZTranslate");
+        var r1 = char1.findProperty("YRotate");
+        var r2 = char2.findProperty("YRotate");
+
+        if (x1) x1.setValue(-spacing/2);
+        if (z1) z1.setValue(0);
+        if (x2) x2.setValue(spacing/2);
+        if (z2) z2.setValue(0);
+        if (r1) r1.setValue(90); // Face right
+        if (r2) r2.setValue(-90); // Face left
+
+        positions.push({character: char1.getLabel(), position: {x: -spacing/2, y: 0, z: 0}, rotation: 90});
+        positions.push({character: char2.getLabel(), position: {x: spacing/2, y: 0, z: 0}, rotation: -90});
+
+        suggestions.push("Use daz_reach_toward to position hands for handshake");
+        suggestions.push("Apply 'friendly' or 'professional' emotion to both characters");
+
+    } else if (actionType === "hug") {
+        if (characters.length < 2) {
+            throw new Error("hug requires 2 characters");
+        }
+
+        var char1 = characters[0];
+        var char2 = characters[1];
+
+        // Position characters very close, facing each other
+        var spacing = 30; // Very close for hug
+        var x1 = char1.findProperty("XTranslate");
+        var z1 = char1.findProperty("ZTranslate");
+        var x2 = char2.findProperty("XTranslate");
+        var z2 = char2.findProperty("ZTranslate");
+        var r1 = char1.findProperty("YRotate");
+        var r2 = char2.findProperty("YRotate");
+
+        if (x1) x1.setValue(-spacing/2);
+        if (z1) z1.setValue(0);
+        if (x2) x2.setValue(spacing/2);
+        if (z2) z2.setValue(0);
+        if (r1) r1.setValue(90);
+        if (r2) r2.setValue(-90);
+
+        positions.push({character: char1.getLabel(), position: {x: -spacing/2, y: 0, z: 0}, rotation: 90});
+        positions.push({character: char2.getLabel(), position: {x: spacing/2, y: 0, z: 0}, rotation: -90});
+
+        suggestions.push("Use daz_interactive_pose with 'hug' type for arm positioning");
+        suggestions.push("Apply 'loving' or 'happy' emotion to both characters");
+
+    } else if (actionType === "fight") {
+        if (characters.length < 2) {
+            throw new Error("fight requires 2 characters");
+        }
+
+        var char1 = characters[0];
+        var char2 = characters[1];
+
+        // Position characters at fighting distance
+        var spacing = 100;
+        var x1 = char1.findProperty("XTranslate");
+        var z1 = char1.findProperty("ZTranslate");
+        var x2 = char2.findProperty("XTranslate");
+        var z2 = char2.findProperty("ZTranslate");
+        var r1 = char1.findProperty("YRotate");
+        var r2 = char2.findProperty("YRotate");
+
+        if (x1) x1.setValue(-spacing/2);
+        if (z1) z1.setValue(0);
+        if (x2) x2.setValue(spacing/2);
+        if (z2) z2.setValue(0);
+        if (r1) r1.setValue(90);
+        if (r2) r2.setValue(-90);
+
+        positions.push({character: char1.getLabel(), position: {x: -spacing/2, y: 0, z: 0}, rotation: 90});
+        positions.push({character: char2.getLabel(), position: {x: spacing/2, y: 0, z: 0}, rotation: -90});
+
+        suggestions.push("Apply fighting stance poses from content library");
+        suggestions.push("Apply 'angry' or 'aggressive' emotion");
+        suggestions.push("Use low-angle camera for dramatic effect");
+
+    } else if (actionType === "dance") {
+        if (characters.length < 2) {
+            throw new Error("dance requires 2 characters");
+        }
+
+        var char1 = characters[0];
+        var char2 = characters[1];
+
+        // Position characters for partner dance
+        var spacing = 40;
+        var x1 = char1.findProperty("XTranslate");
+        var z1 = char1.findProperty("ZTranslate");
+        var x2 = char2.findProperty("XTranslate");
+        var z2 = char2.findProperty("ZTranslate");
+        var r1 = char1.findProperty("YRotate");
+        var r2 = char2.findProperty("YRotate");
+
+        if (x1) x1.setValue(-spacing/2);
+        if (z1) z1.setValue(0);
+        if (x2) x2.setValue(spacing/2);
+        if (z2) z2.setValue(0);
+        if (r1) r1.setValue(90);
+        if (r2) r2.setValue(-90);
+
+        positions.push({character: char1.getLabel(), position: {x: -spacing/2, y: 0, z: 0}, rotation: 90});
+        positions.push({character: char2.getLabel(), position: {x: spacing/2, y: 0, z: 0}, rotation: -90});
+
+        suggestions.push("Apply partner dance poses from content library");
+        suggestions.push("Use daz_create_character_path for dance movement");
+        suggestions.push("Apply 'happy' or 'excited' emotion");
+
+    } else {
+        throw new Error("Unknown action type: " + actionType +
+            ". Valid: handshake, hug, fight, dance");
+    }
+
+    return {
+        actionType: actionType,
+        characters: characterLabels,
+        positions: positions,
+        frameRange: {start: startFrame, end: startFrame + duration},
+        suggestions: suggestions
+    };
+})()
+"""
+
 # Registry entries: script_id → (description, script_text)
 # Registered with DazScriptServer on startup so high-level tools call by ID.
 _REGISTRY: dict[str, tuple[str, str]] = {
@@ -4235,6 +4637,18 @@ _REGISTRY: dict[str, tuple[str, str]] = {
     "vangard-create-camera-path": (
         "Create smooth camera path through multiple waypoints with easing",
         _CREATE_CAMERA_PATH_SCRIPT,
+    ),
+    "vangard-create-character-path": (
+        "Animate character movement along a path with waypoints",
+        _CREATE_CHARACTER_PATH_SCRIPT,
+    ),
+    "vangard-arrange-characters": (
+        "Position multiple characters in formation (line, semicircle, triangle, circle)",
+        _ARRANGE_CHARACTERS_SCRIPT,
+    ),
+    "vangard-choreograph-action": (
+        "Choreograph simple action between characters (handshake, hug, fight, dance)",
+        _CHOREOGRAPH_ACTION_SCRIPT,
     ),
 }
 
@@ -8130,6 +8544,368 @@ async def daz_create_camera_path(
         "waypoints": waypoints,
         "easing": easing,
         "aimAtTarget": aim_at_target,
+    })
+
+
+# ---------------------------------------------------------------------------
+# Character Choreography Tools (Phase 4.6)
+# ---------------------------------------------------------------------------
+
+
+@mcp.tool()
+async def daz_create_character_path(
+    character_label: str,
+    waypoints: list[dict[str, Any]],
+    path_type: str = "straight",
+    walking_style: str = "casual",
+) -> dict[str, Any]:
+    """Animate character movement along a path with waypoints.
+
+    Creates keyframe animation for character walking/moving through multiple positions.
+    Character automatically rotates to face direction of travel.
+
+    Args:
+        character_label: Label of character to animate
+        waypoints: List of waypoint dicts, each containing:
+            - position: Dict with x, y, z coordinates (world space, cm)
+            - frame: Frame number for this waypoint
+            Minimum 2 waypoints required. Automatically sorted by frame.
+        path_type: Type of path (currently visual only):
+            - "straight": Straight line between waypoints
+            - "curved": Curved path (future implementation)
+            - "circular": Circular path (future implementation)
+        walking_style: Walking animation style (informational):
+            - "casual": Normal walking pace
+            - "hurried": Fast walking
+            - "sneaking": Slow, careful movement
+
+    Returns:
+        Dict with:
+        - character: Character label
+        - waypointCount: Number of waypoints
+        - pathType: Path type used
+        - walkingStyle: Walking style
+        - keyframesSet: Number of keyframes created (position + rotation)
+        - frameRange: {start, end} frame range
+        - totalDistance: Total distance traveled (cm)
+        - note: Reminder about walking cycle animation
+
+    Example:
+        # Simple straight path
+        daz_create_character_path(
+            "Genesis 9",
+            [
+                {"position": {"x": -200, "y": 0, "z": 0}, "frame": 0},
+                {"position": {"x": 0, "y": 0, "z": 0}, "frame": 60},
+                {"position": {"x": 200, "y": 0, "z": 0}, "frame": 120}
+            ],
+            walking_style="casual"
+        )
+
+        # Character walks across room
+        daz_create_character_path(
+            "Alice",
+            [
+                {"position": {"x": -300, "y": 0, "z": 100}, "frame": 0},
+                {"position": {"x": 300, "y": 0, "z": 100}, "frame": 180}
+            ],
+            walking_style="hurried"
+        )
+
+    Notes:
+        - Character automatically rotates to face direction of movement
+        - Creates 3 position keyframes + 1 rotation keyframe per waypoint
+        - Walking cycle animation must be applied separately
+        - Use with animation poses for realistic walking motion
+        - Y position can be animated for stairs/slopes
+        - Total distance calculated for reference
+        - For running: use shorter duration between waypoints
+        - For sneaking: use longer duration between waypoints
+    """
+    # Validate character label
+    if not character_label:
+        raise ToolError("character_label is required")
+
+    # Validate waypoints
+    if not waypoints or len(waypoints) < 2:
+        raise ToolError("At least 2 waypoints required")
+
+    if len(waypoints) > 100:
+        raise ToolError("Too many waypoints (max 100)")
+
+    # Validate each waypoint
+    for i, wp in enumerate(waypoints):
+        if "position" not in wp:
+            raise ToolError(f"Waypoint {i}: missing 'position' field")
+        if "frame" not in wp:
+            raise ToolError(f"Waypoint {i}: missing 'frame' field")
+
+        pos = wp["position"]
+        if not isinstance(pos, dict):
+            raise ToolError(f"Waypoint {i}: position must be a dict")
+        if "x" not in pos or "y" not in pos or "z" not in pos:
+            raise ToolError(f"Waypoint {i}: position must have x, y, z fields")
+
+        frame = wp["frame"]
+        if not isinstance(frame, int) or frame < 0:
+            raise ToolError(f"Waypoint {i}: frame must be a non-negative integer")
+
+    # Validate path type
+    valid_path_types = ["straight", "curved", "circular"]
+    if path_type not in valid_path_types:
+        raise ToolError(
+            f"Invalid path_type '{path_type}'. "
+            f"Valid options: {', '.join(valid_path_types)}"
+        )
+
+    # Validate walking style
+    valid_styles = ["casual", "hurried", "sneaking"]
+    if walking_style not in valid_styles:
+        raise ToolError(
+            f"Invalid walking_style '{walking_style}'. "
+            f"Valid options: {', '.join(valid_styles)}"
+        )
+
+    return await _execute_by_id("vangard-create-character-path", {
+        "characterLabel": character_label,
+        "waypoints": waypoints,
+        "pathType": path_type,
+        "walkingStyle": walking_style,
+    })
+
+
+@mcp.tool()
+async def daz_arrange_characters(
+    characters: list[str],
+    arrangement: str,
+    spacing: float = 80.0,
+    facing: str = "forward",
+    center_position: dict[str, float] | None = None,
+) -> dict[str, Any]:
+    """Position multiple characters in formation.
+
+    Arranges characters in standard formations (line, semicircle, triangle, circle)
+    with automatic positioning and rotation. Perfect for group shots and scenes.
+
+    Args:
+        characters: List of character labels (minimum 2)
+        arrangement: Formation type:
+            - "line": Straight line along X axis
+            - "semicircle": Arc formation facing forward
+            - "triangle": Triangular formation (2-3 chars: triangle, 4+: rows)
+            - "conversation-circle": Circle facing inward
+        spacing: Distance between characters in cm (default: 80)
+        facing: Direction characters face:
+            - "forward": All face +Z direction (camera at origin)
+            - "center": All face formation center (for circle)
+            - "camera": All face toward camera (same as forward)
+        center_position: Optional center point for formation.
+            Dict with x, y, z keys. Default: {x: 0, y: 0, z: 0}
+
+    Returns:
+        Dict with:
+        - characters: List of dicts with label, position {x, y, z}, rotation
+        - arrangement: Formation type used
+        - spacing: Spacing value
+        - facing: Facing direction
+        - count: Number of characters arranged
+
+    Example:
+        # Line up 5 characters
+        daz_arrange_characters(
+            ["Alice", "Bob", "Charlie", "Diana", "Eve"],
+            arrangement="line",
+            spacing=100,
+            facing="forward"
+        )
+
+        # Semicircle for group portrait
+        daz_arrange_characters(
+            ["Person1", "Person2", "Person3", "Person4"],
+            arrangement="semicircle",
+            spacing=120,
+            facing="forward"
+        )
+
+        # Conversation circle
+        daz_arrange_characters(
+            ["Alice", "Bob", "Charlie"],
+            arrangement="conversation-circle",
+            spacing=100,
+            facing="center",
+            center_position={"x": 0, "y": 0, "z": 200}
+        )
+
+        # Triangle formation
+        daz_arrange_characters(
+            ["Leader", "Left", "Right"],
+            arrangement="triangle",
+            spacing=90
+        )
+
+    Notes:
+        - Formations centered at center_position (default: origin)
+        - Line: Arranged left-to-right along X axis
+        - Semicircle: Arc radius calculated from spacing and character count
+        - Triangle: 2-3 chars form triangle, 4+ form two rows
+        - Conversation-circle: All face inward at equal angles
+        - Use larger spacing for formal arrangements
+        - Use smaller spacing for intimate/crowded scenes
+        - Spacing measured center-to-center between characters
+        - Y position preserved from center_position (for platforms/stages)
+    """
+    # Validate characters
+    if not characters or len(characters) < 2:
+        raise ToolError("At least 2 characters required")
+
+    if len(characters) > 20:
+        raise ToolError("Too many characters (max 20)")
+
+    # Validate arrangement
+    valid_arrangements = ["line", "semicircle", "triangle", "conversation-circle"]
+    if arrangement not in valid_arrangements:
+        raise ToolError(
+            f"Invalid arrangement '{arrangement}'. "
+            f"Valid options: {', '.join(valid_arrangements)}"
+        )
+
+    # Validate spacing
+    if spacing < 10 or spacing > 500:
+        raise ToolError("spacing must be between 10 and 500 cm")
+
+    # Validate facing
+    valid_facing = ["forward", "center", "camera"]
+    if facing not in valid_facing:
+        raise ToolError(
+            f"Invalid facing '{facing}'. "
+            f"Valid options: {', '.join(valid_facing)}"
+        )
+
+    # Validate center_position
+    center_pos = center_position or {"x": 0, "y": 0, "z": 0}
+    if not isinstance(center_pos, dict):
+        raise ToolError("center_position must be a dict")
+    if "x" not in center_pos or "y" not in center_pos or "z" not in center_pos:
+        raise ToolError("center_position must have x, y, z fields")
+
+    return await _execute_by_id("vangard-arrange-characters", {
+        "characters": characters,
+        "arrangement": arrangement,
+        "spacing": spacing,
+        "facing": facing,
+        "centerPosition": center_pos,
+    })
+
+
+@mcp.tool()
+async def daz_choreograph_action(
+    action_type: str,
+    characters: list[str],
+    start_frame: int = 0,
+    duration: int = 90,
+) -> dict[str, Any]:
+    """Choreograph simple action between characters.
+
+    Automatically positions characters for common interactions (handshake, hug,
+    fight, dance) with appropriate spacing and facing. Provides suggestions for
+    completing the choreography.
+
+    Args:
+        action_type: Type of action to choreograph:
+            - "handshake": Business/friendly handshake (60cm apart)
+            - "hug": Intimate embrace (30cm apart)
+            - "fight": Combat stance (100cm apart)
+            - "dance": Partner dance position (40cm apart)
+        characters: List of character labels (requires 2 for all types)
+        start_frame: Frame to start action (default: 0)
+        duration: Length of action in frames (default: 90 = 3 seconds at 30fps)
+
+    Returns:
+        Dict with:
+        - actionType: Type of action
+        - characters: List of character labels
+        - positions: List of dicts with character, position {x, y, z}, rotation
+        - frameRange: {start, end} frame range
+        - suggestions: List of recommended next steps
+
+    Example:
+        # Handshake between two business people
+        result = daz_choreograph_action(
+            "handshake",
+            ["Alice", "Bob"],
+            start_frame=0,
+            duration=60
+        )
+        # Positions characters facing each other
+        # Suggestions include using daz_reach_toward for hands
+
+        # Emotional hug
+        result = daz_choreograph_action(
+            "hug",
+            ["Mother", "Child"],
+            start_frame=30,
+            duration=120
+        )
+        # Positions very close, facing each other
+        # Suggests using daz_interactive_pose for arms
+
+        # Action fight scene
+        result = daz_choreograph_action(
+            "fight",
+            ["Hero", "Villain"],
+            start_frame=0,
+            duration=180
+        )
+        # Positions at fighting distance
+        # Suggests combat poses and angry emotions
+
+        # Romantic dance
+        result = daz_choreograph_action(
+            "dance",
+            ["Dancer1", "Dancer2"],
+            start_frame=0,
+            duration=240
+        )
+        # Positions for partner dance
+        # Suggests dance poses and path animation
+
+    Notes:
+        - All actions require exactly 2 characters
+        - Characters positioned facing each other
+        - Spacing automatically determined by action type
+        - Handshake: 60cm (arm's reach)
+        - Hug: 30cm (intimate distance)
+        - Fight: 100cm (combat distance)
+        - Dance: 40cm (close dance position)
+        - This is positioning only - use suggestions for complete choreography
+        - Follow up with daz_reach_toward, daz_interactive_pose, or pose loading
+        - Use daz_set_emotion for appropriate facial expressions
+        - Use daz_create_character_path for dance movement
+    """
+    # Validate action type
+    valid_actions = ["handshake", "hug", "fight", "dance"]
+    if action_type not in valid_actions:
+        raise ToolError(
+            f"Invalid action_type '{action_type}'. "
+            f"Valid options: {', '.join(valid_actions)}"
+        )
+
+    # Validate characters
+    if not characters or len(characters) != 2:
+        raise ToolError("Exactly 2 characters required for action choreography")
+
+    # Validate frame range
+    if start_frame < 0:
+        raise ToolError("start_frame must be >= 0")
+
+    if duration < 10 or duration > 1000:
+        raise ToolError("duration must be between 10 and 1000 frames")
+
+    return await _execute_by_id("vangard-choreograph-action", {
+        "actionType": action_type,
+        "characters": characters,
+        "startFrame": start_frame,
+        "duration": duration,
     })
 
 
