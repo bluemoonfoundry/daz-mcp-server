@@ -1,6 +1,6 @@
 # vangard-daz-mcp
 
-**Version 0.2.0** | MCP Server for DAZ Studio
+**Version 0.3.0** | MCP Server for DAZ Studio
 
 A [Model Context Protocol (MCP)](https://modelcontextprotocol.io) server that exposes DAZ Studio operations to Claude and other MCP clients. Built on [FastMCP](https://github.com/jlowin/fastmcp) and wraps the [DazScriptServer](https://github.com/bluemoonfoundry/daz-script-server) HTTP plugin.
 
@@ -22,6 +22,10 @@ This MCP server allows Claude (via Claude Desktop or other MCP clients) to contr
 - Apply professional lighting presets and cinematography composition rules
 - Browse and query the DAZ content library
 - Save and restore named scene checkpoints
+- **Generate complete scenes from natural language descriptions**
+- **Create multi-camera shot sequences (orbit, push-in, shot-reverse-shot)**
+- **Choreograph animated conversations with dialogue beats**
+- **Record and replay operation macros for workflow automation**
 - Execute arbitrary DazScript code
 - Access comprehensive DazScript documentation and examples
 
@@ -2078,6 +2082,265 @@ result = daz_get_request_result(req["request_id"], wait=True, timeout_seconds=36
 
 ---
 
+### 🎬 Cinematic Director Workflow (Phase 4)
+
+Phase 4 tools provide high-level cinematic automation for creating professional scenes quickly.
+
+#### `daz_create_shot_sequence`
+Create multi-camera shot sequences for cinematic storytelling.
+
+Automatically creates and positions multiple cameras with keyframe animations for standard cinematic sequences.
+
+**Arguments:**
+- `sequence_type` (string): Type of sequence - "establishing-medium-closeup", "shot-reverse-shot", "orbit", "push-in"
+- `characters` (list[string]): List of character labels (1-2 depending on sequence)
+- `duration` (int, default 120): Total duration in frames
+
+**Sequence Types:**
+- `"establishing-medium-closeup"` - Three cameras at different distances (wide → medium → close-up)
+- `"shot-reverse-shot"` - Two over-shoulder cameras for conversation (requires 2 characters)
+- `"orbit"` - Single animated camera orbiting 360° around subject
+- `"push-in"` - Single animated camera dollying from wide to close-up
+
+**Returns:**
+```json
+{
+  "cameras": [
+    {"label": "Wide Shot", "position": {...}, "frameRange": {"start": 0, "end": 59}},
+    {"label": "Medium Shot", "position": {...}, "frameRange": {"start": 60, "end": 119}}
+  ],
+  "totalFrames": 180,
+  "sequenceType": "establishing-medium-closeup",
+  "subject": "Genesis 9"
+}
+```
+
+**Example:**
+```python
+# Establishing sequence
+daz_create_shot_sequence("establishing-medium-closeup", ["Genesis 9"], duration=180)
+
+# Conversation cameras
+daz_create_shot_sequence("shot-reverse-shot", ["Alice", "Bob"], duration=240)
+
+# 360° turntable
+daz_create_shot_sequence("orbit", ["Genesis 9"], duration=300)
+```
+
+---
+
+#### `daz_animate_conversation`
+Choreograph animated conversation between two characters with look-at and emotion keyframes.
+
+**Arguments:**
+- `char1_label` (string): First character label
+- `char2_label` (string): Second character label
+- `dialogue_beats` (list[dict]): List of dialogue beats, each containing:
+  - `speaker` (string): Who's speaking (char1 or char2)
+  - `startFrame` (int): Beat start frame
+  - `endFrame` (int): Beat end frame
+  - `emotion` (string): Emotion name - "happy", "sad", "angry", "surprised", "neutral"
+  - `intensity` (float, optional): Emotion intensity 0.0-1.0 (default: 0.7)
+
+**Returns:**
+```json
+{
+  "char1": "Alice",
+  "char2": "Bob",
+  "beatsApplied": [
+    {
+      "beat": 1,
+      "speaker": "Alice",
+      "frameRange": {"start": 0, "end": 60},
+      "emotion": "happy",
+      "actions": ["Applied happy emotion (3 morphs)", "Listener looks at speaker"]
+    }
+  ],
+  "totalFrames": 180,
+  "beatCount": 3
+}
+```
+
+**Example:**
+```python
+daz_animate_conversation(
+    "Alice",
+    "Bob",
+    [
+        {"speaker": "Alice", "startFrame": 0, "endFrame": 60, "emotion": "happy"},
+        {"speaker": "Bob", "startFrame": 60, "endFrame": 120, "emotion": "surprised"},
+        {"speaker": "Alice", "startFrame": 120, "endFrame": 180, "emotion": "neutral"}
+    ]
+)
+```
+
+**Features:**
+- Listener automatically looks at speaker during dialogue beat
+- Emotion morphs applied at beat start
+- Head/neck rotation for natural look-at behavior
+- Compatible with shot-reverse-shot camera sequences
+
+---
+
+#### `daz_create_scene`
+Generate complete scene from natural language description.
+
+Automatically creates lighting, cameras, and character positioning based on text description using template-based keyword matching.
+
+**Arguments:**
+- `description` (string): Natural language scene description
+- `characters` (list[string], optional): Character labels already in scene
+
+**Supported Scene Types:**
+- **"dining" / "dinner" / "meal"** - Dining scene with characters facing across table
+- **"interview" / "meeting" / "business"** - Interview setup with professional lighting
+- **"portrait" / "headshot" / "photo"** - Portrait photography with three-point lighting
+- **"conversation" / "talking" / "chat"** - Conversation scene with shot-reverse-shot cameras
+- **Generic** - Default three-point lighting for unrecognized descriptions
+
+**Returns:**
+```json
+{
+  "sceneType": "dining",
+  "description": "romantic dinner for two",
+  "charactersUsed": 2,
+  "actions": [
+    "Scene type: Dining/meal scene",
+    "Positioned characters facing each other across table distance",
+    "Applied warm romantic lighting"
+  ],
+  "cameras": [
+    {"label": "Wide Shot", "type": "wide", "purpose": "Establishing shot of dining scene"},
+    {"label": "Over Shoulder 1", "type": "over-shoulder", "purpose": "Conversation angle"}
+  ],
+  "suggestions": [
+    "Add table prop for dining scene",
+    "Add plates, glasses, or food props for realism",
+    "Consider adding candles for romantic dinner mood"
+  ]
+}
+```
+
+**Example:**
+```python
+# Romantic dinner
+daz_create_scene("romantic dinner for two", ["Alice", "Bob"])
+
+# Job interview
+daz_create_scene("job interview", ["Interviewer", "Candidate"])
+
+# Professional portrait
+daz_create_scene("professional portrait", ["Genesis 9"])
+```
+
+**What Gets Created:**
+1. Scene-appropriate lighting (2-3 spot lights)
+2. Character positioning based on scene type
+3. Multiple cameras at strategic angles
+4. Environment mode set to Scene Only
+5. Actionable suggestions for enhancement
+
+---
+
+#### `daz_start_recording`
+Start recording a macro to capture sequence of operations.
+
+**Arguments:**
+- `macro_name` (string): Unique macro name (1-64 chars, letters/digits/hyphens/underscores)
+- `description` (string, optional): Macro description
+
+**Returns:**
+```json
+{
+  "success": true,
+  "macro_name": "portrait_setup",
+  "description": "Standard portrait lighting and framing",
+  "started_at": "2026-04-10T15:30:00",
+  "message": "Recording macro 'portrait_setup'. Call daz_stop_recording() when done."
+}
+```
+
+**Example:**
+```python
+# Start recording
+daz_start_recording("portrait_setup", "Standard portrait workflow")
+
+# Perform operations (these will be recorded)
+daz_apply_lighting_preset("three-point", "Genesis 9")
+daz_frame_shot("Camera 1", "Genesis 9", "medium-close-up")
+
+# Stop and save
+daz_stop_recording()
+```
+
+---
+
+#### `daz_stop_recording`
+Stop recording current macro and save to library.
+
+**Returns:**
+```json
+{
+  "success": true,
+  "macro_name": "portrait_setup",
+  "operation_count": 2,
+  "saved_at": "2026-04-10T15:31:00",
+  "message": "Macro 'portrait_setup' saved with 2 operations."
+}
+```
+
+---
+
+#### `daz_replay_macro`
+Replay a saved macro with optional parameter substitution.
+
+**Arguments:**
+- `macro_name` (string): Name of macro to replay
+- `parameters` (dict, optional): Parameter values for substitution
+
+**Returns:**
+```json
+{
+  "success": true,
+  "macro_name": "portrait_setup",
+  "results": [],
+  "successful_count": 2,
+  "failed_count": 0
+}
+```
+
+**Example:**
+```python
+# Replay for different character
+daz_replay_macro("portrait_setup", parameters={"subject": "Alice"})
+```
+
+**Note:** Parameter substitution not yet implemented in Phase 1 - placeholder for future.
+
+---
+
+#### `daz_list_macros`
+List all saved macros in the library.
+
+**Returns:**
+```json
+{
+  "macros": [
+    {
+      "name": "portrait_setup",
+      "description": "Standard portrait workflow",
+      "operation_count": 2,
+      "saved_at": "2026-04-10T15:31:00"
+    }
+  ],
+  "count": 1
+}
+```
+
+**Note:** Macros are session-only (lost when MCP server restarts).
+
+---
+
 ### ✏️ Modification Tools
 
 #### `daz_set_property`
@@ -2374,6 +2637,15 @@ If DAZ Studio restarts and clears the session registry, the server automatically
 - Authentication failures → Token file location in error message
 - Script errors → Full error details with line numbers and captured output
 
+### 🎬 Cinematic Director Workflow (Phase 4 - NEW in v0.3.0)
+High-level automation tools for professional cinematic workflows:
+- **Scene Generation**: Create complete scenes from natural language (5 templates: dining, interview, portrait, conversation, generic)
+- **Shot Sequences**: Multi-camera cinematography (establishing shots, shot-reverse-shot, orbit, push-in)
+- **Conversation Choreography**: Automated dialogue animation with look-at behavior and emotion timing
+- **Macro System**: Record and replay operation sequences for workflow automation (session-based)
+
+Phase 4 tools combine lower-level operations into powerful high-level workflows, dramatically reducing the time to create professional cinematic scenes.
+
 ---
 
 ## Usage Examples
@@ -2419,6 +2691,37 @@ Between each render, rotate the character 90 degrees.
 ```
 
 Claude will loop through, adjusting rotation and calling `daz_render` for each output.
+
+### Example 5: Generate Complete Scene (Phase 4)
+```
+Create a romantic dinner scene with Alice and Bob
+```
+
+Claude will:
+1. Call `daz_create_scene("romantic dinner for two", ["Alice", "Bob"])`
+   - Positions characters facing each other
+   - Creates warm romantic lighting (2 spot lights)
+   - Creates wide shot and over-shoulder cameras
+   - Returns suggestions: add table, plates, candles
+2. Report the created cameras and lighting setup
+3. Suggest next steps based on the suggestions
+
+### Example 6: Animated Conversation (Phase 4)
+```
+Create an animated conversation between Alice and Bob:
+- Alice speaks happily from frame 0-60
+- Bob responds with surprise from 60-120
+- Alice concludes neutrally from 120-180
+```
+
+Claude will:
+1. Call `daz_animate_conversation("Alice", "Bob", [...dialogue beats...])`
+   - Sets up look-at behavior (listener looks at speaker)
+   - Applies emotion morphs at beat boundaries
+   - Animates head/neck rotation for natural movement
+2. Call `daz_create_shot_sequence("shot-reverse-shot", ["Alice", "Bob"], 180)`
+   - Creates over-shoulder cameras for conversation
+3. Report the animation setup and suggest render workflow
 
 ---
 

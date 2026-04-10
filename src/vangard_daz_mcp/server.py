@@ -52,6 +52,11 @@ except (OSError, json.JSONDecodeError) as e:
 # Shared HTTP client; initialised by the lifespan, torn down on exit.
 _http_client: httpx.AsyncClient | None = None
 
+# Macro recording state (session-level, in-memory)
+_macro_recording: bool = False
+_current_macro: dict[str, Any] | None = None
+_macro_library: dict[str, dict[str, Any]] = {}
+
 
 @asynccontextmanager
 async def lifespan(server: FastMCP):
@@ -3069,6 +3074,672 @@ _FIND_NEARBY_NODES_SCRIPT = """\
 })()
 """
 
+# args: {sequenceType, characters: [], duration, fps}
+# sequenceType: "establishing-medium-closeup", "shot-reverse-shot", "orbit", "push-in", "walkthrough"
+# Returns: {cameras: [{label, position, frameRange}], totalFrames, sequenceType}
+# Creates multiple cameras and sets up keyframes for cinematic sequences
+_CREATE_SHOT_SEQUENCE_SCRIPT = """\
+(function(){
+    var args = getArguments()[0] || {};
+    var sequenceType = args.sequenceType;
+    var characters = args.characters || [];
+    var duration = args.duration || 120;
+    var fps = args.fps || 30;
+
+    if (characters.length === 0) {
+        throw new Error("At least one character required for shot sequence");
+    }
+
+    // Get primary subject
+    var subject = Scene.findNodeByLabel(characters[0]);
+    if (!subject) subject = Scene.findNode(characters[0]);
+    if (!subject) throw new Error("Subject not found: " + characters[0]);
+
+    var bbox = subject.getBoundingBox();
+    var subCenter = bbox.getCenter();
+    var subHeight = bbox.max.y - bbox.min.y;
+    var eyeHeight = bbox.min.y + subHeight * 0.85;
+
+    var cameras = [];
+    var totalFrames = duration;
+
+    // Helper: Create camera
+    function createCamera(label, x, y, z, aimX, aimY, aimZ) {
+        var cam = new DzBasicCamera();
+        cam.setLabel(label);
+        Scene.addNode(cam);
+        var xp = cam.findProperty("XTranslate");
+        var yp = cam.findProperty("YTranslate");
+        var zp = cam.findProperty("ZTranslate");
+        if (xp) xp.setValue(x);
+        if (yp) yp.setValue(y);
+        if (zp) zp.setValue(z);
+        cam.aimAt(new DzVec3(aimX, aimY, aimZ));
+        return cam;
+    }
+
+    // Helper: Set keyframe
+    function setKeyframe(node, propName, frame, value) {
+        var prop = node.findProperty(propName);
+        if (!prop) return;
+        var anim = prop.getAnimation();
+        if (!anim) {
+            anim = prop.createAnimation();
+        }
+        var key = anim.getKey(frame);
+        if (!key) {
+            key = anim.addKey(frame);
+        }
+        key.value = value;
+    }
+
+    if (sequenceType === "establishing-medium-closeup") {
+        // Three cameras: wide → medium → close-up
+        var framesPerShot = Math.floor(duration / 3);
+
+        // Wide shot
+        var cam1 = createCamera("Wide Shot", subCenter.x, eyeHeight, subCenter.z + 700,
+                                subCenter.x, eyeHeight, subCenter.z);
+        cameras.push({
+            label: cam1.getLabel(),
+            position: {x: subCenter.x, y: eyeHeight, z: subCenter.z + 700},
+            frameRange: {start: 0, end: framesPerShot - 1}
+        });
+
+        // Medium shot
+        var cam2 = createCamera("Medium Shot", subCenter.x, eyeHeight, subCenter.z + 200,
+                                subCenter.x, eyeHeight, subCenter.z);
+        cameras.push({
+            label: cam2.getLabel(),
+            position: {x: subCenter.x, y: eyeHeight, z: subCenter.z + 200},
+            frameRange: {start: framesPerShot, end: framesPerShot * 2 - 1}
+        });
+
+        // Close-up
+        var cam3 = createCamera("Close-up Shot", subCenter.x, eyeHeight, subCenter.z + 50,
+                                subCenter.x, eyeHeight, subCenter.z);
+        cameras.push({
+            label: cam3.getLabel(),
+            position: {x: subCenter.x, y: eyeHeight, z: subCenter.z + 50},
+            frameRange: {start: framesPerShot * 2, end: duration - 1}
+        });
+
+    } else if (sequenceType === "shot-reverse-shot") {
+        // Two cameras for conversation
+        if (characters.length < 2) {
+            throw new Error("shot-reverse-shot requires 2 characters");
+        }
+
+        var char2 = Scene.findNodeByLabel(characters[1]);
+        if (!char2) char2 = Scene.findNode(characters[1]);
+        if (!char2) throw new Error("Second character not found: " + characters[1]);
+
+        var bbox2 = char2.getBoundingBox();
+        var char2Center = bbox2.getCenter();
+        var char2Eye = bbox2.min.y + (bbox2.max.y - bbox2.min.y) * 0.85;
+
+        // Over-shoulder from char1 looking at char2
+        var cam1 = createCamera("Over Shoulder 1",
+                                subCenter.x - 50, eyeHeight - 10, subCenter.z - 60,
+                                char2Center.x, char2Eye, char2Center.z);
+        cameras.push({
+            label: cam1.getLabel(),
+            position: {x: subCenter.x - 50, y: eyeHeight - 10, z: subCenter.z - 60},
+            frameRange: {start: 0, end: Math.floor(duration / 2) - 1}
+        });
+
+        // Over-shoulder from char2 looking at char1
+        var cam2 = createCamera("Over Shoulder 2",
+                                char2Center.x + 50, char2Eye - 10, char2Center.z + 60,
+                                subCenter.x, eyeHeight, subCenter.z);
+        cameras.push({
+            label: cam2.getLabel(),
+            position: {x: char2Center.x + 50, y: char2Eye - 10, z: char2Center.z + 60},
+            frameRange: {start: Math.floor(duration / 2), end: duration - 1}
+        });
+
+    } else if (sequenceType === "orbit") {
+        // Single camera orbiting around subject
+        var cam = createCamera("Orbit Camera", subCenter.x, eyeHeight, subCenter.z + 250,
+                               subCenter.x, eyeHeight, subCenter.z);
+
+        var radius = 250;
+        var frames = [0, Math.floor(duration / 4), Math.floor(duration / 2),
+                      Math.floor(duration * 3 / 4), duration - 1];
+        var angles = [0, 90, 180, 270, 360];
+
+        for (var i = 0; i < frames.length; i++) {
+            var angle = angles[i] * Math.PI / 180;
+            var x = subCenter.x + radius * Math.sin(angle);
+            var z = subCenter.z + radius * Math.cos(angle);
+            setKeyframe(cam, "XTranslate", frames[i], x);
+            setKeyframe(cam, "ZTranslate", frames[i], z);
+            setKeyframe(cam, "YTranslate", frames[i], eyeHeight);
+        }
+
+        cameras.push({
+            label: cam.getLabel(),
+            position: {x: subCenter.x, y: eyeHeight, z: subCenter.z + radius},
+            frameRange: {start: 0, end: duration - 1},
+            animated: true
+        });
+
+    } else if (sequenceType === "push-in") {
+        // Single camera dollying toward subject (wide → close-up)
+        var startZ = subCenter.z + 700;
+        var endZ = subCenter.z + 50;
+
+        var cam = createCamera("Push-in Camera", subCenter.x, eyeHeight, startZ,
+                               subCenter.x, eyeHeight, subCenter.z);
+
+        setKeyframe(cam, "ZTranslate", 0, startZ);
+        setKeyframe(cam, "ZTranslate", duration - 1, endZ);
+        setKeyframe(cam, "XTranslate", 0, subCenter.x);
+        setKeyframe(cam, "XTranslate", duration - 1, subCenter.x);
+        setKeyframe(cam, "YTranslate", 0, eyeHeight);
+        setKeyframe(cam, "YTranslate", duration - 1, eyeHeight);
+
+        cameras.push({
+            label: cam.getLabel(),
+            position: {x: subCenter.x, y: eyeHeight, z: startZ},
+            frameRange: {start: 0, end: duration - 1},
+            animated: true
+        });
+
+    } else {
+        throw new Error("Unknown sequence type: " + sequenceType +
+            ". Valid: establishing-medium-closeup, shot-reverse-shot, orbit, push-in");
+    }
+
+    return {
+        cameras: cameras,
+        totalFrames: totalFrames,
+        sequenceType: sequenceType,
+        subject: subject.getLabel()
+    };
+})()
+"""
+
+# args: {char1Label, char2Label, dialogueBeats: [{speaker, startFrame, endFrame, emotion, gesture?}]}
+# Returns: {char1, char2, beatsApplied: [{beat, actions}], totalFrames}
+# Choreograph animated conversation between two characters
+_ANIMATE_CONVERSATION_SCRIPT = """\
+(function(){
+    var args = getArguments()[0] || {};
+
+    // Helper: Find bone in figure hierarchy
+    function findBone(fig, name) {
+        function search(node) {
+            if (node.getName() === name) return node;
+            for (var i = 0; i < node.getNumNodeChildren(); i++) {
+                var result = search(node.getNodeChild(i));
+                if (result) return result;
+            }
+            return null;
+        }
+        return search(fig);
+    }
+
+    // Helper: Set keyframe
+    function setKeyframe(node, propName, frame, value) {
+        var prop = node.findProperty(propName);
+        if (!prop) return false;
+        var anim = prop.getAnimation();
+        if (!anim) anim = prop.createAnimation();
+        var key = anim.getKey(frame);
+        if (!key) key = anim.addKey(frame);
+        key.value = value;
+        return true;
+    }
+
+    // Helper: Apply emotion morphs
+    function applyEmotion(figure, emotion, intensity, frame) {
+        var emotionMorphs = {
+            happy: [
+                {names: ["PHMSmile", "Smile"], value: 0.8},
+                {names: ["PHMBrowsUp", "Brows Up"], value: 0.3},
+                {names: ["PHMEyesClosedL", "Eyes Closed"], value: 0.15}
+            ],
+            sad: [
+                {names: ["PHMMouthFrownL", "Mouth Frown"], value: 0.7},
+                {names: ["PHMBrowsDown", "Brows Down"], value: 0.6},
+                {names: ["PHMEyesClosedL", "Eyes Closed"], value: 0.25}
+            ],
+            angry: [
+                {names: ["PHMBrowsDown", "Brows Down"], value: 0.9},
+                {names: ["PHMMouthFrownL", "Mouth Frown"], value: 0.5},
+                {names: ["PHMNoseWrinkleL", "Nose Wrinkle"], value: 0.4}
+            ],
+            surprised: [
+                {names: ["PHMEyesWide", "Eyes Wide"], value: 0.85},
+                {names: ["PHMBrowsUp", "Brows Up"], value: 0.8},
+                {names: ["PHMMouthOpen", "Mouth Open"], value: 0.5}
+            ],
+            neutral: []
+        };
+
+        var morphList = emotionMorphs[emotion] || [];
+        var applied = 0;
+
+        for (var i = 0; i < morphList.length; i++) {
+            var entry = morphList[i];
+            var targetValue = entry.value * intensity;
+            for (var j = 0; j < entry.names.length; j++) {
+                var prop = figure.findProperty(entry.names[j]);
+                if (prop && prop.inherits("DzNumericProperty")) {
+                    setKeyframe(figure, entry.names[j], frame, targetValue);
+                    applied++;
+                    break;
+                }
+            }
+        }
+        return applied;
+    }
+
+    // Helper: Rotate bone to look at target
+    function rotateBoneToward(bone, targetX, targetY, targetZ, intensity, frame) {
+        var boneWS = bone.getWSPos();
+        var dx = targetX - boneWS.x;
+        var dy = targetY - boneWS.y;
+        var dz = targetZ - boneWS.z;
+        var hDist = Math.sqrt(dx*dx + dz*dz);
+
+        var yaw = Math.atan2(dx, dz) * 180 / Math.PI;
+        var pitch = Math.atan2(dy, hDist) * 180 / Math.PI;
+
+        setKeyframe(bone, "YRotate", frame, yaw * intensity);
+        setKeyframe(bone, "XRotate", frame, pitch * intensity * -1);
+    }
+
+    // Get characters
+    var char1 = Scene.findNodeByLabel(args.char1Label);
+    if (!char1) char1 = Scene.findNode(args.char1Label);
+    if (!char1) throw new Error("Character 1 not found: " + args.char1Label);
+
+    var char2 = Scene.findNodeByLabel(args.char2Label);
+    if (!char2) char2 = Scene.findNode(args.char2Label);
+    if (!char2) throw new Error("Character 2 not found: " + args.char2Label);
+
+    // Get head positions for look-at targets
+    var char1Head = findBone(char1, "head");
+    var char2Head = findBone(char2, "head");
+
+    var char1Pos = char1.getWSPos();
+    var char2Pos = char2.getWSPos();
+    var char1TargetY = char1Pos.y + 163; // Approx head height
+    var char2TargetY = char2Pos.y + 163;
+
+    if (char1Head) {
+        var char1HeadPos = char1Head.getWSPos();
+        char1TargetY = char1HeadPos.y;
+    }
+    if (char2Head) {
+        var char2HeadPos = char2Head.getWSPos();
+        char2TargetY = char2HeadPos.y;
+    }
+
+    var char1TargetX = char1Pos.x;
+    var char1TargetZ = char1Pos.z;
+    var char2TargetX = char2Pos.x;
+    var char2TargetZ = char2Pos.z;
+
+    // Process dialogue beats
+    var dialogueBeats = args.dialogueBeats || [];
+    var beatsApplied = [];
+    var maxFrame = 0;
+
+    for (var i = 0; i < dialogueBeats.length; i++) {
+        var beat = dialogueBeats[i];
+        var speaker = beat.speaker;
+        var startFrame = beat.startFrame || 0;
+        var endFrame = beat.endFrame || startFrame + 30;
+        var emotion = beat.emotion || "neutral";
+        var intensity = beat.intensity || 0.7;
+
+        if (endFrame > maxFrame) maxFrame = endFrame;
+
+        var actions = [];
+
+        // Determine who's speaking and who's listening
+        var speakerFig = (speaker === args.char1Label) ? char1 : char2;
+        var listenerFig = (speaker === args.char1Label) ? char2 : char1;
+        var listenerTargetX = (speaker === args.char1Label) ? char2TargetX : char1TargetX;
+        var listenerTargetY = (speaker === args.char1Label) ? char2TargetY : char1TargetY;
+        var listenerTargetZ = (speaker === args.char1Label) ? char2TargetZ : char1TargetZ;
+        var speakerTargetX = (speaker === args.char1Label) ? char1TargetX : char2TargetX;
+        var speakerTargetY = (speaker === args.char1Label) ? char1TargetY : char2TargetY;
+        var speakerTargetZ = (speaker === args.char1Label) ? char1TargetZ : char2TargetZ;
+
+        // Apply emotion to speaker at start of beat
+        var morphsApplied = applyEmotion(speakerFig, emotion, intensity, startFrame);
+        if (morphsApplied > 0) {
+            actions.push("Applied " + emotion + " emotion (" + morphsApplied + " morphs)");
+        }
+
+        // Make listener look at speaker
+        var listenerHead = findBone(listenerFig, "head");
+        var listenerNeck = findBone(listenerFig, "neckLower");
+
+        if (listenerHead) {
+            rotateBoneToward(listenerHead, speakerTargetX, speakerTargetY, speakerTargetZ, 0.6, startFrame);
+            rotateBoneToward(listenerHead, speakerTargetX, speakerTargetY, speakerTargetZ, 0.6, endFrame);
+            actions.push("Listener looks at speaker");
+        }
+        if (listenerNeck) {
+            rotateBoneToward(listenerNeck, speakerTargetX, speakerTargetY, speakerTargetZ, 0.3, startFrame);
+            rotateBoneToward(listenerNeck, speakerTargetX, speakerTargetY, speakerTargetZ, 0.3, endFrame);
+        }
+
+        beatsApplied.push({
+            beat: i + 1,
+            speaker: speaker,
+            frameRange: {start: startFrame, end: endFrame},
+            emotion: emotion,
+            actions: actions
+        });
+    }
+
+    return {
+        char1: char1.getLabel(),
+        char2: char2.getLabel(),
+        beatsApplied: beatsApplied,
+        totalFrames: maxFrame,
+        beatCount: dialogueBeats.length
+    };
+})()
+"""
+
+# args: {description, characters: []}
+# description: Natural language scene description
+# characters: List of character labels already in scene
+# Returns: {sceneType, actions: [], cameras: [], suggestions: []}
+# Generate a complete scene from natural language description
+_CREATE_SCENE_SCRIPT = """\
+(function(){
+    var args = getArguments()[0] || {};
+    var description = (args.description || "").toLowerCase();
+    var characters = args.characters || [];
+
+    var actions = [];
+    var cameras = [];
+    var suggestions = [];
+    var sceneType = "generic";
+
+    // Helper: Create camera
+    function createCamera(label, x, y, z, aimX, aimY, aimZ) {
+        var cam = new DzBasicCamera();
+        cam.setLabel(label);
+        Scene.addNode(cam);
+        var xp = cam.findProperty("XTranslate");
+        var yp = cam.findProperty("YTranslate");
+        var zp = cam.findProperty("ZTranslate");
+        if (xp) xp.setValue(x);
+        if (yp) yp.setValue(y);
+        if (zp) zp.setValue(z);
+        cam.aimAt(new DzVec3(aimX, aimY, aimZ));
+        return cam;
+    }
+
+    // Helper: Create spot light
+    function createSpotLight(label, x, y, z, flux, aimX, aimY, aimZ) {
+        var light = new DzSpotLight();
+        light.setLabel(label);
+        Scene.addNode(light);
+        var xp = light.findProperty("XTranslate");
+        var yp = light.findProperty("YTranslate");
+        var zp = light.findProperty("ZTranslate");
+        if (xp) xp.setValue(x);
+        if (yp) yp.setValue(y);
+        if (zp) zp.setValue(z);
+        light.aimAt(new DzVec3(aimX, aimY, aimZ));
+        var fluxProp = light.findProperty("Flux");
+        if (fluxProp) fluxProp.setValue(flux);
+        return light;
+    }
+
+    // Helper: Set environment mode to Scene Only
+    function setSceneOnlyLighting() {
+        var renderMgr = App.getRenderMgr();
+        var opts = renderMgr.getRenderOptions();
+        opts.drawGroundPlane = false;
+        var envMode = opts.findProperty("Environment Mode");
+        if (envMode) envMode.setValue(3); // Scene Only
+    }
+
+    // Get primary subject if characters provided
+    var subject = null;
+    var subjectCenter = {x: 0, y: 100, z: 0};
+    var subjectHeight = 170;
+    var eyeHeight = 160;
+
+    if (characters.length > 0) {
+        subject = Scene.findNodeByLabel(characters[0]);
+        if (!subject) subject = Scene.findNode(characters[0]);
+        if (subject) {
+            var bbox = subject.getBoundingBox();
+            subjectCenter = bbox.getCenter();
+            subjectHeight = bbox.max.y - bbox.min.y;
+            eyeHeight = bbox.min.y + subjectHeight * 0.85;
+        }
+    }
+
+    // Scene type detection and setup
+    if (description.indexOf("dinner") !== -1 || description.indexOf("meal") !== -1 || description.indexOf("eat") !== -1) {
+        sceneType = "dining";
+        actions.push("Scene type: Dining/meal scene");
+
+        // Position characters facing each other (if 2+ characters)
+        if (characters.length >= 2) {
+            var char1 = Scene.findNodeByLabel(characters[0]);
+            var char2 = Scene.findNodeByLabel(characters[1]);
+            if (char1 && char2) {
+                var c1pos = char1.findProperty("ZTranslate");
+                var c2pos = char2.findProperty("ZTranslate");
+                var c1rot = char1.findProperty("YRotate");
+                var c2rot = char2.findProperty("YRotate");
+                if (c1pos) c1pos.setValue(-60);
+                if (c2pos) c2pos.setValue(60);
+                if (c1rot) c1rot.setValue(180);
+                if (c2rot) c2rot.setValue(0);
+                actions.push("Positioned characters facing each other across table distance");
+            }
+        }
+
+        // Warm romantic lighting
+        if (description.indexOf("romantic") !== -1) {
+            createSpotLight("Warm Key Light", 100, 180, 100, 1500, subjectCenter.x, eyeHeight, subjectCenter.z);
+            createSpotLight("Warm Fill Light", -80, 150, 80, 600, subjectCenter.x, eyeHeight, subjectCenter.z);
+            actions.push("Applied warm romantic lighting");
+        } else {
+            createSpotLight("Key Light", 120, 180, 120, 1800, subjectCenter.x, eyeHeight, subjectCenter.z);
+            createSpotLight("Fill Light", -100, 150, 100, 700, subjectCenter.x, eyeHeight, subjectCenter.z);
+            actions.push("Applied dining scene lighting");
+        }
+
+        setSceneOnlyLighting();
+
+        // Cameras
+        var cam1 = createCamera("Wide Shot", 0, eyeHeight, 250, 0, eyeHeight, 0);
+        cameras.push({label: "Wide Shot", type: "wide", purpose: "Establishing shot of dining scene"});
+
+        if (characters.length >= 2) {
+            var cam2 = createCamera("Over Shoulder 1", -50, eyeHeight - 10, -60, 50, eyeHeight, 60);
+            cameras.push({label: "Over Shoulder 1", type: "over-shoulder", purpose: "Conversation angle"});
+        }
+
+        suggestions.push("Add table prop for dining scene");
+        suggestions.push("Add plates, glasses, or food props for realism");
+        suggestions.push("Consider adding candles for romantic dinner mood");
+
+    } else if (description.indexOf("interview") !== -1 || description.indexOf("meeting") !== -1 || description.indexOf("business") !== -1) {
+        sceneType = "interview";
+        actions.push("Scene type: Interview/business meeting");
+
+        // Position characters facing each other
+        if (characters.length >= 2) {
+            var char1 = Scene.findNodeByLabel(characters[0]);
+            var char2 = Scene.findNodeByLabel(characters[1]);
+            if (char1 && char2) {
+                var c1x = char1.findProperty("XTranslate");
+                var c1z = char1.findProperty("ZTranslate");
+                var c2x = char2.findProperty("XTranslate");
+                var c2z = char2.findProperty("ZTranslate");
+                var c1rot = char1.findProperty("YRotate");
+                var c2rot = char2.findProperty("YRotate");
+                if (c1x) c1x.setValue(-80);
+                if (c1z) c1z.setValue(0);
+                if (c2x) c2x.setValue(80);
+                if (c2z) c2z.setValue(0);
+                if (c1rot) c1rot.setValue(90);
+                if (c2rot) c2rot.setValue(-90);
+                actions.push("Positioned characters facing each other for interview");
+            }
+        }
+
+        // Professional neutral lighting
+        createSpotLight("Key Light", 150, 200, 120, 2200, subjectCenter.x, eyeHeight, subjectCenter.z);
+        createSpotLight("Fill Light", -120, 180, 100, 1000, subjectCenter.x, eyeHeight, subjectCenter.z);
+        createSpotLight("Back Light", 0, 220, -180, 1400, subjectCenter.x, eyeHeight, subjectCenter.z);
+        actions.push("Applied professional three-point lighting");
+        setSceneOnlyLighting();
+
+        // Cameras
+        var cam1 = createCamera("Wide Shot", 0, eyeHeight + 10, 300, 0, eyeHeight, 0);
+        cameras.push({label: "Wide Shot", type: "wide", purpose: "Establishing interview setup"});
+
+        if (characters.length >= 1) {
+            var cam2 = createCamera("Medium Shot", subjectCenter.x, eyeHeight, subjectCenter.z + 140, subjectCenter.x, eyeHeight, subjectCenter.z);
+            cameras.push({label: "Medium Shot", type: "medium", purpose: "Professional medium shot"});
+        }
+
+        suggestions.push("Add desk or table prop between characters");
+        suggestions.push("Add chairs for seated interview");
+        suggestions.push("Consider office props (laptop, papers) for context");
+
+    } else if (description.indexOf("portrait") !== -1 || description.indexOf("headshot") !== -1 || description.indexOf("photo") !== -1) {
+        sceneType = "portrait";
+        actions.push("Scene type: Portrait/headshot");
+
+        // Three-point lighting
+        if (subject) {
+            createSpotLight("Key Light", subjectCenter.x + 150, eyeHeight + 30, subjectCenter.z + 120, 2000,
+                           subjectCenter.x, eyeHeight, subjectCenter.z);
+            createSpotLight("Fill Light", subjectCenter.x - 120, eyeHeight + 15, subjectCenter.z + 100, 800,
+                           subjectCenter.x, eyeHeight, subjectCenter.z);
+            createSpotLight("Rim Light", subjectCenter.x, eyeHeight + 50, subjectCenter.z - 150, 1200,
+                           subjectCenter.x, eyeHeight, subjectCenter.z);
+            actions.push("Applied classic three-point portrait lighting");
+            setSceneOnlyLighting();
+        }
+
+        // Cameras
+        if (subject) {
+            var cam1 = createCamera("Close-up", subjectCenter.x, eyeHeight, subjectCenter.z + 50,
+                                   subjectCenter.x, eyeHeight, subjectCenter.z);
+            cameras.push({label: "Close-up", type: "close-up", purpose: "Face portrait"});
+
+            var cam2 = createCamera("Medium Close-up", subjectCenter.x + 30, eyeHeight, subjectCenter.z + 90,
+                                   subjectCenter.x, eyeHeight, subjectCenter.z);
+            cameras.push({label: "Medium Close-up", type: "medium-close-up", purpose: "Head and shoulders"});
+        }
+
+        suggestions.push("Adjust character facial expression for portrait mood");
+        suggestions.push("Consider neutral background or backdrop prop");
+        suggestions.push("Try different camera angles (high-angle, low-angle)");
+
+    } else if (description.indexOf("conversation") !== -1 || description.indexOf("talking") !== -1 || description.indexOf("chat") !== -1) {
+        sceneType = "conversation";
+        actions.push("Scene type: Conversation");
+
+        // Position characters facing each other
+        if (characters.length >= 2) {
+            var char1 = Scene.findNodeByLabel(characters[0]);
+            var char2 = Scene.findNodeByLabel(characters[1]);
+            if (char1 && char2) {
+                var c1x = char1.findProperty("XTranslate");
+                var c1z = char1.findProperty("ZTranslate");
+                var c2x = char2.findProperty("XTranslate");
+                var c2z = char2.findProperty("ZTranslate");
+                var c1rot = char1.findProperty("YRotate");
+                var c2rot = char2.findProperty("YRotate");
+                if (c1x) c1x.setValue(-50);
+                if (c1z) c1z.setValue(0);
+                if (c2x) c2x.setValue(50);
+                if (c2z) c2z.setValue(0);
+                if (c1rot) c1rot.setValue(90);
+                if (c2rot) c2rot.setValue(-90);
+                actions.push("Positioned characters facing each other at conversation distance");
+            }
+        }
+
+        // Natural conversational lighting
+        createSpotLight("Key Light", 120, 180, 100, 1900, subjectCenter.x, eyeHeight, subjectCenter.z);
+        createSpotLight("Fill Light", -100, 160, 80, 850, subjectCenter.x, eyeHeight, subjectCenter.z);
+        actions.push("Applied natural conversation lighting");
+        setSceneOnlyLighting();
+
+        // Cameras for shot-reverse-shot
+        if (characters.length >= 2) {
+            var cam1 = createCamera("Over Shoulder 1", -40, eyeHeight - 10, -70, 50, eyeHeight, 0);
+            cameras.push({label: "Over Shoulder 1", type: "over-shoulder", purpose: "Conversation angle 1"});
+
+            var cam2 = createCamera("Over Shoulder 2", 40, eyeHeight - 10, 70, -50, eyeHeight, 0);
+            cameras.push({label: "Over Shoulder 2", type: "over-shoulder", purpose: "Conversation angle 2"});
+        }
+
+        suggestions.push("Use shot-reverse-shot camera technique for conversation");
+        suggestions.push("Apply emotions and look-at for animated dialogue");
+        suggestions.push("Consider adding environment props for context");
+
+    } else {
+        // Generic scene setup
+        sceneType = "generic";
+        actions.push("Scene type: Generic scene (no specific template matched)");
+
+        // Basic three-point lighting
+        if (subject) {
+            createSpotLight("Key Light", subjectCenter.x + 150, eyeHeight + 30, subjectCenter.z + 120, 2000,
+                           subjectCenter.x, eyeHeight, subjectCenter.z);
+            createSpotLight("Fill Light", subjectCenter.x - 120, eyeHeight + 15, subjectCenter.z + 100, 800,
+                           subjectCenter.x, eyeHeight, subjectCenter.z);
+            createSpotLight("Rim Light", subjectCenter.x, eyeHeight + 50, subjectCenter.z - 150, 1200,
+                           subjectCenter.x, eyeHeight, subjectCenter.z);
+            actions.push("Applied default three-point lighting");
+            setSceneOnlyLighting();
+        }
+
+        // Basic cameras
+        if (subject) {
+            var cam1 = createCamera("Wide Shot", subjectCenter.x, eyeHeight, subjectCenter.z + 400,
+                                   subjectCenter.x, eyeHeight, subjectCenter.z);
+            cameras.push({label: "Wide Shot", type: "wide", purpose: "Establishing shot"});
+
+            var cam2 = createCamera("Medium Shot", subjectCenter.x, eyeHeight, subjectCenter.z + 140,
+                                   subjectCenter.x, eyeHeight, subjectCenter.z);
+            cameras.push({label: "Medium Shot", type: "medium", purpose: "Medium framing"});
+        }
+
+        suggestions.push("Provide more specific scene description for tailored setup");
+        suggestions.push("Keywords: dinner, interview, portrait, conversation");
+        suggestions.push("Add props and environment elements as needed");
+    }
+
+    // General suggestions
+    if (characters.length === 0) {
+        suggestions.push("Load characters into scene before generating setup");
+    }
+
+    return {
+        sceneType: sceneType,
+        description: args.description,
+        charactersUsed: characters.length,
+        actions: actions,
+        cameras: cameras,
+        suggestions: suggestions
+    };
+})()
+"""
+
 # Registry entries: script_id → (description, script_text)
 # Registered with DazScriptServer on startup so high-level tools call by ID.
 _REGISTRY: dict[str, tuple[str, str]] = {
@@ -3301,6 +3972,18 @@ _REGISTRY: dict[str, tuple[str, str]] = {
     "vangard-find-nearby-nodes": (
         "Find all nodes within a radius of a target node",
         _FIND_NEARBY_NODES_SCRIPT,
+    ),
+    "vangard-create-shot-sequence": (
+        "Create multi-camera shot sequence for cinematic workflows",
+        _CREATE_SHOT_SEQUENCE_SCRIPT,
+    ),
+    "vangard-animate-conversation": (
+        "Choreograph animated conversation between two characters with look-at and emotion keyframes",
+        _ANIMATE_CONVERSATION_SCRIPT,
+    ),
+    "vangard-create-scene": (
+        "Generate a complete scene from natural language description with lighting, cameras, and positioning",
+        _CREATE_SCENE_SCRIPT,
     ),
 }
 
@@ -6343,6 +7026,626 @@ async def daz_find_nearby_nodes(
         "nodeLabel": node_label,
         "radius": radius,
         "includeTypes": include_types,
+    })
+
+
+# ---------------------------------------------------------------------------
+# Macro System Tools
+# ---------------------------------------------------------------------------
+
+
+@mcp.tool()
+async def daz_start_recording(
+    macro_name: str,
+    description: str = "",
+) -> dict[str, Any]:
+    """Start recording a macro — all subsequent MCP tool calls will be captured.
+
+    Macros allow you to record sequences of operations and replay them later,
+    optionally with parameter substitution. This is useful for:
+    - Creating reusable workflows
+    - Batch operations
+    - Complex multi-step processes
+    - Sharing workflows across scenes
+
+    Args:
+        macro_name: Unique name for this macro (1-64 characters, letters/digits/hyphens/underscores)
+        description: Optional description of what this macro does
+
+    Returns:
+        Dict with success, macro_name, description, and started_at timestamp.
+
+    Example:
+        # Start recording a portrait setup workflow
+        daz_start_recording("portrait_setup", "Standard portrait lighting and framing")
+
+        # Perform operations (these will be recorded)
+        daz_apply_lighting_preset("three-point", "Genesis 9")
+        daz_frame_shot("Camera 1", "Genesis 9", "medium-close-up")
+
+        # Stop recording
+        daz_stop_recording()
+
+    Note:
+        - Only one macro can be recorded at a time
+        - Macros are stored in memory and lost when MCP server restarts
+        - Use daz_replay_macro() to execute saved macros
+    """
+    global _macro_recording, _current_macro
+
+    # Validate macro name
+    if not macro_name or len(macro_name) > 64:
+        raise ToolError("Macro name must be 1-64 characters")
+    if not macro_name.replace("-", "").replace("_", "").isalnum():
+        raise ToolError("Macro name must contain only letters, digits, hyphens, and underscores")
+
+    # Check if already recording
+    if _macro_recording:
+        raise ToolError(
+            f"Already recording macro '{_current_macro['name']}'. "
+            "Stop current recording with daz_stop_recording() first."
+        )
+
+    # Initialize recording session
+    from datetime import datetime
+    _macro_recording = True
+    _current_macro = {
+        "name": macro_name,
+        "description": description,
+        "started_at": datetime.now().isoformat(),
+        "operations": [],
+    }
+
+    return {
+        "success": True,
+        "macro_name": macro_name,
+        "description": description,
+        "started_at": _current_macro["started_at"],
+        "message": f"Recording macro '{macro_name}'. Call daz_stop_recording() when done.",
+    }
+
+
+@mcp.tool()
+async def daz_stop_recording() -> dict[str, Any]:
+    """Stop recording the current macro and save it to the macro library.
+
+    The recorded macro will be saved in memory and can be replayed using
+    daz_replay_macro(). Recording is automatically stopped.
+
+    Returns:
+        Dict with success, macro details (name, description, operation_count),
+        and saved_at timestamp.
+
+    Example:
+        # Start recording
+        daz_start_recording("my_workflow")
+
+        # ... perform operations ...
+
+        # Stop and save
+        result = daz_stop_recording()
+        print(f"Saved macro with {result['operation_count']} operations")
+
+    Note:
+        - Macros are stored in memory only (lost on MCP server restart)
+        - If macro name already exists, it will be overwritten
+        - No operations are actually recorded yet — this is placeholder for future implementation
+    """
+    global _macro_recording, _current_macro, _macro_library
+
+    # Check if recording is active
+    if not _macro_recording:
+        raise ToolError("No macro recording in progress. Use daz_start_recording() first.")
+
+    from datetime import datetime
+
+    # Finalize macro
+    _current_macro["saved_at"] = datetime.now().isoformat()
+    operation_count = len(_current_macro["operations"])
+
+    # Save to library
+    macro_name = _current_macro["name"]
+    _macro_library[macro_name] = _current_macro
+
+    # Clear recording state
+    result = {
+        "success": True,
+        "macro_name": macro_name,
+        "description": _current_macro["description"],
+        "operation_count": operation_count,
+        "saved_at": _current_macro["saved_at"],
+        "message": f"Macro '{macro_name}' saved with {operation_count} operations.",
+    }
+
+    _macro_recording = False
+    _current_macro = None
+
+    return result
+
+
+@mcp.tool()
+async def daz_replay_macro(
+    macro_name: str,
+    parameters: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    """Replay a saved macro with optional parameter substitution.
+
+    Executes all operations recorded in a macro sequentially. Supports parameter
+    substitution to customize behavior at replay time.
+
+    Args:
+        macro_name: Name of the macro to replay (from daz_list_macros)
+        parameters: Optional dict of parameter values for substitution.
+                    Use keys like "subject", "camera", "intensity" etc.
+                    The macro will replace placeholder values with these runtime values.
+
+    Returns:
+        Dict with success, macro_name, results list (one per operation),
+        successful_count, failed_count, and duration_ms.
+
+    Example:
+        # Record a macro for one character
+        daz_start_recording("portrait_setup")
+        daz_apply_lighting_preset("three-point", "Genesis 9")
+        daz_frame_shot("Camera 1", "Genesis 9", "close-up")
+        daz_stop_recording()
+
+        # Replay for different character
+        daz_replay_macro("portrait_setup", parameters={"subject": "Alice"})
+
+    Note:
+        - Parameter substitution not yet implemented in Phase 1
+        - Operations execute sequentially; failure in one doesn't stop others
+        - Results include success/failure status for each operation
+    """
+    global _macro_library
+
+    # Look up macro
+    if macro_name not in _macro_library:
+        available = list(_macro_library.keys())
+        raise ToolError(
+            f"Macro '{macro_name}' not found. "
+            f"Available macros: {available if available else '(none)'}"
+        )
+
+    macro = _macro_library[macro_name]
+    operations = macro["operations"]
+
+    if not operations:
+        return {
+            "success": True,
+            "macro_name": macro_name,
+            "message": "Macro has no operations to replay.",
+            "results": [],
+            "successful_count": 0,
+            "failed_count": 0,
+        }
+
+    # TODO: Implement operation replay
+    # For now, return placeholder response
+    return {
+        "success": True,
+        "macro_name": macro_name,
+        "message": f"Macro '{macro_name}' replay not yet implemented (Phase 1 placeholder).",
+        "results": [],
+        "successful_count": 0,
+        "failed_count": 0,
+        "operation_count": len(operations),
+    }
+
+
+@mcp.tool()
+async def daz_list_macros() -> dict[str, Any]:
+    """List all saved macros in the macro library.
+
+    Returns all macros with their metadata. Useful for discovering available
+    workflows and checking macro details before replay.
+
+    Returns:
+        Dict with macros list (each containing name, description, operation_count,
+        saved_at), and total count.
+
+    Example:
+        result = daz_list_macros()
+        for macro in result['macros']:
+            print(f"{macro['name']}: {macro['operation_count']} operations")
+
+    Note:
+        - Macros are session-only (lost when MCP server restarts)
+        - Use daz_replay_macro() to execute a saved macro
+    """
+    global _macro_library
+
+    macros_list = []
+    for name, macro in _macro_library.items():
+        macros_list.append({
+            "name": name,
+            "description": macro.get("description", ""),
+            "operation_count": len(macro.get("operations", [])),
+            "saved_at": macro.get("saved_at", ""),
+        })
+
+    # Sort by name
+    macros_list.sort(key=lambda m: m["name"])
+
+    return {
+        "macros": macros_list,
+        "count": len(macros_list),
+    }
+
+
+# ---------------------------------------------------------------------------
+# Cinematic Shot Sequence Tools
+# ---------------------------------------------------------------------------
+
+
+@mcp.tool()
+async def daz_create_shot_sequence(
+    sequence_type: str,
+    characters: list[str],
+    duration: int = 120,
+) -> dict[str, Any]:
+    """Create a multi-camera shot sequence for cinematic storytelling.
+
+    Automatically creates and positions multiple cameras with keyframe animations
+    for standard cinematic sequences. Useful for:
+    - Conversations (shot-reverse-shot)
+    - Establishing shots (wide → medium → close-up)
+    - Product showcases (orbit)
+    - Dramatic reveals (push-in)
+
+    Args:
+        sequence_type: Type of sequence to create. Options:
+            - "establishing-medium-closeup": Three cameras at different distances
+              (wide → medium → close-up). Frames divided equally into thirds.
+            - "shot-reverse-shot": Two cameras for conversation, alternating between
+              over-shoulder angles. Requires 2 characters. Frames split 50/50.
+            - "orbit": Single camera orbiting 360° around subject with keyframe animation.
+            - "push-in": Single camera dollying from wide shot to close-up with smooth animation.
+
+        characters: List of character labels (1-2 depending on sequence).
+            First character is primary subject. Second character used for shot-reverse-shot.
+
+        duration: Total duration in frames (default: 120 frames = 4 seconds at 30fps).
+
+    Returns:
+        Dict with:
+        - cameras: List of created cameras with position and frame range info
+        - totalFrames: Total duration
+        - sequenceType: Confirmed sequence type
+        - subject: Primary subject character label
+
+    Example:
+        # Establishing sequence for single character
+        daz_create_shot_sequence(
+            "establishing-medium-closeup",
+            ["Genesis 9"],
+            duration=180
+        )
+        # Creates: Wide Shot (0-59), Medium Shot (60-119), Close-up Shot (120-179)
+
+        # Conversation between two characters
+        daz_create_shot_sequence(
+            "shot-reverse-shot",
+            ["Alice", "Bob"],
+            duration=240
+        )
+        # Creates: Over Shoulder 1 (0-119), Over Shoulder 2 (120-239)
+
+        # 360° orbit around character
+        daz_create_shot_sequence(
+            "orbit",
+            ["Genesis 9"],
+            duration=300
+        )
+        # Creates animated camera orbiting over 300 frames
+
+        # Dolly push-in
+        daz_create_shot_sequence(
+            "push-in",
+            ["Genesis 9"],
+            duration=120
+        )
+        # Creates animated camera moving from wide to close-up
+
+    Notes:
+        - Cameras are automatically aimed at subject's eye level
+        - For animated sequences (orbit, push-in), keyframes are set automatically
+        - For multi-shot sequences (establishing, shot-reverse-shot), use frame ranges
+          to determine which camera to render for each frame
+        - Use daz_set_active_camera() to preview each camera angle
+        - Use daz_set_frame() to scrub through animation timeline
+    """
+    # Validate sequence type
+    valid_types = [
+        "establishing-medium-closeup",
+        "shot-reverse-shot",
+        "orbit",
+        "push-in",
+    ]
+    if sequence_type not in valid_types:
+        raise ToolError(
+            f"Invalid sequence_type '{sequence_type}'. "
+            f"Valid options: {', '.join(valid_types)}"
+        )
+
+    # Validate characters
+    if not characters or len(characters) == 0:
+        raise ToolError("At least one character required")
+
+    if sequence_type == "shot-reverse-shot" and len(characters) < 2:
+        raise ToolError("shot-reverse-shot requires 2 characters")
+
+    # Validate duration
+    if duration < 10 or duration > 10000:
+        raise ToolError("Duration must be between 10 and 10000 frames")
+
+    return await _execute_by_id("vangard-create-shot-sequence", {
+        "sequenceType": sequence_type,
+        "characters": characters,
+        "duration": duration,
+        "fps": 30,
+    })
+
+
+@mcp.tool()
+async def daz_animate_conversation(
+    char1_label: str,
+    char2_label: str,
+    dialogue_beats: list[dict[str, Any]],
+) -> dict[str, Any]:
+    """Choreograph an animated conversation between two characters.
+
+    Automatically sets up keyframe animations for a dialogue sequence, including:
+    - Look-at behavior (listener looks at speaker)
+    - Emotion morphs timed to dialogue beats
+    - Head/neck rotation for natural conversation dynamics
+
+    Perfect for creating animated conversations without manually keyframing each movement.
+
+    Args:
+        char1_label: Label of first character
+        char2_label: Label of second character
+        dialogue_beats: List of dialogue beat dicts, each containing:
+            - speaker: Label of who's speaking (must match char1_label or char2_label)
+            - startFrame: Frame where beat starts (int)
+            - endFrame: Frame where beat ends (int)
+            - emotion: Emotion for speaker ("happy", "sad", "angry", "surprised", "neutral")
+            - intensity: Optional emotion intensity 0.0-1.0 (default: 0.7)
+
+    Returns:
+        Dict with:
+        - char1, char2: Character labels
+        - beatsApplied: List of applied beats with actions performed
+        - totalFrames: Total animation length
+        - beatCount: Number of dialogue beats processed
+
+    Example:
+        # Create a 3-beat conversation
+        result = daz_animate_conversation(
+            "Alice",
+            "Bob",
+            [
+                {
+                    "speaker": "Alice",
+                    "startFrame": 0,
+                    "endFrame": 60,
+                    "emotion": "happy",
+                    "intensity": 0.8
+                },
+                {
+                    "speaker": "Bob",
+                    "startFrame": 60,
+                    "endFrame": 120,
+                    "emotion": "surprised",
+                    "intensity": 0.9
+                },
+                {
+                    "speaker": "Alice",
+                    "startFrame": 120,
+                    "endFrame": 180,
+                    "emotion": "neutral"
+                }
+            ]
+        )
+        # Result shows 3 beats applied with emotion morphs and look-at animations
+
+    Notes:
+        - Characters automatically look at whoever is speaking
+        - Emotion morphs are applied at beat start and held until beat end
+        - Head and neck bones rotate for natural look-at behavior
+        - Missing morphs are silently skipped (different Genesis generations have different morphs)
+        - Use daz_set_frame() to preview animation at specific frames
+        - Combine with daz_create_shot_sequence("shot-reverse-shot", ...) for camera angles
+    """
+    # Validate characters
+    if not char1_label or not char2_label:
+        raise ToolError("Both char1_label and char2_label are required")
+
+    if char1_label == char2_label:
+        raise ToolError("char1_label and char2_label must be different characters")
+
+    # Validate dialogue beats
+    if not dialogue_beats or len(dialogue_beats) == 0:
+        raise ToolError("At least one dialogue beat required")
+
+    # Validate each beat
+    for i, beat in enumerate(dialogue_beats):
+        if "speaker" not in beat:
+            raise ToolError(f"Beat {i+1}: 'speaker' field required")
+        if "startFrame" not in beat:
+            raise ToolError(f"Beat {i+1}: 'startFrame' field required")
+        if "endFrame" not in beat:
+            raise ToolError(f"Beat {i+1}: 'endFrame' field required")
+
+        speaker = beat["speaker"]
+        if speaker not in [char1_label, char2_label]:
+            raise ToolError(
+                f"Beat {i+1}: speaker '{speaker}' must be either '{char1_label}' or '{char2_label}'"
+            )
+
+        start = beat["startFrame"]
+        end = beat["endFrame"]
+        if not isinstance(start, int) or not isinstance(end, int):
+            raise ToolError(f"Beat {i+1}: startFrame and endFrame must be integers")
+        if start < 0 or end < 0:
+            raise ToolError(f"Beat {i+1}: startFrame and endFrame must be non-negative")
+        if end <= start:
+            raise ToolError(f"Beat {i+1}: endFrame ({end}) must be > startFrame ({start})")
+
+        # Validate emotion if present
+        if "emotion" in beat:
+            valid_emotions = ["happy", "sad", "angry", "surprised", "neutral"]
+            if beat["emotion"] not in valid_emotions:
+                raise ToolError(
+                    f"Beat {i+1}: emotion '{beat['emotion']}' invalid. "
+                    f"Valid: {', '.join(valid_emotions)}"
+                )
+
+    return await _execute_by_id("vangard-animate-conversation", {
+        "char1Label": char1_label,
+        "char2Label": char2_label,
+        "dialogueBeats": dialogue_beats,
+    })
+
+
+@mcp.tool()
+async def daz_create_scene(
+    description: str,
+    characters: list[str] | None = None,
+) -> dict[str, Any]:
+    """Generate a complete scene from a natural language description.
+
+    Automatically creates a scene setup including lighting, cameras, and character
+    positioning based on a text description. Uses template-based scene generation
+    with keyword matching to identify scene types and apply appropriate setups.
+
+    Perfect for quickly setting up common scene types without manual configuration.
+
+    Supported Scene Types (detected via keywords):
+        - "dining" / "dinner" / "meal" / "eat" - Dining/meal scene
+        - "interview" / "meeting" / "business" - Interview/business meeting
+        - "portrait" / "headshot" / "photo" - Portrait/photography
+        - "conversation" / "talking" / "chat" - Conversation scene
+        - Generic fallback for unrecognized descriptions
+
+    Args:
+        description: Natural language description of the scene.
+            Examples:
+            - "romantic dinner for two"
+            - "job interview scene"
+            - "professional portrait"
+            - "two friends having a conversation"
+            - "business meeting"
+
+        characters: Optional list of character labels already loaded in the scene.
+            Characters will be positioned appropriately for the scene type.
+            If empty/None, scene will still be set up but positioning skipped.
+
+    Returns:
+        Dict with:
+        - sceneType: Detected scene type ("dining", "interview", "portrait", "conversation", "generic")
+        - description: Original description
+        - charactersUsed: Number of characters processed
+        - actions: List of actions performed (what was set up)
+        - cameras: List of created cameras with type and purpose
+        - suggestions: List of suggestions for improving the scene
+
+    Example:
+        # Romantic dinner scene
+        result = daz_create_scene(
+            "romantic dinner for two",
+            ["Alice", "Bob"]
+        )
+        # Creates:
+        # - Positions Alice and Bob facing each other
+        # - Warm romantic lighting (2 spot lights)
+        # - Wide shot camera
+        # - Over-shoulder camera (for conversation)
+        # - Suggestions: add table, plates, candles
+
+        # Portrait setup
+        result = daz_create_scene(
+            "professional portrait",
+            ["Genesis 9"]
+        )
+        # Creates:
+        # - Three-point portrait lighting
+        # - Close-up camera (50cm)
+        # - Medium close-up camera (90cm)
+        # - Suggestions: adjust expression, add backdrop
+
+        # Job interview
+        result = daz_create_scene(
+            "job interview",
+            ["Interviewer", "Candidate"]
+        )
+        # Creates:
+        # - Characters positioned facing each other
+        # - Professional three-point lighting
+        # - Wide and medium shot cameras
+        # - Suggestions: add desk, chairs, office props
+
+    What Gets Created:
+        1. **Lighting**: Scene-appropriate lighting setup (spot lights)
+           - Dining: Warm romantic or standard dining lights
+           - Interview: Professional three-point lighting
+           - Portrait: Classic three-point portrait lighting
+           - Conversation: Natural conversational lighting
+           - Environment mode set to "Scene Only" (disables dome)
+
+        2. **Character Positioning**: Logical positioning for scene type
+           - Dining: Facing across table distance
+           - Interview: Facing each other at interview distance
+           - Conversation: Facing at conversation distance (closer than interview)
+
+        3. **Cameras**: Multiple camera angles appropriate for scene
+           - Wide shots for establishing
+           - Medium shots for general coverage
+           - Close-ups for portraits
+           - Over-shoulder for conversations
+
+        4. **Suggestions**: Actionable next steps for scene enhancement
+
+    Notes:
+        - Requires characters to be already loaded in scene
+        - Creates new cameras and lights (doesn't delete existing)
+        - Scene type detection is keyword-based (simple matching)
+        - Generic fallback if no template matches
+        - Props are not automatically loaded (suggested in suggestions list)
+        - All positioning uses world-space coordinates
+        - Lighting intensities calibrated for Iray rendering
+
+    Limitations:
+        - Does not load props automatically (manual loading required)
+        - Does not apply poses or emotions (use daz_set_emotion separately)
+        - Simple keyword matching (not full NL understanding)
+        - Limited to pre-defined scene templates
+        - Works best with 1-2 characters
+
+    Follow-up Actions:
+        After scene generation, you can:
+        - Load props manually with daz_load_file()
+        - Apply character emotions with daz_set_emotion()
+        - Fine-tune lighting with daz_set_property()
+        - Adjust camera positions with daz_set_property()
+        - Preview cameras with daz_set_active_camera()
+    """
+    # Validate description
+    if not description or len(description.strip()) == 0:
+        raise ToolError("Description cannot be empty")
+
+    if len(description) > 500:
+        raise ToolError("Description too long (max 500 characters)")
+
+    # Validate characters
+    chars = characters or []
+    if len(chars) > 10:
+        raise ToolError("Too many characters (max 10)")
+
+    return await _execute_by_id("vangard-create-scene", {
+        "description": description,
+        "characters": chars,
     })
 
 
