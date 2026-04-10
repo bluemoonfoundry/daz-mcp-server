@@ -20,7 +20,7 @@ uv run vangard-daz-mcp
 
 ## Available MCP Tools
 
-This server exposes 70 tools to MCP clients:
+This server exposes 84 tools to MCP clients:
 
 ### Documentation Tools
 
@@ -707,6 +707,161 @@ daz_restore_scene_state("before_lighting_test")
 - "What props are near Alice?" → `daz_find_nearby_nodes("Alice", radius=200, include_types=["props"])`
 - "How far is Bob from the chair?" → `daz_find_nearby_nodes("Chair", radius=500, include_types=["figures"])`
 
+### Phase 4 Tools: Cinematic Director Workflow
+
+#### Macro Recording System
+
+| Tool | Description |
+|------|-------------|
+| `daz_start_recording` | Begin recording a macro (captures all subsequent high-level tool calls) |
+| `daz_stop_recording` | Stop recording and save macro with name and description |
+| `daz_replay_macro` | Replay a previously recorded macro |
+| `daz_list_macros` | List all recorded macros with metadata |
+
+**Macro capabilities:**
+- Record sequences of high-level tool calls (scene setup, character posing, lighting, etc.)
+- Save as reusable named macros
+- Replay macros with optional variable substitution
+- Session-based storage (lost on server restart)
+
+**Common use cases:**
+- "Record my character setup workflow for reuse"
+- "Create a lighting macro for portraits"
+- "Save this camera setup sequence"
+
+#### Shot Sequences & Scene Generation
+
+| Tool | Description |
+|------|-------------|
+| `daz_create_shot_sequence` | Create multi-shot sequences (establishing-medium-close, conversation, action, dramatic reveal) |
+| `daz_animate_conversation` | Animate conversation between characters with alternating camera cuts |
+| `daz_create_scene` | Generate complete scenes (two-character conversation, interview, action, group) with figures, cameras, lights |
+
+**Shot sequence types:**
+- `establishing-medium-close`: Wide → Medium → Closeup progression
+- `conversation`: Over-shoulder singles + two-shot for dialogue
+- `action`: Wide, tracking, hero angle sequence
+- `dramatic-reveal`: High angle → medium → extreme closeup
+
+**Scene generation capabilities:**
+- Load Genesis 9 figures from content library
+- Position characters with appropriate spacing
+- Create multi-camera coverage
+- Apply lighting presets
+- Set up animations with keyframes
+
+**Common use cases:**
+- "Set up a conversation scene between two characters"
+- "Create an interview setup"
+- "Generate action scene with hero and villain"
+
+#### Camera Movement & Animation (Phase 4.5)
+
+| Tool | Description |
+|------|-------------|
+| `daz_animate_camera_movement` | Animate common camera movements (dolly, pan, tilt, crane, handheld shake) |
+| `daz_create_camera_path` | Create smooth camera path through multiple waypoints |
+
+**Camera movement types:**
+- `dolly-in` / `dolly-out`: Move toward/away from subject
+- `pan-left` / `pan-right`: Horizontal rotation
+- `tilt-up` / `tilt-down`: Vertical rotation
+- `crane-up` / `crane-down`: Vertical movement with tilt
+- `handheld-shake`: Subtle random shake for realism
+
+**Path types:**
+- `straight`: Linear interpolation between waypoints
+- `smooth`: Smooth curves (Catmull-Rom spline simulation)
+- `arc`: Circular arc path
+
+**Common use cases:**
+- "Dolly in on character's face over 3 seconds"
+- "Create sweeping pan across environment"
+- "Animate camera following curved path"
+
+#### Character Choreography (Phase 4.6)
+
+| Tool | Description |
+|------|-------------|
+| `daz_create_character_path` | Animate character movement along a path with auto-rotation |
+| `daz_arrange_characters` | Position multiple characters in formations (line, semicircle, triangle, circle) |
+| `daz_choreograph_action` | Choreograph interactions (handshake, hug, fight, dance) |
+
+**Character path types:**
+- `straight`: Direct line between waypoints
+- `curved`: Smooth curved path
+- `zigzag`: Sharp direction changes
+- `circular`: Circular movement
+
+**Walking styles:**
+- `casual`: Relaxed walking pace
+- `hurried`: Fast, purposeful movement
+- `sneak`: Slow, careful movement
+
+**Formation types:**
+- `line`: Horizontal or vertical line
+- `semicircle`: Arc formation
+- `triangle`: Three-point formation
+- `conversation-circle`: Circle facing inward
+
+**Choreographed actions:**
+- `handshake`: Business/friendly handshake (60cm spacing)
+- `hug`: Intimate embrace (30cm spacing)
+- `fight`: Combat stance (100cm spacing)
+- `dance`: Partner dance position (40cm spacing)
+
+**Common use cases:**
+- "Animate character walking from point A to point B"
+- "Arrange 5 characters in semicircle formation"
+- "Set up handshake between two business people"
+
+#### Cinematic Coverage (Phase 4.7)
+
+| Tool | Description |
+|------|-------------|
+| `daz_setup_shot_coverage` | Create multiple camera angles for professional coverage |
+| `daz_create_camera_rig` | Set up multi-camera rig for bullet-time or simultaneous angles |
+
+**Coverage types:**
+- `standard`: Master (35mm), Medium (50mm), Closeup (85mm) — 3 cameras
+- `interview`: Two-shot + singles at angles — 3 cameras
+- `dramatic`: Master, Low Angle, High Angle, Profile — 4 cameras
+- `action`: Wide, Medium, Tracking, Hero Low — 4 cameras
+
+**Camera rig capabilities:**
+- 2-8 cameras in circular formation
+- All cameras parented to rig controller
+- Rotate rig to orbit all cameras around subject
+- Switch between cameras for instant angle changes
+- Configurable radius, height variation, focal lengths
+
+**Common use cases:**
+- "Set up standard 3-camera coverage for dialogue"
+- "Create 8-camera bullet-time rig"
+- "Generate interview coverage with singles and two-shot"
+
+#### Phase 4 Implementation Status
+
+**Version:** 0.3.0
+
+**Implemented tools:** 14 total
+- Phase 4.0 (Original): 7 tools (macro system, shot sequences, conversation, scene generation)
+- Phase 4.5: 2 tools (camera movement & animation)
+- Phase 4.6: 3 tools (character choreography)
+- Phase 4.7: 2 tools (cinematic coverage)
+
+**Branch:** `phase4_tools_implementation`
+
+**Remaining planned enhancements:**
+- Lighting Animation (2 tools)
+- Shot Planning (2 tools)
+- Focus & DOF (2 tools)
+- Visual Composition (2 tools)
+- Multi-Scene Management (2 tools)
+- Performance Timing (2 tools)
+
+See `IMPLEMENTATION_PLAN.md` for full roadmap.
+
 ### Updating Documentation
 
 The `daz_script_help` tool loads documentation from `src/vangard_daz_mcp/dazscript_docs.json`. To add or update topics:
@@ -869,7 +1024,7 @@ envNode.findProperty("Environment Mode").setValue(3); // 3 = Scene Only
 
 ## Architecture
 
-**Version:** 0.1.0 (early release, functional and tested)
+**Version:** 0.3.0 (includes Phase 4: Cinematic Director Workflow tools)
 
 This is a [FastMCP](https://github.com/jlowin/fastmcp) 3.x server that bridges Claude (or any MCP client) to DAZ Studio via the **DazScriptServer** HTTP plugin. DAZ Studio must be running locally with DazScriptServer active on port 18811.
 
@@ -901,7 +1056,7 @@ MCP client → FastMCP tool → httpx.AsyncClient → DazScriptServer (HTTP) →
 | `POST /scripts/:id/execute` | All high-level tools | Execute previously registered script by ID |
 
 **Script registry workflow:**
-1. At startup, `_register_scripts()` registers 35 named scripts:
+1. At startup, `_register_scripts()` registers 65 named scripts:
    - **Basic operations:** `vangard-scene-info`, `vangard-get-node`, `vangard-set-property`, `vangard-render`, `vangard-load-file`
    - **Morph discovery:** `vangard-list-morphs`, `vangard-search-morphs`
    - **Scene hierarchy:** `vangard-get-node-hierarchy`, `vangard-list-children`, `vangard-get-parent`, `vangard-set-parent`
@@ -910,6 +1065,11 @@ MCP client → FastMCP tool → httpx.AsyncClient → DazScriptServer (HTTP) →
    - **Viewport/camera control:** `vangard-set-active-camera`, `vangard-orbit-camera-around`, `vangard-frame-camera-to-node`, `vangard-save-camera-preset`, `vangard-load-camera-preset`
    - **Animation system:** `vangard-set-keyframe`, `vangard-get-keyframes`, `vangard-remove-keyframe`, `vangard-clear-animation`, `vangard-set-frame`, `vangard-set-frame-range`, `vangard-get-animation-info`
    - **Advanced rendering:** `vangard-render-with-camera`, `vangard-get-render-settings`, `vangard-batch-render-cameras`, `vangard-render-animation`
+   - **Phase 4: Cinematic Director (v0.3.0):**
+     - Shot sequences: `vangard-create-shot-sequence`, `vangard-animate-conversation`, `vangard-create-scene`
+     - Camera animation: `vangard-animate-camera-movement`, `vangard-create-camera-path`
+     - Character choreography: `vangard-create-character-path`, `vangard-arrange-characters`, `vangard-choreograph-action`
+     - Cinematic coverage: `vangard-setup-shot-coverage`, `vangard-create-camera-rig`
 2. High-level tools call `POST /scripts/:id/execute` with just args (no script body)
 3. On 404 (DAZ Studio restarted), `_execute_by_id()` calls `_register_scripts()` and retries
 
