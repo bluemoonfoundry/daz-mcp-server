@@ -4385,6 +4385,244 @@ _CHOREOGRAPH_ACTION_SCRIPT = """\
 })()
 """
 
+# ---------------------------------------------------------------------------
+# Phase 4.7: Cinematic Coverage Tools
+# ---------------------------------------------------------------------------
+
+_SETUP_SHOT_COVERAGE_SCRIPT = """\
+(function(){
+    var args = getArguments()[0] || {};
+    var subjectLabel = args.subjectLabel;
+    var coverageType = args.coverageType || "standard";
+    var cameraHeight = args.cameraHeight || 160;
+    var autoAim = args.autoAim !== false;
+
+    // Find subject node
+    var subject = Scene.findNodeByLabel(subjectLabel);
+    if (!subject) subject = Scene.findNode(subjectLabel);
+    if (!subject) throw new Error("Subject not found: " + subjectLabel);
+
+    // Get subject position
+    var subX = subject.findProperty("XTranslate");
+    var subY = subject.findProperty("YTranslate");
+    var subZ = subject.findProperty("ZTranslate");
+
+    var subjectPos = {
+        x: subX ? subX.getValue() : 0,
+        y: subY ? subY.getValue() : 0,
+        z: subZ ? subZ.getValue() : 0
+    };
+
+    var cameras = [];
+    var cameraNodes = [];
+
+    // Coverage patterns
+    var shots = [];
+
+    if (coverageType === "standard") {
+        // Master, Medium, Closeup
+        shots = [
+            {name: "Master", distance: 400, height: cameraHeight, angle: 0, focalLength: 35},
+            {name: "Medium", distance: 200, height: cameraHeight, angle: 0, focalLength: 50},
+            {name: "Closeup", distance: 100, height: cameraHeight + 10, angle: 0, focalLength: 85}
+        ];
+    } else if (coverageType === "interview") {
+        // Two-shot + singles
+        shots = [
+            {name: "TwoShot", distance: 250, height: cameraHeight, angle: 0, focalLength: 50},
+            {name: "SingleA", distance: 150, height: cameraHeight, angle: -30, focalLength: 85},
+            {name: "SingleB", distance: 150, height: cameraHeight, angle: 30, focalLength: 85}
+        ];
+    } else if (coverageType === "dramatic") {
+        // Master, Low Angle, High Angle, Profile
+        shots = [
+            {name: "Master", distance: 350, height: cameraHeight, angle: 0, focalLength: 35},
+            {name: "LowAngle", distance: 180, height: cameraHeight - 80, angle: 0, focalLength: 50},
+            {name: "HighAngle", distance: 200, height: cameraHeight + 120, angle: 0, focalLength: 50},
+            {name: "Profile", distance: 180, height: cameraHeight, angle: 90, focalLength: 85}
+        ];
+    } else if (coverageType === "action") {
+        // Wide, Medium, Tracking, Low Angle
+        shots = [
+            {name: "WideAction", distance: 450, height: cameraHeight, angle: 0, focalLength: 28},
+            {name: "MediumAction", distance: 250, height: cameraHeight, angle: 0, focalLength: 50},
+            {name: "TrackingShot", distance: 200, height: cameraHeight - 20, angle: -45, focalLength: 35},
+            {name: "HeroLow", distance: 150, height: cameraHeight - 100, angle: 0, focalLength: 85}
+        ];
+    } else {
+        throw new Error("Unknown coverageType: " + coverageType +
+            ". Valid: standard, interview, dramatic, action");
+    }
+
+    // Create cameras
+    for (var i = 0; i < shots.length; i++) {
+        var shot = shots[i];
+        var cam = Scene.createNode("DzCamera");
+        cam.setLabel(shot.name + "_Camera");
+
+        // Position camera
+        var angleRad = shot.angle * (Math.PI / 180);
+        var camX = subjectPos.x + (shot.distance * Math.sin(angleRad));
+        var camZ = subjectPos.z - (shot.distance * Math.cos(angleRad));
+        var camY = shot.height;
+
+        var xProp = cam.findProperty("XTranslate");
+        var yProp = cam.findProperty("YTranslate");
+        var zProp = cam.findProperty("ZTranslate");
+
+        if (xProp) xProp.setValue(camX);
+        if (yProp) yProp.setValue(camY);
+        if (zProp) zProp.setValue(camZ);
+
+        // Set focal length
+        var focalProp = cam.findProperty("FocalLength");
+        if (focalProp) focalProp.setValue(shot.focalLength);
+
+        // Point at subject if auto-aim
+        if (autoAim) {
+            var xRot = cam.findProperty("XRotate");
+            var yRot = cam.findProperty("YRotate");
+
+            // Calculate direction to subject
+            var dx = subjectPos.x - camX;
+            var dy = subjectPos.y - camY;
+            var dz = subjectPos.z - camZ;
+            var distXZ = Math.sqrt(dx * dx + dz * dz);
+
+            // Y rotation (horizontal)
+            var yRotValue = Math.atan2(dx, -dz) * (180 / Math.PI);
+            // X rotation (vertical tilt)
+            var xRotValue = Math.atan2(dy, distXZ) * (180 / Math.PI);
+
+            if (xRot) xRot.setValue(xRotValue);
+            if (yRot) yRot.setValue(yRotValue);
+        }
+
+        cameras.push({
+            name: shot.name,
+            label: cam.getLabel(),
+            position: {x: camX, y: camY, z: camZ},
+            focalLength: shot.focalLength,
+            distance: shot.distance,
+            angle: shot.angle
+        });
+        cameraNodes.push(cam);
+    }
+
+    return {
+        coverageType: coverageType,
+        subject: subjectLabel,
+        subjectPosition: subjectPos,
+        cameras: cameras,
+        cameraCount: cameras.length,
+        suggestions: [
+            "Switch between cameras to render different angles",
+            "Use daz_animate_camera_movement for dynamic shots",
+            "Adjust focal lengths for desired framing"
+        ]
+    };
+})()
+"""
+
+_CREATE_CAMERA_RIG_SCRIPT = """\
+(function(){
+    var args = getArguments()[0] || {};
+    var rigName = args.rigName || "CameraRig";
+    var centerPosition = args.centerPosition || {x: 0, y: 150, z: 0};
+    var cameraCount = args.cameraCount || 3;
+    var radius = args.radius || 250;
+    var heightVariation = args.heightVariation || 40;
+    var focalLengths = args.focalLengths || [35, 50, 85];
+
+    if (cameraCount < 2 || cameraCount > 8) {
+        throw new Error("cameraCount must be between 2 and 8");
+    }
+
+    if (focalLengths.length < cameraCount) {
+        // Extend focal lengths array to match camera count
+        while (focalLengths.length < cameraCount) {
+            focalLengths.push(50); // Default to 50mm
+        }
+    }
+
+    var cameras = [];
+    var angleStep = 360 / cameraCount;
+
+    // Create parent null for rig
+    var rigParent = Scene.createNode("DzBone");
+    rigParent.setLabel(rigName + "_Rig");
+
+    var rigX = rigParent.findProperty("XTranslate");
+    var rigY = rigParent.findProperty("YTranslate");
+    var rigZ = rigParent.findProperty("ZTranslate");
+
+    if (rigX) rigX.setValue(centerPosition.x);
+    if (rigY) rigY.setValue(centerPosition.y);
+    if (rigZ) rigZ.setValue(centerPosition.z);
+
+    // Create cameras in circle around center
+    for (var i = 0; i < cameraCount; i++) {
+        var angle = i * angleStep;
+        var angleRad = angle * (Math.PI / 180);
+
+        var cam = Scene.createNode("DzCamera");
+        cam.setLabel(rigName + "_Cam" + (i + 1));
+
+        // Position relative to center
+        var offsetX = radius * Math.sin(angleRad);
+        var offsetZ = radius * Math.cos(angleRad);
+        var offsetY = (Math.sin(i * 0.7) * heightVariation);
+
+        var camX = cam.findProperty("XTranslate");
+        var camY = cam.findProperty("YTranslate");
+        var camZ = cam.findProperty("ZTranslate");
+
+        if (camX) camX.setValue(offsetX);
+        if (camY) camY.setValue(offsetY);
+        if (camZ) camZ.setValue(offsetZ);
+
+        // Set focal length
+        var focalProp = cam.findProperty("FocalLength");
+        if (focalProp) focalProp.setValue(focalLengths[i]);
+
+        // Point camera at center
+        var yRot = cam.findProperty("YRotate");
+        if (yRot) yRot.setValue(angle + 180);
+
+        var xRot = cam.findProperty("XRotate");
+        if (xRot) {
+            var tiltAngle = Math.atan2(-offsetY, radius) * (180 / Math.PI);
+            xRot.setValue(tiltAngle);
+        }
+
+        // Parent to rig
+        cam.setParent(rigParent);
+
+        cameras.push({
+            name: cam.getLabel(),
+            angle: angle,
+            focalLength: focalLengths[i],
+            heightOffset: offsetY
+        });
+    }
+
+    return {
+        rigName: rigName,
+        rigLabel: rigParent.getLabel(),
+        centerPosition: centerPosition,
+        radius: radius,
+        cameraCount: cameraCount,
+        cameras: cameras,
+        suggestions: [
+            "Rotate rig parent node (YRotate) to orbit all cameras around subject",
+            "Animate rig position to move entire camera array",
+            "Switch between cameras for bullet-time effect",
+            "Adjust individual camera focal lengths for variety"
+        ]
+    };
+})()
+"""
+
 # Registry entries: script_id → (description, script_text)
 # Registered with DazScriptServer on startup so high-level tools call by ID.
 _REGISTRY: dict[str, tuple[str, str]] = {
@@ -4649,6 +4887,14 @@ _REGISTRY: dict[str, tuple[str, str]] = {
     "vangard-choreograph-action": (
         "Choreograph simple action between characters (handshake, hug, fight, dance)",
         _CHOREOGRAPH_ACTION_SCRIPT,
+    ),
+    "vangard-setup-shot-coverage": (
+        "Create multiple camera angles for cinematic coverage of a subject",
+        _SETUP_SHOT_COVERAGE_SCRIPT,
+    ),
+    "vangard-create-camera-rig": (
+        "Set up multi-camera rig in circular formation for bullet-time or multi-angle shots",
+        _CREATE_CAMERA_RIG_SCRIPT,
     ),
 }
 
@@ -8906,6 +9152,224 @@ async def daz_choreograph_action(
         "characters": characters,
         "startFrame": start_frame,
         "duration": duration,
+    })
+
+
+# ---------------------------------------------------------------------------
+# Phase 4.7: Cinematic Coverage Tools
+# ---------------------------------------------------------------------------
+
+@mcp.tool()
+async def daz_setup_shot_coverage(
+    subject_label: str,
+    coverage_type: str = "standard",
+    camera_height: float = 160.0,
+    auto_aim: bool = True,
+) -> dict[str, Any]:
+    """Create multiple camera angles for cinematic coverage of a subject.
+
+    Automatically positions multiple cameras for professional shot coverage (master,
+    medium, closeup, etc.) based on cinematic conventions. All cameras aim at the
+    subject and use appropriate focal lengths for each shot type.
+
+    Args:
+        subject_label: Label of subject node (character, prop, etc.)
+        coverage_type: Type of coverage to set up:
+            - "standard": Master (wide), Medium, Closeup (3 cameras)
+            - "interview": Two-shot + two singles at angles (3 cameras)
+            - "dramatic": Master, Low Angle, High Angle, Profile (4 cameras)
+            - "action": Wide, Medium, Tracking, Hero Low (4 cameras)
+        camera_height: Height of cameras in cm (default: 160 = eye level)
+        auto_aim: Automatically point cameras at subject (default: True)
+
+    Returns:
+        Dict with:
+        - coverageType: Type of coverage used
+        - subject: Subject label
+        - subjectPosition: {x, y, z} position of subject
+        - cameras: List of dicts with name, label, position, focalLength, distance, angle
+        - cameraCount: Number of cameras created
+        - suggestions: List of recommended next steps
+
+    Example:
+        # Standard 3-camera coverage for dialogue scene
+        result = daz_setup_shot_coverage(
+            "Alice",
+            coverage_type="standard",
+            camera_height=165,
+            auto_aim=True
+        )
+        # Creates Master (35mm, 400cm), Medium (50mm, 200cm), Closeup (85mm, 100cm)
+
+        # Interview setup with two-shot + singles
+        result = daz_setup_shot_coverage(
+            "Interviewer",
+            coverage_type="interview",
+            camera_height=160
+        )
+        # Creates TwoShot (50mm), SingleA (85mm, -30°), SingleB (85mm, +30°)
+
+        # Dramatic multi-angle coverage
+        result = daz_setup_shot_coverage(
+            "Hero",
+            coverage_type="dramatic",
+            camera_height=170
+        )
+        # Creates Master, LowAngle (-80cm), HighAngle (+120cm), Profile (90°)
+
+        # Action scene with dynamic angles
+        result = daz_setup_shot_coverage(
+            "Stunt_Character",
+            coverage_type="action",
+            camera_height=150
+        )
+        # Creates WideAction (28mm), MediumAction, TrackingShot (-45°), HeroLow
+
+    Notes:
+        - All cameras automatically created and positioned
+        - Focal lengths chosen for each shot type (28-85mm range)
+        - Standard coverage: 3 cameras (most common setup)
+        - Interview: 3 cameras (two-shot + singles)
+        - Dramatic: 4 cameras (varied angles and heights)
+        - Action: 4 cameras (wide coverage + low angles)
+        - Cameras named by shot type (Master_Camera, Closeup_Camera, etc.)
+        - Switch active camera to render different angles
+        - Use with daz_animate_camera_movement for dynamic shots
+        - Combine with daz_render_animation to output multiple angles
+    """
+    # Validate coverage type
+    valid_types = ["standard", "interview", "dramatic", "action"]
+    if coverage_type not in valid_types:
+        raise ToolError(
+            f"Invalid coverage_type '{coverage_type}'. "
+            f"Valid options: {', '.join(valid_types)}"
+        )
+
+    # Validate camera height
+    if camera_height < 0 or camera_height > 500:
+        raise ToolError("camera_height must be between 0 and 500 cm")
+
+    return await _execute_by_id("vangard-setup-shot-coverage", {
+        "subjectLabel": subject_label,
+        "coverageType": coverage_type,
+        "cameraHeight": camera_height,
+        "autoAim": auto_aim,
+    })
+
+
+@mcp.tool()
+async def daz_create_camera_rig(
+    rig_name: str = "CameraRig",
+    center_position: dict[str, float] | None = None,
+    camera_count: int = 3,
+    radius: float = 250.0,
+    height_variation: float = 40.0,
+    focal_lengths: list[int] | None = None,
+) -> dict[str, Any]:
+    """Set up multi-camera rig for bullet-time or simultaneous multi-angle shots.
+
+    Creates multiple cameras arranged in a circle around a center point, all parented
+    to a rig controller. Rotate the rig to orbit all cameras around the subject, or
+    switch between cameras for instant angle changes.
+
+    Args:
+        rig_name: Base name for rig (default: "CameraRig")
+        center_position: Center point {x, y, z} in cm (default: {x:0, y:150, z:0})
+        camera_count: Number of cameras in rig, 2-8 (default: 3)
+        radius: Distance from center to cameras in cm (default: 250)
+        height_variation: Variation in camera heights in cm (default: 40)
+        focal_lengths: List of focal lengths in mm (default: [35, 50, 85])
+
+    Returns:
+        Dict with:
+        - rigName: Name of rig
+        - rigLabel: Label of rig parent node
+        - centerPosition: {x, y, z} center point
+        - radius: Distance from center
+        - cameraCount: Number of cameras
+        - cameras: List of dicts with name, angle, focalLength, heightOffset
+        - suggestions: List of recommended next steps
+
+    Example:
+        # 3-camera rig for product visualization
+        result = daz_create_camera_rig(
+            rig_name="ProductRig",
+            center_position={"x": 0, "y": 100, "z": 0},
+            camera_count=3,
+            radius=200,
+            focal_lengths=[50, 50, 50]
+        )
+        # Creates 3 cameras at 120° intervals, all 200cm from center
+
+        # 8-camera bullet-time rig
+        result = daz_create_camera_rig(
+            rig_name="BulletTime",
+            center_position={"x": 0, "y": 150, "z": 0},
+            camera_count=8,
+            radius=300,
+            height_variation=20,
+            focal_lengths=[85, 85, 85, 85, 85, 85, 85, 85]
+        )
+        # Creates 8 cameras at 45° intervals for smooth frozen-time effect
+
+        # 4-camera interview rig with varied focal lengths
+        result = daz_create_camera_rig(
+            rig_name="InterviewRig",
+            camera_count=4,
+            radius=250,
+            focal_lengths=[35, 50, 85, 85]
+        )
+        # Wide, medium, two closeups at different angles
+
+    Notes:
+        - All cameras parented to rig controller node
+        - Rotate rig YRotate to orbit all cameras around subject
+        - Animate rig position to move entire camera array
+        - Switch between cameras for instant angle changes (bullet-time)
+        - Height variation adds subtle vertical offsets for visual interest
+        - Cameras automatically point at center
+        - If focal_lengths list too short, remaining cameras use 50mm
+        - Cameras named RigName_Cam1, RigName_Cam2, etc.
+        - Evenly spaced around circle (360° / camera_count)
+        - Perfect for:
+          * Bullet-time effects (8+ cameras)
+          * Product turntables (3-4 cameras)
+          * Multi-angle coverage (4-6 cameras)
+          * 360° video (6-8 cameras)
+    """
+    # Validate camera count
+    if camera_count < 2 or camera_count > 8:
+        raise ToolError("camera_count must be between 2 and 8")
+
+    # Validate radius
+    if radius < 50 or radius > 2000:
+        raise ToolError("radius must be between 50 and 2000 cm")
+
+    # Validate height variation
+    if height_variation < 0 or height_variation > 200:
+        raise ToolError("height_variation must be between 0 and 200 cm")
+
+    # Default center position
+    if center_position is None:
+        center_position = {"x": 0.0, "y": 150.0, "z": 0.0}
+
+    # Default focal lengths
+    if focal_lengths is None:
+        focal_lengths = [35, 50, 85]
+
+    # Validate focal lengths
+    if focal_lengths:
+        for fl in focal_lengths:
+            if fl < 10 or fl > 200:
+                raise ToolError("All focal lengths must be between 10 and 200 mm")
+
+    return await _execute_by_id("vangard-create-camera-rig", {
+        "rigName": rig_name,
+        "centerPosition": center_position,
+        "cameraCount": camera_count,
+        "radius": radius,
+        "heightVariation": height_variation,
+        "focalLengths": focal_lengths,
     })
 
 
