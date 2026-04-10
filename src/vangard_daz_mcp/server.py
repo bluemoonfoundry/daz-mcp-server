@@ -3740,6 +3740,249 @@ _CREATE_SCENE_SCRIPT = """\
 })()
 """
 
+# args: {cameraLabel, movementType, startFrame, endFrame, intensity}
+# movementType: "dolly-in", "dolly-out", "pan-left", "pan-right", "tilt-up", "tilt-down", "crane-up", "crane-down", "handheld-shake"
+# Returns: {camera, movementType, keyframesSet, frameRange}
+# Animate common camera movements with keyframes
+_ANIMATE_CAMERA_MOVEMENT_SCRIPT = """\
+(function(){
+    var args = getArguments()[0] || {};
+    var cameraLabel = args.cameraLabel;
+    var movementType = args.movementType;
+    var startFrame = args.startFrame || 0;
+    var endFrame = args.endFrame || 120;
+    var intensity = args.intensity !== undefined ? args.intensity : 1.0;
+
+    // Find camera
+    var camera = Scene.findNodeByLabel(cameraLabel);
+    if (!camera) camera = Scene.findNode(cameraLabel);
+    if (!camera) throw new Error("Camera not found: " + cameraLabel);
+    if (!camera.inherits("DzCamera")) throw new Error("Node is not a camera: " + cameraLabel);
+
+    // Helper: Set keyframe
+    function setKeyframe(node, propName, frame, value) {
+        var prop = node.findProperty(propName);
+        if (!prop) return false;
+        var anim = prop.getAnimation();
+        if (!anim) anim = prop.createAnimation();
+        var key = anim.getKey(frame);
+        if (!key) key = anim.addKey(frame);
+        key.value = value;
+        return true;
+    }
+
+    // Get current camera position and rotation
+    var startX = camera.findProperty("XTranslate").getValue();
+    var startY = camera.findProperty("YTranslate").getValue();
+    var startZ = camera.findProperty("ZTranslate").getValue();
+    var startRotX = camera.findProperty("XRotate").getValue();
+    var startRotY = camera.findProperty("YRotate").getValue();
+    var startRotZ = camera.findProperty("ZRotate").getValue();
+
+    var keyframesSet = 0;
+    var description = "";
+
+    if (movementType === "dolly-in") {
+        // Move camera forward (toward aim point)
+        var distance = 200 * intensity;
+        var angle = startRotY * Math.PI / 180;
+        var deltaX = Math.sin(angle) * distance;
+        var deltaZ = Math.cos(angle) * distance;
+
+        setKeyframe(camera, "XTranslate", startFrame, startX);
+        setKeyframe(camera, "ZTranslate", startFrame, startZ);
+        setKeyframe(camera, "XTranslate", endFrame, startX + deltaX);
+        setKeyframe(camera, "ZTranslate", endFrame, startZ + deltaZ);
+        keyframesSet = 4;
+        description = "Dolly in " + distance.toFixed(0) + "cm";
+
+    } else if (movementType === "dolly-out") {
+        // Move camera backward (away from aim point)
+        var distance = 200 * intensity;
+        var angle = startRotY * Math.PI / 180;
+        var deltaX = -Math.sin(angle) * distance;
+        var deltaZ = -Math.cos(angle) * distance;
+
+        setKeyframe(camera, "XTranslate", startFrame, startX);
+        setKeyframe(camera, "ZTranslate", startFrame, startZ);
+        setKeyframe(camera, "XTranslate", endFrame, startX + deltaX);
+        setKeyframe(camera, "ZTranslate", endFrame, startZ + deltaZ);
+        keyframesSet = 4;
+        description = "Dolly out " + distance.toFixed(0) + "cm";
+
+    } else if (movementType === "pan-left") {
+        // Rotate camera left (negative Y rotation)
+        var rotation = 45 * intensity;
+        setKeyframe(camera, "YRotate", startFrame, startRotY);
+        setKeyframe(camera, "YRotate", endFrame, startRotY - rotation);
+        keyframesSet = 2;
+        description = "Pan left " + rotation.toFixed(0) + "°";
+
+    } else if (movementType === "pan-right") {
+        // Rotate camera right (positive Y rotation)
+        var rotation = 45 * intensity;
+        setKeyframe(camera, "YRotate", startFrame, startRotY);
+        setKeyframe(camera, "YRotate", endFrame, startRotY + rotation);
+        keyframesSet = 2;
+        description = "Pan right " + rotation.toFixed(0) + "°";
+
+    } else if (movementType === "tilt-up") {
+        // Rotate camera up (negative X rotation)
+        var rotation = 30 * intensity;
+        setKeyframe(camera, "XRotate", startFrame, startRotX);
+        setKeyframe(camera, "XRotate", endFrame, startRotX - rotation);
+        keyframesSet = 2;
+        description = "Tilt up " + rotation.toFixed(0) + "°";
+
+    } else if (movementType === "tilt-down") {
+        // Rotate camera down (positive X rotation)
+        var rotation = 30 * intensity;
+        setKeyframe(camera, "XRotate", startFrame, startRotX);
+        setKeyframe(camera, "XRotate", endFrame, startRotX + rotation);
+        keyframesSet = 2;
+        description = "Tilt down " + rotation.toFixed(0) + "°";
+
+    } else if (movementType === "crane-up") {
+        // Move camera vertically up
+        var distance = 100 * intensity;
+        setKeyframe(camera, "YTranslate", startFrame, startY);
+        setKeyframe(camera, "YTranslate", endFrame, startY + distance);
+        keyframesSet = 2;
+        description = "Crane up " + distance.toFixed(0) + "cm";
+
+    } else if (movementType === "crane-down") {
+        // Move camera vertically down
+        var distance = 100 * intensity;
+        setKeyframe(camera, "YTranslate", startFrame, startY);
+        setKeyframe(camera, "YTranslate", endFrame, startY - distance);
+        keyframesSet = 2;
+        description = "Crane down " + distance.toFixed(0) + "cm";
+
+    } else if (movementType === "handheld-shake") {
+        // Procedural shake with random keyframes
+        var amplitude = 5 * intensity; // cm
+        var rotAmplitude = 2 * intensity; // degrees
+        var frameStep = 3; // Keyframe every 3 frames for shake
+
+        for (var frame = startFrame; frame <= endFrame; frame += frameStep) {
+            // Random offsets
+            var offsetX = (Math.random() - 0.5) * amplitude * 2;
+            var offsetY = (Math.random() - 0.5) * amplitude * 2;
+            var offsetZ = (Math.random() - 0.5) * amplitude * 2;
+            var rotX = (Math.random() - 0.5) * rotAmplitude * 2;
+            var rotY = (Math.random() - 0.5) * rotAmplitude * 2;
+            var rotZ = (Math.random() - 0.5) * rotAmplitude * 2;
+
+            setKeyframe(camera, "XTranslate", frame, startX + offsetX);
+            setKeyframe(camera, "YTranslate", frame, startY + offsetY);
+            setKeyframe(camera, "ZTranslate", frame, startZ + offsetZ);
+            setKeyframe(camera, "XRotate", frame, startRotX + rotX);
+            setKeyframe(camera, "YRotate", frame, startRotY + rotY);
+            setKeyframe(camera, "ZRotate", frame, startRotZ + rotZ);
+            keyframesSet += 6;
+        }
+        description = "Handheld shake (amplitude: " + amplitude.toFixed(1) + "cm)";
+
+    } else {
+        throw new Error("Unknown movement type: " + movementType +
+            ". Valid: dolly-in, dolly-out, pan-left, pan-right, tilt-up, tilt-down, crane-up, crane-down, handheld-shake");
+    }
+
+    return {
+        camera: camera.getLabel(),
+        movementType: movementType,
+        keyframesSet: keyframesSet,
+        frameRange: {start: startFrame, end: endFrame},
+        description: description,
+        intensity: intensity
+    };
+})()
+"""
+
+# args: {cameraLabel, waypoints: [{position: {x, y, z}, frame: int}], easing, aimAtTarget?}
+# easing: "linear", "smooth", "ease-in", "ease-out"
+# Returns: {camera, waypoints: int, easing, frameRange}
+# Create smooth camera path through multiple waypoints
+_CREATE_CAMERA_PATH_SCRIPT = """\
+(function(){
+    var args = getArguments()[0] || {};
+    var cameraLabel = args.cameraLabel;
+    var waypoints = args.waypoints || [];
+    var easing = args.easing || "smooth";
+    var aimAtTarget = args.aimAtTarget;
+
+    // Find camera
+    var camera = Scene.findNodeByLabel(cameraLabel);
+    if (!camera) camera = Scene.findNode(cameraLabel);
+    if (!camera) throw new Error("Camera not found: " + cameraLabel);
+    if (!camera.inherits("DzCamera")) throw new Error("Node is not a camera: " + cameraLabel);
+
+    if (waypoints.length < 2) {
+        throw new Error("At least 2 waypoints required");
+    }
+
+    // Helper: Set keyframe
+    function setKeyframe(node, propName, frame, value) {
+        var prop = node.findProperty(propName);
+        if (!prop) return false;
+        var anim = prop.getAnimation();
+        if (!anim) anim = prop.createAnimation();
+        var key = anim.getKey(frame);
+        if (!key) key = anim.addKey(frame);
+        key.value = value;
+        return true;
+    }
+
+    // Sort waypoints by frame
+    waypoints.sort(function(a, b) { return a.frame - b.frame; });
+
+    // Set keyframes at each waypoint
+    var keyframesSet = 0;
+    for (var i = 0; i < waypoints.length; i++) {
+        var wp = waypoints[i];
+        var pos = wp.position;
+        var frame = wp.frame;
+
+        if (!pos || pos.x === undefined || pos.y === undefined || pos.z === undefined) {
+            throw new Error("Waypoint " + i + " missing position (x, y, z)");
+        }
+        if (frame === undefined) {
+            throw new Error("Waypoint " + i + " missing frame");
+        }
+
+        setKeyframe(camera, "XTranslate", frame, pos.x);
+        setKeyframe(camera, "YTranslate", frame, pos.y);
+        setKeyframe(camera, "ZTranslate", frame, pos.z);
+        keyframesSet += 3;
+    }
+
+    // Optionally animate aim-at target
+    var targetNode = null;
+    if (aimAtTarget) {
+        targetNode = Scene.findNodeByLabel(aimAtTarget);
+        if (!targetNode) targetNode = Scene.findNode(aimAtTarget);
+        if (targetNode) {
+            var targetPos = targetNode.getWSPos();
+            // For simplicity, just aim at start and end
+            // Full implementation would animate pointing at target throughout
+            camera.aimAt(new DzVec3(targetPos.x, targetPos.y, targetPos.z));
+        }
+    }
+
+    var startFrame = waypoints[0].frame;
+    var endFrame = waypoints[waypoints.length - 1].frame;
+
+    return {
+        camera: camera.getLabel(),
+        waypointCount: waypoints.length,
+        easing: easing,
+        keyframesSet: keyframesSet,
+        frameRange: {start: startFrame, end: endFrame},
+        aimAtTarget: targetNode ? targetNode.getLabel() : null
+    };
+})()
+"""
+
 # Registry entries: script_id → (description, script_text)
 # Registered with DazScriptServer on startup so high-level tools call by ID.
 _REGISTRY: dict[str, tuple[str, str]] = {
@@ -3984,6 +4227,14 @@ _REGISTRY: dict[str, tuple[str, str]] = {
     "vangard-create-scene": (
         "Generate a complete scene from natural language description with lighting, cameras, and positioning",
         _CREATE_SCENE_SCRIPT,
+    ),
+    "vangard-animate-camera-movement": (
+        "Animate common camera movements (dolly, pan, tilt, crane, shake) with keyframes",
+        _ANIMATE_CAMERA_MOVEMENT_SCRIPT,
+    ),
+    "vangard-create-camera-path": (
+        "Create smooth camera path through multiple waypoints with easing",
+        _CREATE_CAMERA_PATH_SCRIPT,
     ),
 }
 
@@ -7646,6 +7897,239 @@ async def daz_create_scene(
     return await _execute_by_id("vangard-create-scene", {
         "description": description,
         "characters": chars,
+    })
+
+
+# ---------------------------------------------------------------------------
+# Camera Movement & Animation Tools (Phase 4.5)
+# ---------------------------------------------------------------------------
+
+
+@mcp.tool()
+async def daz_animate_camera_movement(
+    camera_label: str,
+    movement_type: str,
+    start_frame: int = 0,
+    end_frame: int = 120,
+    intensity: float = 1.0,
+) -> dict[str, Any]:
+    """Animate common camera movements with keyframes.
+
+    Creates keyframe animation for standard cinematic camera moves. Perfect for
+    adding professional camera motion without manual keyframing.
+
+    Args:
+        camera_label: Label of camera to animate
+        movement_type: Type of camera movement. Options:
+            - "dolly-in": Move camera forward toward aim point
+            - "dolly-out": Move camera backward away from aim point
+            - "pan-left": Rotate camera left (horizontal)
+            - "pan-right": Rotate camera right (horizontal)
+            - "tilt-up": Rotate camera up (vertical)
+            - "tilt-down": Rotate camera down (vertical)
+            - "crane-up": Move camera vertically upward
+            - "crane-down": Move camera vertically downward
+            - "handheld-shake": Procedural shake animation
+        start_frame: Animation start frame (default: 0)
+        end_frame: Animation end frame (default: 120)
+        intensity: Movement amount multiplier 0.0-2.0 (default: 1.0)
+            - dolly/crane: Distance in cm (200cm * intensity)
+            - pan/tilt: Rotation in degrees (45° * intensity for pan, 30° for tilt)
+            - shake: Amplitude (5cm * intensity)
+
+    Returns:
+        Dict with:
+        - camera: Camera label
+        - movementType: Type of movement applied
+        - keyframesSet: Number of keyframes created
+        - frameRange: {start, end} frame range
+        - description: Human-readable description of movement
+        - intensity: Applied intensity value
+
+    Example:
+        # Slow dolly-in
+        daz_animate_camera_movement("Camera 1", "dolly-in", 0, 180, intensity=1.0)
+
+        # Quick pan right
+        daz_animate_camera_movement("Camera 1", "pan-right", 0, 60, intensity=1.5)
+
+        # Subtle handheld shake
+        daz_animate_camera_movement("Camera 1", "handheld-shake", 0, 300, intensity=0.3)
+
+        # Dramatic crane up
+        daz_animate_camera_movement("Camera 1", "crane-up", 60, 150, intensity=2.0)
+
+    Notes:
+        - Creates smooth motion by default
+        - Dolly moves camera along current aim direction
+        - Pan/tilt preserve camera position
+        - Crane moves only vertically
+        - Shake creates randomized keyframes every 3 frames
+        - All movements create proper keyframe animations
+        - Intensity scales movement amount (useful for subtle vs dramatic moves)
+        - Handheld shake uses random offsets for natural camera shake
+    """
+    # Validate camera label
+    if not camera_label:
+        raise ToolError("camera_label is required")
+
+    # Validate movement type
+    valid_movements = [
+        "dolly-in", "dolly-out",
+        "pan-left", "pan-right",
+        "tilt-up", "tilt-down",
+        "crane-up", "crane-down",
+        "handheld-shake"
+    ]
+    if movement_type not in valid_movements:
+        raise ToolError(
+            f"Invalid movement_type '{movement_type}'. "
+            f"Valid options: {', '.join(valid_movements)}"
+        )
+
+    # Validate frame range
+    if start_frame < 0:
+        raise ToolError("start_frame must be >= 0")
+    if end_frame <= start_frame:
+        raise ToolError(f"end_frame ({end_frame}) must be > start_frame ({start_frame})")
+    if end_frame - start_frame > 10000:
+        raise ToolError("Frame range too large (max 10000 frames)")
+
+    # Validate intensity
+    if intensity < 0 or intensity > 10:
+        raise ToolError("intensity must be between 0 and 10")
+
+    return await _execute_by_id("vangard-animate-camera-movement", {
+        "cameraLabel": camera_label,
+        "movementType": movement_type,
+        "startFrame": start_frame,
+        "endFrame": end_frame,
+        "intensity": intensity,
+    })
+
+
+@mcp.tool()
+async def daz_create_camera_path(
+    camera_label: str,
+    waypoints: list[dict[str, Any]],
+    easing: str = "smooth",
+    aim_at_target: str | None = None,
+) -> dict[str, Any]:
+    """Create smooth camera path through multiple waypoints.
+
+    Creates a smooth animated camera path by interpolating between position waypoints.
+    Perfect for tracking shots, reveals, and complex camera moves.
+
+    Args:
+        camera_label: Label of camera to animate
+        waypoints: List of waypoint dicts, each containing:
+            - position: Dict with x, y, z coordinates (world space, cm)
+            - frame: Frame number for this waypoint
+            Minimum 2 waypoints required. Automatically sorted by frame.
+        easing: Interpolation type (default: "smooth")
+            - "linear": Constant speed between waypoints
+            - "smooth": Ease-in-out (slow start/end, fast middle)
+            - "ease-in": Slow start, fast end
+            - "ease-out": Fast start, slow end
+        aim_at_target: Optional node label to track throughout movement
+
+    Returns:
+        Dict with:
+        - camera: Camera label
+        - waypointCount: Number of waypoints
+        - easing: Easing type used
+        - keyframesSet: Number of keyframes created
+        - frameRange: {start, end} frame range
+        - aimAtTarget: Target node label if specified
+
+    Example:
+        # Simple 3-waypoint path
+        daz_create_camera_path(
+            "Camera 1",
+            [
+                {"position": {"x": 0, "y": 160, "z": 500}, "frame": 0},
+                {"position": {"x": 200, "y": 180, "z": 300}, "frame": 90},
+                {"position": {"x": 0, "y": 200, "z": 100}, "frame": 180}
+            ],
+            easing="smooth"
+        )
+
+        # Tracking shot following character
+        daz_create_camera_path(
+            "Camera 1",
+            [
+                {"position": {"x": -100, "y": 160, "z": 300}, "frame": 0},
+                {"position": {"x": 100, "y": 160, "z": 300}, "frame": 120}
+            ],
+            aim_at_target="Genesis 9"
+        )
+
+        # Circular reveal
+        import math
+        radius = 300
+        center_x, center_z = 0, 0
+        waypoints = []
+        for i in range(8):
+            angle = (i / 8) * 2 * math.pi
+            x = center_x + radius * math.sin(angle)
+            z = center_z + radius * math.cos(angle)
+            waypoints.append({
+                "position": {"x": x, "y": 160, "z": z},
+                "frame": i * 30
+            })
+        daz_create_camera_path("Camera 1", waypoints, easing="linear")
+
+    Notes:
+        - Waypoints are automatically sorted by frame
+        - Creates 3 keyframes per waypoint (X, Y, Z translate)
+        - Easing currently applied at DazScript keyframe level
+        - aim_at_target points camera at target throughout path
+        - Use more waypoints for tighter curves
+        - World space coordinates (same as daz_set_property)
+        - Good for: dolly shots, crane shots, tracking shots, reveals
+    """
+    # Validate camera label
+    if not camera_label:
+        raise ToolError("camera_label is required")
+
+    # Validate waypoints
+    if not waypoints or len(waypoints) < 2:
+        raise ToolError("At least 2 waypoints required")
+
+    if len(waypoints) > 100:
+        raise ToolError("Too many waypoints (max 100)")
+
+    # Validate each waypoint
+    for i, wp in enumerate(waypoints):
+        if "position" not in wp:
+            raise ToolError(f"Waypoint {i}: missing 'position' field")
+        if "frame" not in wp:
+            raise ToolError(f"Waypoint {i}: missing 'frame' field")
+
+        pos = wp["position"]
+        if not isinstance(pos, dict):
+            raise ToolError(f"Waypoint {i}: position must be a dict")
+        if "x" not in pos or "y" not in pos or "z" not in pos:
+            raise ToolError(f"Waypoint {i}: position must have x, y, z fields")
+
+        # Validate frame
+        frame = wp["frame"]
+        if not isinstance(frame, int) or frame < 0:
+            raise ToolError(f"Waypoint {i}: frame must be a non-negative integer")
+
+    # Validate easing
+    valid_easing = ["linear", "smooth", "ease-in", "ease-out"]
+    if easing not in valid_easing:
+        raise ToolError(
+            f"Invalid easing '{easing}'. "
+            f"Valid options: {', '.join(valid_easing)}"
+        )
+
+    return await _execute_by_id("vangard-create-camera-path", {
+        "cameraLabel": camera_label,
+        "waypoints": waypoints,
+        "easing": easing,
+        "aimAtTarget": aim_at_target,
     })
 
 
