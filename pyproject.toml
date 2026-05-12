@@ -21,6 +21,12 @@ packages = ["src/vangard_daz_mcp"]
 
 [tool.pytest.ini_options]
 asyncio_mode = "auto"
+asyncio_default_fixture_loop_scope = "function"
+markers = [
+    "integration: tests that require a running DAZ Studio instance (skipped automatically if not reachable)",
+    "slow: tests that trigger actual renders (time-consuming — excluded by default, run with -m slow)",
+    "two_figures: tests that require at least 2 figures loaded in the scene",
+]
 
 [dependency-groups]
 dev = [

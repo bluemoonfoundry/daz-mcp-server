@@ -530,12 +530,13 @@ async def test_daz_get_request_result_failed_raises(mock_daz):
         await daz_get_request_result("render-abc")
 
 
-async def test_daz_get_request_result_cancelled_raises(mock_daz):
+async def test_daz_get_request_result_cancelled_returns(mock_daz):
+    """Cancelled is an intentional outcome, not an error — should return the status dict."""
     mock_daz.get("/requests/render-abc/result").mock(
         return_value=_result_response("render-abc", status="cancelled")
     )
-    with pytest.raises(ToolError, match="cancelled"):
-        await daz_get_request_result("render-abc")
+    result = await daz_get_request_result("render-abc")
+    assert result["status"] == "cancelled"
 
 
 async def test_daz_get_request_result_no_wait(mock_daz):
@@ -736,11 +737,12 @@ async def test_daz_wait_for_request_failed(mock_daz):
 
 
 async def test_daz_wait_for_request_cancelled(mock_daz):
+    """Cancelled is an intentional outcome — wait should return the status dict immediately."""
     mock_daz.get("/requests/render-abc/status").mock(
         return_value=_status_response("render-abc", "cancelled")
     )
-    with pytest.raises(ToolError, match="cancelled"):
-        await daz_wait_for_request("render-abc", poll_interval_seconds=0.0)
+    result = await daz_wait_for_request("render-abc", poll_interval_seconds=0.0)
+    assert result["status"] == "cancelled"
 
 
 async def test_daz_wait_for_request_timeout(mock_daz):

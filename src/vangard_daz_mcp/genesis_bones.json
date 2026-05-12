@@ -1,0 +1,104 @@
+{
+  "_comment": "Verified bone internal names per Genesis generation. Probed live from DAZ Studio 4.24 against real figures. Use figureName() detection to select the correct entry.",
+
+  "detection": {
+    "comment": "Match against figure.getName() (internal name, not label). Genesis 3 uses 'Genesis3', Gen 8 uses 'Genesis8', Gen 9 uses 'Genesis9'.",
+    "gen3_pattern": "Genesis3",
+    "gen8_pattern": "Genesis8",
+    "gen9_pattern": "Genesis9"
+  },
+
+  "gen3": {
+    "label": "Genesis 3",
+    "matches": ["Genesis3Female", "Genesis3Male"],
+    "example_labels": ["Genesis 3 Female", "Genesis 3 Male"],
+    "bones": {
+      "hip":       "hip",
+      "pelvis":    "pelvis",
+      "spine": ["abdomenLower", "abdomenUpper", "chestLower", "chestUpper"],
+      "neck":  ["neckLower", "neckUpper"],
+      "head":  "head",
+      "eye":   { "left": "lEye",       "right": "rEye" },
+      "shoulder": { "left": "lShldrBend",   "right": "rShldrBend" },
+      "shoulderTwist": { "left": "lShldrTwist",  "right": "rShldrTwist" },
+      "forearm":  { "left": "lForearmBend", "right": "rForearmBend" },
+      "forearmTwist": { "left": "lForearmTwist", "right": "rForearmTwist" },
+      "hand":     { "left": "lHand",       "right": "rHand" },
+      "thigh":    { "left": "lThighBend",   "right": "rThighBend" },
+      "thighTwist": { "left": "lThighTwist", "right": "rThighTwist" },
+      "shin":     { "left": "lShin",        "right": "rShin" },
+      "foot":     { "left": "lFoot",        "right": "rFoot" }
+    }
+  },
+
+  "gen8": {
+    "label": "Genesis 8 / 8.1",
+    "matches": ["Genesis8Female", "Genesis8Male", "Genesis81Female", "Genesis81Male"],
+    "example_labels": ["Genesis 8 Female", "Genesis 8 Male", "Genesis 8.1 Female", "Genesis 8.1 Male"],
+    "bones": {
+      "hip":       "hip",
+      "pelvis":    "pelvis",
+      "spine": ["abdomenLower", "abdomenUpper", "chestLower", "chestUpper"],
+      "neck":  ["neckLower", "neckUpper"],
+      "head":  "head",
+      "eye":   { "left": "lEye",       "right": "rEye" },
+      "shoulder": { "left": "lShldrBend",   "right": "rShldrBend" },
+      "shoulderTwist": { "left": "lShldrTwist",  "right": "rShldrTwist" },
+      "forearm":  { "left": "lForearmBend", "right": "rForearmBend" },
+      "forearmTwist": { "left": "lForearmTwist", "right": "rForearmTwist" },
+      "hand":     { "left": "lHand",       "right": "rHand" },
+      "thigh":    { "left": "lThighBend",   "right": "rThighBend" },
+      "thighTwist": { "left": "lThighTwist", "right": "rThighTwist" },
+      "shin":     { "left": "lShin",        "right": "rShin" },
+      "foot":     { "left": "lFoot",        "right": "rFoot" }
+    }
+  },
+
+  "gen9": {
+    "label": "Genesis 9",
+    "matches": ["Genesis9", "Genesis9Female", "Genesis9Male"],
+    "example_labels": ["Genesis 9", "Genesis 9 Female", "Genesis 9 Male"],
+    "bones": {
+      "hip":       "hip",
+      "pelvis":    "pelvis",
+      "spine": ["spine1", "spine2", "spine3", "spine4"],
+      "neck":  ["neck1", "neck2"],
+      "head":  "head",
+      "eye":   { "left": "l_eye",       "right": "r_eye" },
+      "shoulder": { "left": "l_shoulder",   "right": "r_shoulder" },
+      "upperArm": { "left": "l_upperarm",   "right": "r_upperarm" },
+      "forearm":  { "left": "l_forearm",    "right": "r_forearm" },
+      "hand":     { "left": "l_hand",       "right": "r_hand" },
+      "thigh":    { "left": "l_thigh",      "right": "r_thigh" },
+      "thighTwist": { "left": "l_thightwist1", "right": "r_thightwist1" },
+      "shin":     { "left": "l_shin",       "right": "r_shin" },
+      "foot":     { "left": "l_foot",       "right": "r_foot" }
+    }
+  },
+
+  "fallback_chains": {
+    "comment": "Ordered fallback lists for scripts that must handle multiple generations without knowing which one is loaded. Try each name in order until findBone() returns non-null.",
+    "head":          ["head"],
+    "neck_upper":    ["neckUpper", "neck2"],
+    "neck_lower":    ["neckLower", "neck1"],
+    "eye_left":      ["lEye", "l_eye"],
+    "eye_right":     ["rEye", "r_eye"],
+    "chest_upper":   ["chestUpper", "spine3"],
+    "chest_lower":   ["chestLower", "spine2"],
+    "abdomen_upper": ["abdomenUpper", "spine2"],
+    "abdomen_lower": ["abdomenLower", "spine1"],
+    "hip":           ["hip"],
+    "shoulder_left":    ["lShldrBend", "l_upperarm"],
+    "shoulder_right":   ["rShldrBend", "r_upperarm"],
+    "forearm_left":     ["lForearmBend", "l_forearm"],
+    "forearm_right":    ["rForearmBend", "r_forearm"],
+    "hand_left":        ["lHand", "l_hand"],
+    "hand_right":       ["rHand", "r_hand"],
+    "thigh_left":       ["lThighBend", "l_thigh"],
+    "thigh_right":      ["rThighBend", "r_thigh"],
+    "shin_left":        ["lShin", "l_shin"],
+    "shin_right":       ["rShin", "r_shin"],
+    "foot_left":        ["lFoot", "l_foot"],
+    "foot_right":       ["rFoot", "r_foot"]
+  }
+}

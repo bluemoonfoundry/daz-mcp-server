@@ -238,6 +238,10 @@ _SCENE_INFO_SCRIPT = """\
     var figures = [];
     for (var i = 0; i < Scene.getNumSkeletons(); i++) {
         var s = Scene.getSkeleton(i);
+        // Skip follower figures (eyelashes, tear surfaces, etc.) — their node
+        // parent is another figure, not the scene root.
+        var parent = s.getNodeParent();
+        if (parent && parent.inherits("DzFigure")) continue;
         figures.push({ name: s.getName(), label: s.getLabel(), type: s.className() });
     }
     var cameras = [];
@@ -551,16 +555,9 @@ _SET_PARENT_SCRIPT = """\
     var previousParent = node.getNodeParent();
     var previousParentLabel = previousParent ? previousParent.getLabel() : null;
 
-    // Store world transform if needed
-    var worldPos = null;
-    var worldRot = null;
-    if (maintainWorldTransform) {
-        worldPos = node.getWSPos();
-        worldRot = node.getWSRot();
-    }
-
-    // Set new parent
-    node.setNodeParent(newParent, maintainWorldTransform);
+    // addNodeChild detaches node from its current parent (or scene root) automatically.
+    // inPlace=true means maintain world position (child's local transform is adjusted).
+    newParent.addNodeChild(node, maintainWorldTransform);
 
     return {
         success: true,
@@ -609,7 +606,7 @@ _LOOK_AT_POINT_SCRIPT = """\
         var dy = ty - pos.y;
         var dz = tz - pos.z;
 
-        // Calculate angles
+        // Calculate angles (absolute, not additive — look-at is a state, not a delta)
         var angleY = Math.atan2(dx, dz) * (180 / Math.PI) * scale;
         var dist = Math.sqrt(dx*dx + dz*dz);
         var angleX = Math.atan2(dy, dist) * (180 / Math.PI) * scale;
@@ -617,53 +614,50 @@ _LOOK_AT_POINT_SCRIPT = """\
         var yProp = bone.findProperty("YRotate");
         var xProp = bone.findProperty("XRotate");
 
-        if (yProp) {
-            var current = yProp.getValue();
-            yProp.setValue(current + angleY);
-        }
-        if (xProp) {
-            var current = xProp.getValue();
-            xProp.setValue(current + angleX);
-        }
+        // Set absolute rotation; DAZ clamps to the property's own min/max automatically
+        if (yProp) yProp.setValue(angleY);
+        if (xProp) xProp.setValue(angleX);
 
         rotatedBones.push(bone.getLabel());
         return true;
     }
 
+    // Generation-agnostic bone lookup (Gen9: l_eye/neck1/spine3; Gen3/8: lEye/neckUpper/chestUpper)
+    var lEyeBone     = findBone(figure, "l_eye")      || findBone(figure, "lEye");
+    var rEyeBone     = findBone(figure, "r_eye")      || findBone(figure, "rEye");
+    var headBone     = findBone(figure, "head");
+    var neckUpBone   = findBone(figure, "neck2")      || findBone(figure, "neckUpper");
+    var neckLowBone  = findBone(figure, "neck1")      || findBone(figure, "neckLower");
+    var chestUpBone  = findBone(figure, "spine3")     || findBone(figure, "chestUpper");
+    var chestLowBone = findBone(figure, "spine2")     || findBone(figure, "chestLower");
+    var hipBone      = findBone(figure, "hip");
+
     // Eyes (if mode is eyes or higher)
     if (mode === "eyes" || mode === "head" || mode === "neck" || mode === "torso" || mode === "full") {
-        var lEye = findBone(figure, "lEye");
-        var rEye = findBone(figure, "rEye");
-        if (lEye) rotateBoneToward(lEye, targetX, targetY, targetZ, 1.0);
-        if (rEye) rotateBoneToward(rEye, targetX, targetY, targetZ, 1.0);
+        if (lEyeBone) rotateBoneToward(lEyeBone, targetX, targetY, targetZ, 1.0);
+        if (rEyeBone) rotateBoneToward(rEyeBone, targetX, targetY, targetZ, 1.0);
     }
 
     // Head (if mode is head or higher)
     if (mode === "head" || mode === "neck" || mode === "torso" || mode === "full") {
-        var head = findBone(figure, "head");
-        if (head) rotateBoneToward(head, targetX, targetY, targetZ, 0.6);
+        if (headBone) rotateBoneToward(headBone, targetX, targetY, targetZ, 0.6);
     }
 
     // Neck (if mode is neck or higher)
     if (mode === "neck" || mode === "torso" || mode === "full") {
-        var neckUpper = findBone(figure, "neckUpper");
-        var neckLower = findBone(figure, "neckLower");
-        if (neckUpper) rotateBoneToward(neckUpper, targetX, targetY, targetZ, 0.3);
-        if (neckLower) rotateBoneToward(neckLower, targetX, targetY, targetZ, 0.3);
+        if (neckUpBone)  rotateBoneToward(neckUpBone,  targetX, targetY, targetZ, 0.3);
+        if (neckLowBone) rotateBoneToward(neckLowBone, targetX, targetY, targetZ, 0.3);
     }
 
     // Torso (if mode is torso or full)
     if (mode === "torso" || mode === "full") {
-        var chestUpper = findBone(figure, "chestUpper");
-        var chestLower = findBone(figure, "chestLower");
-        if (chestUpper) rotateBoneToward(chestUpper, targetX, targetY, targetZ, 0.15);
-        if (chestLower) rotateBoneToward(chestLower, targetX, targetY, targetZ, 0.15);
+        if (chestUpBone)  rotateBoneToward(chestUpBone,  targetX, targetY, targetZ, 0.15);
+        if (chestLowBone) rotateBoneToward(chestLowBone, targetX, targetY, targetZ, 0.15);
     }
 
     // Full body rotation (if mode is full)
     if (mode === "full") {
-        var hip = findBone(figure, "hip");
-        if (hip) rotateBoneToward(hip, targetX, targetY, targetZ, 0.1);
+        if (hipBone) rotateBoneToward(hipBone, targetX, targetY, targetZ, 0.1);
     }
 
     return {
@@ -735,42 +729,45 @@ _LOOK_AT_CHARACTER_SCRIPT = """\
         var yProp = bone.findProperty("YRotate");
         var xProp = bone.findProperty("XRotate");
 
-        if (yProp) yProp.setValue(yProp.getValue() + angleY);
-        if (xProp) xProp.setValue(xProp.getValue() + angleX);
+        // Absolute rotation — look-at is a state, not a delta
+        if (yProp) yProp.setValue(angleY);
+        if (xProp) xProp.setValue(angleX);
 
         rotatedBones.push(bone.getLabel());
         return true;
     }
 
+    // Generation-agnostic bone lookup
+    var lEyeBone    = findBone(source, "l_eye")   || findBone(source, "lEye");
+    var rEyeBone    = findBone(source, "r_eye")   || findBone(source, "rEye");
+    var headBone    = findBone(source, "head");
+    var neckUpBone  = findBone(source, "neck2")   || findBone(source, "neckUpper");
+    var neckLowBone = findBone(source, "neck1")   || findBone(source, "neckLower");
+
     if (mode === "eyes" || mode === "head" || mode === "neck" || mode === "torso" || mode === "full") {
-        var lEye = findBone(source, "lEye");
-        var rEye = findBone(source, "rEye");
-        if (lEye) rotateBoneToward(lEye, targetX, targetY, targetZ, 1.0);
-        if (rEye) rotateBoneToward(rEye, targetX, targetY, targetZ, 1.0);
+        if (lEyeBone) rotateBoneToward(lEyeBone, targetX, targetY, targetZ, 1.0);
+        if (rEyeBone) rotateBoneToward(rEyeBone, targetX, targetY, targetZ, 1.0);
     }
 
     if (mode === "head" || mode === "neck" || mode === "torso" || mode === "full") {
-        var head = findBone(source, "head");
-        if (head) rotateBoneToward(head, targetX, targetY, targetZ, 0.6);
+        if (headBone) rotateBoneToward(headBone, targetX, targetY, targetZ, 0.6);
     }
 
     if (mode === "neck" || mode === "torso" || mode === "full") {
-        var neckUpper = findBone(source, "neckUpper");
-        var neckLower = findBone(source, "neckLower");
-        if (neckUpper) rotateBoneToward(neckUpper, targetX, targetY, targetZ, 0.3);
-        if (neckLower) rotateBoneToward(neckLower, targetX, targetY, targetZ, 0.3);
+        if (neckUpBone)  rotateBoneToward(neckUpBone,  targetX, targetY, targetZ, 0.3);
+        if (neckLowBone) rotateBoneToward(neckLowBone, targetX, targetY, targetZ, 0.3);
     }
 
     if (mode === "torso" || mode === "full") {
-        var chestUpper = findBone(source, "chestUpper");
-        var chestLower = findBone(source, "chestLower");
-        if (chestUpper) rotateBoneToward(chestUpper, targetX, targetY, targetZ, 0.15);
-        if (chestLower) rotateBoneToward(chestLower, targetX, targetY, targetZ, 0.15);
+        var chestUpBone2  = findBone(source, "spine3")  || findBone(source, "chestUpper");
+        var chestLowBone2 = findBone(source, "spine2")  || findBone(source, "chestLower");
+        if (chestUpBone2)  rotateBoneToward(chestUpBone2,  targetX, targetY, targetZ, 0.15);
+        if (chestLowBone2) rotateBoneToward(chestLowBone2, targetX, targetY, targetZ, 0.15);
     }
 
     if (mode === "full") {
-        var hip = findBone(source, "hip");
-        if (hip) rotateBoneToward(hip, targetX, targetY, targetZ, 0.1);
+        var hipBone2 = findBone(source, "hip");
+        if (hipBone2) rotateBoneToward(hipBone2, targetX, targetY, targetZ, 0.1);
     }
 
     return {
@@ -812,11 +809,18 @@ _REACH_TOWARD_SCRIPT = """\
     if (!figure) throw new Error("Character not found: " + args.characterLabel);
 
     var side = args.side || "right";
-    var prefix = (side === "right") ? "r" : "l";
+    var prefix8 = (side === "right") ? "r" : "l";   // Genesis 3/8 prefix
+    var prefix9 = (side === "right") ? "r" : "l";   // Genesis 9 prefix (same letter, different naming)
 
-    var shoulder = findBone(figure, prefix + "ShldrBend");
-    var forearm = findBone(figure, prefix + "ForearmBend");
-    var hand = findBone(figure, prefix + "Hand");
+    // Try Genesis 9 names first, fall back to Genesis 3/8
+    var shoulder = findBone(figure, prefix9 + "_upperarm") ||
+                   findBone(figure, prefix8 + "ShldrBend") ||
+                   findBone(figure, prefix8 + "Shldr");
+    var forearm  = findBone(figure, prefix9 + "_forearm") ||
+                   findBone(figure, prefix8 + "ForearmBend") ||
+                   findBone(figure, prefix8 + "Forearm");
+    var hand     = findBone(figure, prefix9 + "_hand") ||
+                   findBone(figure, prefix8 + "Hand");
 
     if (!shoulder || !forearm) {
         throw new Error("Arm bones not found for side: " + side);
@@ -1643,8 +1647,8 @@ _SET_KEYFRAME_SCRIPT = """\
     var frame = args.frame;
     var value = args.value;
 
-    // Set value at frame
-    prop.setKeyFrame(frame, value);
+    // Set value at frame — two-arg setValue creates a keyframe (DzFloatProperty)
+    prop.setValue(frame, value);
 
     return {
         success: true,
@@ -1682,7 +1686,7 @@ _GET_KEYFRAMES_SCRIPT = """\
     var numKeys = prop.getNumKeys();
 
     for (var i = 0; i < numKeys; i++) {
-        var frame = prop.getKeyFrame(i);
+        var frame = prop.getKeyTime(i);
         var value = prop.getKeyValue(i);
         keyframes.push({frame: frame, value: value});
     }
@@ -1717,16 +1721,12 @@ _REMOVE_KEYFRAME_SCRIPT = """\
     if (!prop.inherits("DzNumericProperty")) throw new Error("Property is not numeric: " + args.propertyName);
 
     var frame = args.frame;
-    var removed = false;
 
-    // Find and remove keyframe at frame
-    var numKeys = prop.getNumKeys();
-    for (var i = 0; i < numKeys; i++) {
-        if (prop.getKeyFrame(i) === frame) {
-            prop.deleteKey(i);
-            removed = true;
-            break;
-        }
+    // Find and remove keyframe at the given frame
+    var keyIndex = prop.findKeyIndex(frame);
+    var removed = keyIndex >= 0;
+    if (removed) {
+        prop.deleteKeys(frame, frame);
     }
 
     return {
@@ -1762,10 +1762,7 @@ _CLEAR_ANIMATION_SCRIPT = """\
     if (!prop.inherits("DzNumericProperty")) throw new Error("Property is not numeric: " + args.propertyName);
 
     var numKeys = prop.getNumKeys();
-    // Delete keys in reverse order to avoid index shifting
-    for (var i = numKeys - 1; i >= 0; i--) {
-        prop.deleteKey(i);
-    }
+    prop.deleteAllKeys();
 
     return {
         success: true,
@@ -3086,19 +3083,21 @@ _CREATE_SHOT_SEQUENCE_SCRIPT = """\
     var duration = args.duration || 120;
     var fps = args.fps || 30;
 
-    if (characters.length === 0) {
-        throw new Error("At least one character required for shot sequence");
+    // Get primary subject (optional — aim at origin if none provided)
+    var subject = null;
+    var subCenter = {x: 0, y: 100, z: 0};
+    var eyeHeight = 160;
+
+    if (characters.length > 0) {
+        subject = Scene.findNodeByLabel(characters[0]);
+        if (!subject) subject = Scene.findNode(characters[0]);
+        if (!subject) throw new Error("Subject not found: " + characters[0]);
+
+        var bbox = subject.getWSBoundingBox();
+        var subHeight = bbox.maxY - bbox.minY;
+        subCenter = {x: (bbox.minX + bbox.maxX) / 2, y: (bbox.minY + bbox.maxY) / 2, z: (bbox.minZ + bbox.maxZ) / 2};
+        eyeHeight = bbox.minY + subHeight * 0.85;
     }
-
-    // Get primary subject
-    var subject = Scene.findNodeByLabel(characters[0]);
-    if (!subject) subject = Scene.findNode(characters[0]);
-    if (!subject) throw new Error("Subject not found: " + characters[0]);
-
-    var bbox = subject.getBoundingBox();
-    var subCenter = bbox.getCenter();
-    var subHeight = bbox.max.y - bbox.min.y;
-    var eyeHeight = bbox.min.y + subHeight * 0.85;
 
     var cameras = [];
     var totalFrames = duration;
@@ -3122,15 +3121,7 @@ _CREATE_SHOT_SEQUENCE_SCRIPT = """\
     function setKeyframe(node, propName, frame, value) {
         var prop = node.findProperty(propName);
         if (!prop) return;
-        var anim = prop.getAnimation();
-        if (!anim) {
-            anim = prop.createAnimation();
-        }
-        var key = anim.getKey(frame);
-        if (!key) {
-            key = anim.addKey(frame);
-        }
-        key.value = value;
+        prop.setValue(frame, value);
     }
 
     if (sequenceType === "establishing-medium-closeup") {
@@ -3174,9 +3165,9 @@ _CREATE_SHOT_SEQUENCE_SCRIPT = """\
         if (!char2) char2 = Scene.findNode(characters[1]);
         if (!char2) throw new Error("Second character not found: " + characters[1]);
 
-        var bbox2 = char2.getBoundingBox();
-        var char2Center = bbox2.getCenter();
-        var char2Eye = bbox2.min.y + (bbox2.max.y - bbox2.min.y) * 0.85;
+        var bbox2 = char2.getWSBoundingBox();
+        var char2Center = {x: (bbox2.minX + bbox2.maxX) / 2, y: (bbox2.minY + bbox2.maxY) / 2, z: (bbox2.minZ + bbox2.maxZ) / 2};
+        var char2Eye = bbox2.minY + (bbox2.maxY - bbox2.minY) * 0.85;
 
         // Over-shoulder from char1 looking at char2
         var cam1 = createCamera("Over Shoulder 1",
@@ -3255,7 +3246,7 @@ _CREATE_SHOT_SEQUENCE_SCRIPT = """\
         cameras: cameras,
         totalFrames: totalFrames,
         sequenceType: sequenceType,
-        subject: subject.getLabel()
+        subject: subject ? subject.getLabel() : null
     };
 })()
 """
@@ -3284,11 +3275,7 @@ _ANIMATE_CONVERSATION_SCRIPT = """\
     function setKeyframe(node, propName, frame, value) {
         var prop = node.findProperty(propName);
         if (!prop) return false;
-        var anim = prop.getAnimation();
-        if (!anim) anim = prop.createAnimation();
-        var key = anim.getKey(frame);
-        if (!key) key = anim.addKey(frame);
-        key.value = value;
+        prop.setValue(frame, value);
         return true;
     }
 
@@ -3502,8 +3489,7 @@ _CREATE_SCENE_SCRIPT = """\
         var renderMgr = App.getRenderMgr();
         var opts = renderMgr.getRenderOptions();
         opts.drawGroundPlane = false;
-        var envMode = opts.findProperty("Environment Mode");
-        if (envMode) envMode.setValue(3); // Scene Only
+        // DzRenderOptions does not support findProperty — skip environment mode
     }
 
     // Get primary subject if characters provided
@@ -3516,10 +3502,10 @@ _CREATE_SCENE_SCRIPT = """\
         subject = Scene.findNodeByLabel(characters[0]);
         if (!subject) subject = Scene.findNode(characters[0]);
         if (subject) {
-            var bbox = subject.getBoundingBox();
-            subjectCenter = bbox.getCenter();
-            subjectHeight = bbox.max.y - bbox.min.y;
-            eyeHeight = bbox.min.y + subjectHeight * 0.85;
+            var bbox = subject.getWSBoundingBox();
+            subjectCenter = {x: (bbox.minX + bbox.maxX) / 2, y: (bbox.minY + bbox.maxY) / 2, z: (bbox.minZ + bbox.maxZ) / 2};
+            subjectHeight = bbox.maxY - bbox.minY;
+            eyeHeight = bbox.minY + subjectHeight * 0.85;
         }
     }
 
@@ -3763,11 +3749,7 @@ _ANIMATE_CAMERA_MOVEMENT_SCRIPT = """\
     function setKeyframe(node, propName, frame, value) {
         var prop = node.findProperty(propName);
         if (!prop) return false;
-        var anim = prop.getAnimation();
-        if (!anim) anim = prop.createAnimation();
-        var key = anim.getKey(frame);
-        if (!key) key = anim.addKey(frame);
-        key.value = value;
+        prop.setValue(frame, value);
         return true;
     }
 
@@ -3925,11 +3907,7 @@ _CREATE_CAMERA_PATH_SCRIPT = """\
     function setKeyframe(node, propName, frame, value) {
         var prop = node.findProperty(propName);
         if (!prop) return false;
-        var anim = prop.getAnimation();
-        if (!anim) anim = prop.createAnimation();
-        var key = anim.getKey(frame);
-        if (!key) key = anim.addKey(frame);
-        key.value = value;
+        prop.setValue(frame, value);
         return true;
     }
 
@@ -4009,11 +3987,7 @@ _CREATE_CHARACTER_PATH_SCRIPT = """\
     function setKeyframe(node, propName, frame, value) {
         var prop = node.findProperty(propName);
         if (!prop) return false;
-        var anim = prop.getAnimation();
-        if (!anim) anim = prop.createAnimation();
-        var key = anim.getKey(frame);
-        if (!key) key = anim.addKey(frame);
-        key.value = value;
+        prop.setValue(frame, value);
         return true;
     }
 
@@ -4089,8 +4063,8 @@ _ARRANGE_CHARACTERS_SCRIPT = """\
     var facing = args.facing || "forward";
     var centerPosition = args.centerPosition || {x: 0, y: 0, z: 0};
 
-    if (characterLabels.length < 2) {
-        throw new Error("At least 2 characters required for arrangement");
+    if (characterLabels.length === 0) {
+        return {characters: [], arrangement: arrangement, spacing: spacing, count: 0};
     }
 
     // Find all characters
@@ -4124,7 +4098,7 @@ _ARRANGE_CHARACTERS_SCRIPT = """\
         // Arc formation
         var radius = (spacing * count) / Math.PI;
         for (var i = 0; i < count; i++) {
-            var angle = (i / (count - 1)) * Math.PI;
+            var angle = count > 1 ? (i / (count - 1)) * Math.PI : 0;
             positions.push({
                 x: cx + radius * Math.sin(angle),
                 y: cy,
@@ -4457,8 +4431,9 @@ _SETUP_SHOT_COVERAGE_SCRIPT = """\
     // Create cameras
     for (var i = 0; i < shots.length; i++) {
         var shot = shots[i];
-        var cam = Scene.createNode("DzCamera");
+        var cam = new DzBasicCamera();
         cam.setLabel(shot.name + "_Camera");
+        Scene.addNode(cam);
 
         // Position camera
         var angleRad = shot.angle * (Math.PI / 180);
@@ -4475,7 +4450,7 @@ _SETUP_SHOT_COVERAGE_SCRIPT = """\
         if (zProp) zProp.setValue(camZ);
 
         // Set focal length
-        var focalProp = cam.findProperty("FocalLength");
+        var focalProp = cam.getFocalLengthControl();
         if (focalProp) focalProp.setValue(shot.focalLength);
 
         // Point at subject if auto-aim
@@ -4548,9 +4523,10 @@ _CREATE_CAMERA_RIG_SCRIPT = """\
     var cameras = [];
     var angleStep = 360 / cameraCount;
 
-    // Create parent null for rig
-    var rigParent = Scene.createNode("DzBone");
+    // Create parent null for rig (DzGroupNode is the standard empty group)
+    var rigParent = new DzGroupNode();
     rigParent.setLabel(rigName + "_Rig");
+    Scene.addNode(rigParent);
 
     var rigX = rigParent.findProperty("XTranslate");
     var rigY = rigParent.findProperty("YTranslate");
@@ -4565,8 +4541,9 @@ _CREATE_CAMERA_RIG_SCRIPT = """\
         var angle = i * angleStep;
         var angleRad = angle * (Math.PI / 180);
 
-        var cam = Scene.createNode("DzCamera");
+        var cam = new DzBasicCamera();
         cam.setLabel(rigName + "_Cam" + (i + 1));
+        Scene.addNode(cam);
 
         // Position relative to center
         var offsetX = radius * Math.sin(angleRad);
@@ -4582,7 +4559,7 @@ _CREATE_CAMERA_RIG_SCRIPT = """\
         if (camZ) camZ.setValue(offsetZ);
 
         // Set focal length
-        var focalProp = cam.findProperty("FocalLength");
+        var focalProp = cam.getFocalLengthControl();
         if (focalProp) focalProp.setValue(focalLengths[i]);
 
         // Point camera at center
@@ -4596,7 +4573,7 @@ _CREATE_CAMERA_RIG_SCRIPT = """\
         }
 
         // Parent to rig
-        cam.setParent(rigParent);
+        rigParent.addNodeChild(cam, false);
 
         cameras.push({
             name: cam.getLabel(),
@@ -4619,6 +4596,2048 @@ _CREATE_CAMERA_RIG_SCRIPT = """\
             "Switch between cameras for bullet-time effect",
             "Adjust individual camera focal lengths for variety"
         ]
+    };
+})()
+"""
+
+# ---------------------------------------------------------------------------
+# Phase 4.8: Lighting Animation scripts
+# ---------------------------------------------------------------------------
+
+_ANIMATE_LIGHT_SCRIPT = """\
+(function(){
+    var args = getArguments()[0] || {};
+    var lightLabel = args.lightLabel;
+    var movementType = args.movementType || "flicker";
+    var startFrame = args.startFrame !== undefined ? args.startFrame : 0;
+    var endFrame = args.endFrame !== undefined ? args.endFrame : 90;
+    var intensity = args.intensity !== undefined ? args.intensity : 1500;
+    var flickerAmount = args.flickerAmount !== undefined ? args.flickerAmount : 0.3;
+    var colorKeyframes = args.colorKeyframes || null;
+
+    // Find light node
+    var light = Scene.findNodeByLabel(lightLabel);
+    if (!light) light = Scene.findNode(lightLabel);
+    if (!light) throw new Error("Light not found: " + lightLabel);
+
+    var fluxProp = light.findProperty("Flux");
+    if (!fluxProp) throw new Error("Light has no Flux property: " + lightLabel);
+
+    var keyframesCreated = [];
+    var duration = endFrame - startFrame;
+
+    if (movementType === "flicker") {
+        // Random flicker: vary flux at irregular intervals
+        var flickerFrames = Math.max(4, Math.floor(duration / 5));
+        var step = Math.floor(duration / flickerFrames);
+        if (step < 1) step = 1;
+
+        for (var f = startFrame; f <= endFrame; f += step) {
+            // Random variation within flickerAmount percent of intensity
+            var variation = (Math.random() * 2 - 1) * flickerAmount * intensity;
+            var frameValue = Math.max(0, intensity + variation);
+
+            fluxProp.setValue(f, frameValue);
+            keyframesCreated.push({frame: f, value: frameValue});
+        }
+        // Ensure end frame
+        if (keyframesCreated.length === 0 || keyframesCreated[keyframesCreated.length - 1].frame !== endFrame) {
+            fluxProp.setValue(endFrame, intensity);
+            keyframesCreated.push({frame: endFrame, value: intensity});
+        }
+
+    } else if (movementType === "pulse") {
+        // Smooth pulse: sine wave intensity change
+        var pulseCount = args.pulseCount !== undefined ? args.pulseCount : 3;
+        var minIntensity = intensity * (1 - flickerAmount);
+        var maxIntensity = intensity;
+        var numKeyframes = pulseCount * 4 + 1; // 4 keyframes per pulse cycle
+        var frameStep = duration / (numKeyframes - 1);
+
+        for (var i = 0; i < numKeyframes; i++) {
+            var frame = Math.round(startFrame + i * frameStep);
+            var phase = (i / (numKeyframes - 1)) * pulseCount * 2 * Math.PI;
+            var sine = (Math.sin(phase) + 1) / 2; // 0 to 1
+            var frameValue = minIntensity + sine * (maxIntensity - minIntensity);
+
+            fluxProp.setValue(frame, frameValue);
+            keyframesCreated.push({frame: frame, value: frameValue});
+        }
+
+    } else if (movementType === "fade-in") {
+        // Fade from 0 to target intensity
+        fluxProp.setValue(startFrame, 0);
+        keyframesCreated.push({frame: startFrame, value: 0});
+
+        fluxProp.setValue(endFrame, intensity);
+        keyframesCreated.push({frame: endFrame, value: intensity});
+
+    } else if (movementType === "fade-out") {
+        // Fade from current intensity to 0
+        fluxProp.setValue(startFrame, intensity);
+        keyframesCreated.push({frame: startFrame, value: intensity});
+
+        fluxProp.setValue(endFrame, 0);
+        keyframesCreated.push({frame: endFrame, value: 0});
+
+    } else if (movementType === "strobe") {
+        // Alternating on/off at regular intervals
+        var strobeInterval = args.strobeInterval !== undefined ? args.strobeInterval : 5;
+        var frame = startFrame;
+        var on = true;
+
+        while (frame <= endFrame) {
+            var frameValue = on ? intensity : 0;
+            fluxProp.setValue(frame, frameValue);
+            keyframesCreated.push({frame: frame, value: frameValue});
+
+            // Add keyframe one frame before change for hard cut
+            var nextFrame = frame + strobeInterval;
+            if (nextFrame <= endFrame) {
+                fluxProp.setValue(nextFrame - 1, frameValue);
+                keyframesCreated.push({frame: nextFrame - 1, value: frameValue});
+            }
+
+            frame = nextFrame;
+            on = !on;
+        }
+
+    } else if (movementType === "color-cycle") {
+        // Animate light color temperature (warm/cool shift)
+        // Use default warm-to-cool-to-warm cycle if no keyframes provided
+        if (!colorKeyframes) {
+            colorKeyframes = [
+                {frame: startFrame, r: 1.0, g: 0.8, b: 0.5},
+                {frame: Math.round(startFrame + duration * 0.33), r: 1.0, g: 1.0, b: 1.0},
+                {frame: Math.round(startFrame + duration * 0.66), r: 0.5, g: 0.7, b: 1.0},
+                {frame: endFrame, r: 1.0, g: 0.8, b: 0.5}
+            ];
+        }
+
+        // Find color channel properties
+        var colorPropR = light.findProperty("Color/Red");
+        var colorPropG = light.findProperty("Color/Green");
+        var colorPropB = light.findProperty("Color/Blue");
+
+        if (!colorPropR) {
+            // Fall back to simpler flux animation with color note
+            fluxProp.setValue(startFrame, intensity);
+            fluxProp.setValue(endFrame, intensity);
+            keyframesCreated.push({frame: startFrame, value: intensity});
+        } else {
+            for (var k = 0; k < colorKeyframes.length; k++) {
+                var ckf = colorKeyframes[k];
+                if (colorPropR) {
+                    colorPropR.setValue(ckf.frame, ckf.r);
+                }
+                if (colorPropG) {
+                    colorPropG.setValue(ckf.frame, ckf.g);
+                }
+                if (colorPropB) {
+                    colorPropB.setValue(ckf.frame, ckf.b);
+                }
+                keyframesCreated.push({frame: ckf.frame, r: ckf.r, g: ckf.g, b: ckf.b});
+            }
+        }
+
+    } else {
+        throw new Error("Unknown movementType: " + movementType +
+            ". Valid: flicker, pulse, fade-in, fade-out, strobe, color-cycle");
+    }
+
+    return {
+        light: lightLabel,
+        movementType: movementType,
+        startFrame: startFrame,
+        endFrame: endFrame,
+        targetIntensity: intensity,
+        keyframesCreated: keyframesCreated.length,
+        keyframes: keyframesCreated,
+        suggestions: [
+            "Use daz_render_animation to render the lighting animation",
+            "Combine with daz_animate_camera_movement for cinematic effect",
+            "Layer multiple lights with offset timing for rich atmosphere"
+        ]
+    };
+})()
+"""
+
+_CREATE_LIGHT_SEQUENCE_SCRIPT = """\
+(function(){
+    var args = getArguments()[0] || {};
+    var sequenceType = args.sequenceType || "day-to-night";
+    var subjectLabel = args.subjectLabel || null;
+    var startFrame = args.startFrame !== undefined ? args.startFrame : 0;
+    var endFrame = args.endFrame !== undefined ? args.endFrame : 120;
+    var createLights = args.createLights !== false;
+
+    var duration = endFrame - startFrame;
+    var midFrame = Math.round(startFrame + duration / 2);
+    var quarterFrame = Math.round(startFrame + duration / 4);
+    var threeQuarterFrame = Math.round(startFrame + duration * 0.75);
+
+    var lightsCreated = [];
+    var keyframesSet = [];
+
+    // Helper to find or create a light
+    function getOrCreateLight(label, lightClass) {
+        var existingLight = Scene.findNodeByLabel(label);
+        if (existingLight) return {node: existingLight, created: false};
+
+        if (!createLights) return {node: null, created: false};
+
+        var newLight;
+        if (lightClass === "spot") {
+            newLight = new DzSpotLight();
+        } else {
+            newLight = new DzDistantLight();
+        }
+        Scene.addNode(newLight);
+        newLight.setLabel(label);
+        return {node: newLight, created: true};
+    }
+
+    // Helper to set a keyframe on a light property
+    function setLightKey(light, propName, frame, value) {
+        var prop = light.findProperty(propName);
+        if (prop) {
+            prop.setValue(value);
+            prop.setValue(frame, value);
+            keyframesSet.push({light: light.getLabel(), property: propName, frame: frame, value: value});
+            return true;
+        }
+        return false;
+    }
+
+    if (sequenceType === "day-to-night") {
+        // Bright daylight → warm sunset → dark night
+        var sunResult = getOrCreateLight("Sun_Key", "distant");
+        var fillResult = getOrCreateLight("Sky_Fill", "spot");
+
+        if (sunResult.node) {
+            if (sunResult.created) lightsCreated.push("Sun_Key");
+            var sun = sunResult.node;
+
+            // Day: bright white light from above
+            setLightKey(sun, "Flux", startFrame, 8000);
+            setLightKey(sun, "Flux", quarterFrame, 6000);
+            // Sunset: warm dim
+            setLightKey(sun, "Flux", midFrame, 3000);
+            setLightKey(sun, "Flux", threeQuarterFrame, 800);
+            // Night: off
+            setLightKey(sun, "Flux", endFrame, 0);
+        }
+
+        if (fillResult.node) {
+            if (fillResult.created) lightsCreated.push("Sky_Fill");
+            var fill = fillResult.node;
+
+            // Sky fill: ambient that dims with sun
+            setLightKey(fill, "Flux", startFrame, 2000);
+            setLightKey(fill, "Flux", midFrame, 800);
+            setLightKey(fill, "Flux", endFrame, 100);
+        }
+
+    } else if (sequenceType === "night-to-dawn") {
+        // Dark night → pre-dawn glow → sunrise
+        var sunResult = getOrCreateLight("Dawn_Key", "distant");
+        var ambResult = getOrCreateLight("Night_Ambient", "spot");
+
+        if (sunResult.node) {
+            if (sunResult.created) lightsCreated.push("Dawn_Key");
+            var sun = sunResult.node;
+
+            // Night: no sun
+            setLightKey(sun, "Flux", startFrame, 0);
+            setLightKey(sun, "Flux", threeQuarterFrame, 500);
+            // Dawn: growing sunrise
+            setLightKey(sun, "Flux", endFrame, 6000);
+        }
+
+        if (ambResult.node) {
+            if (ambResult.created) lightsCreated.push("Night_Ambient");
+            var amb = ambResult.node;
+
+            // Night ambient: low blue fill
+            setLightKey(amb, "Flux", startFrame, 200);
+            setLightKey(amb, "Flux", midFrame, 300);
+            setLightKey(amb, "Flux", endFrame, 1500);
+        }
+
+    } else if (sequenceType === "interrogation") {
+        // Harsh single overhead light, tension build
+        var overheadResult = getOrCreateLight("Overhead_Key", "spot");
+
+        if (overheadResult.node) {
+            if (overheadResult.created) lightsCreated.push("Overhead_Key");
+            var overhead = overheadResult.node;
+
+            // Build tension: starts dim, pulses brighter
+            setLightKey(overhead, "Flux", startFrame, 2000);
+            setLightKey(overhead, "Flux", quarterFrame, 3000);
+            setLightKey(overhead, "Flux", midFrame, 2500);
+            setLightKey(overhead, "Flux", threeQuarterFrame, 4000);
+            setLightKey(overhead, "Flux", endFrame, 5000);
+        }
+
+        // Optional subject-aimed spot for reveal
+        var revealResult = getOrCreateLight("Reveal_Spot", "spot");
+        if (revealResult.node) {
+            if (revealResult.created) lightsCreated.push("Reveal_Spot");
+            var reveal = revealResult.node;
+
+            // Off until climax
+            setLightKey(reveal, "Flux", startFrame, 0);
+            setLightKey(reveal, "Flux", threeQuarterFrame - 1, 0);
+            setLightKey(reveal, "Flux", threeQuarterFrame, 3000);
+            setLightKey(reveal, "Flux", endFrame, 3000);
+        }
+
+    } else if (sequenceType === "romantic") {
+        // Warm candlelight flicker, soft fill
+        var candleResult = getOrCreateLight("Candle_Key", "spot");
+        var softResult = getOrCreateLight("Soft_Fill", "spot");
+
+        if (candleResult.node) {
+            if (candleResult.created) lightsCreated.push("Candle_Key");
+            var candle = candleResult.node;
+
+            // Gentle flicker
+            var flickerStep = Math.max(3, Math.floor(duration / 15));
+            for (var f = startFrame; f <= endFrame; f += flickerStep) {
+                var variation = (Math.random() * 0.4 - 0.2) * 800;
+                var fluxVal = Math.max(200, 800 + variation);
+                setLightKey(candle, "Flux", f, fluxVal);
+            }
+        }
+
+        if (softResult.node) {
+            if (softResult.created) lightsCreated.push("Soft_Fill");
+            var soft = softResult.node;
+
+            // Constant soft fill
+            setLightKey(soft, "Flux", startFrame, 400);
+            setLightKey(soft, "Flux", endFrame, 400);
+        }
+
+    } else if (sequenceType === "action-tension") {
+        // Multiple lights building to climax, then flash
+        var keyResult = getOrCreateLight("Action_Key", "spot");
+        var rimResult = getOrCreateLight("Action_Rim", "spot");
+        var flashResult = getOrCreateLight("Flash_Light", "spot");
+
+        if (keyResult.node) {
+            if (keyResult.created) lightsCreated.push("Action_Key");
+            var key = keyResult.node;
+
+            setLightKey(key, "Flux", startFrame, 3000);
+            setLightKey(key, "Flux", threeQuarterFrame, 5000);
+            setLightKey(key, "Flux", endFrame, 5000);
+        }
+
+        if (rimResult.node) {
+            if (rimResult.created) lightsCreated.push("Action_Rim");
+            var rim = rimResult.node;
+
+            setLightKey(rim, "Flux", startFrame, 1000);
+            setLightKey(rim, "Flux", endFrame, 2000);
+        }
+
+        if (flashResult.node) {
+            if (flashResult.created) lightsCreated.push("Flash_Light");
+            var flash = flashResult.node;
+
+            // Flash at climax
+            setLightKey(flash, "Flux", startFrame, 0);
+            setLightKey(flash, "Flux", threeQuarterFrame - 1, 0);
+            setLightKey(flash, "Flux", threeQuarterFrame, 15000);
+            setLightKey(flash, "Flux", threeQuarterFrame + 3, 15000);
+            setLightKey(flash, "Flux", threeQuarterFrame + 4, 0);
+            setLightKey(flash, "Flux", endFrame, 0);
+        }
+
+    } else {
+        throw new Error("Unknown sequenceType: " + sequenceType +
+            ". Valid: day-to-night, night-to-dawn, interrogation, romantic, action-tension");
+    }
+
+    return {
+        sequenceType: sequenceType,
+        startFrame: startFrame,
+        endFrame: endFrame,
+        lightsCreated: lightsCreated,
+        totalKeyframes: keyframesSet.length,
+        keyframes: keyframesSet,
+        suggestions: [
+            "Position lights in scene before rendering",
+            "Use daz_render_animation to render the full sequence",
+            "Adjust Flux values with daz_set_keyframe to fine-tune timing"
+        ]
+    };
+})()
+"""
+
+# ---------------------------------------------------------------------------
+# Phase 4.9: Shot Planning scripts
+# ---------------------------------------------------------------------------
+
+_PLAN_SHOT_SCRIPT = """\
+(function(){
+    var args = getArguments()[0] || {};
+    var shotType = args.shotType || "medium-shot";
+    var subjectLabel = args.subjectLabel || null;
+    var cameraLabel = args.cameraLabel || null;
+    var mood = args.mood || "neutral";
+
+    // Shot type → distance, focal length, vertical angle
+    var shotDefs = {
+        "extreme-close-up": {distance: 25,  focalLength: 85,  vertAngle: 0,   description: "Eyes and mouth only"},
+        "close-up":         {distance: 50,  focalLength: 85,  vertAngle: 2,   description: "Face and chin"},
+        "medium-close-up":  {distance: 90,  focalLength: 85,  vertAngle: 3,   description: "Head and shoulders"},
+        "medium-shot":      {distance: 140, focalLength: 50,  vertAngle: 5,   description: "Waist up"},
+        "medium-full":      {distance: 200, focalLength: 50,  vertAngle: 5,   description: "Knees up"},
+        "full-shot":        {distance: 400, focalLength: 35,  vertAngle: 8,   description: "Full body with headroom"},
+        "wide-shot":        {distance: 700, focalLength: 24,  vertAngle: 10,  description: "Character in environment"},
+        "extreme-wide":     {distance: 1200, focalLength: 18, vertAngle: 12,  description: "Environment establishing"},
+        "two-shot":         {distance: 250, focalLength: 50,  vertAngle: 5,   description: "Two characters framed together"},
+        "over-shoulder":    {distance: 150, focalLength: 85,  vertAngle: 3,   description: "OTS: foreground shoulder, background face"}
+    };
+
+    // Mood → lighting preset, key light angle, key flux
+    var moodDefs = {
+        "neutral":    {lighting: "three-point",  keyAngle: 45,  keyFlux: 4000, fillRatio: 0.5, rimRatio: 0.3, notes: "Balanced, versatile lighting"},
+        "dramatic":   {lighting: "rembrandt",    keyAngle: 45,  keyFlux: 6000, fillRatio: 0.15, rimRatio: 0.5, notes: "High contrast, shadowed fill side"},
+        "happy":      {lighting: "butterfly",    keyAngle: 0,   keyFlux: 5000, fillRatio: 0.6,  rimRatio: 0.4, notes: "Bright front light, even fill"},
+        "sad":        {lighting: "split",        keyAngle: 90,  keyFlux: 2500, fillRatio: 0.1,  rimRatio: 0.2, notes: "Low key, deep shadows"},
+        "tense":      {lighting: "loop",         keyAngle: 35,  keyFlux: 5500, fillRatio: 0.2,  rimRatio: 0.6, notes: "Hard key, strong rim separation"},
+        "romantic":   {lighting: "butterfly",    keyAngle: 10,  keyFlux: 1800, fillRatio: 0.7,  rimRatio: 0.3, notes: "Soft, warm, flattering"},
+        "horror":     {lighting: "split",        keyAngle: 180, keyFlux: 1500, fillRatio: 0.05, rimRatio: 0.1, notes: "Under-lit or side-lit, minimal fill"},
+        "action":     {lighting: "three-point",  keyAngle: 30,  keyFlux: 7000, fillRatio: 0.3,  rimRatio: 0.8, notes: "High energy, strong rim for separation"}
+    };
+
+    // Composition rule → horizontal angle offset, height adjustment note
+    var compositionRules = {
+        "rule-of-thirds": {hOffset: 15,  note: "Subject on right third — offset camera left of centre"},
+        "center-frame":   {hOffset: 0,   note: "Subject centred — symmetric composition"},
+        "golden-ratio":   {hOffset: 12,  note: "Subject at 0.618 golden section from left"},
+        "leading-lines":  {hOffset: 20,  note: "Low angle with diagonal offset for implied motion"}
+    };
+
+    var composition = compositionRules[args.compositionRule] || compositionRules["rule-of-thirds"];
+    var shotDef = shotDefs[shotType] || shotDefs["medium-shot"];
+    var moodDef = moodDefs[mood] || moodDefs["neutral"];
+
+    // Gather scene state for context
+    var sceneInfo = {
+        numCameras: Scene.getNumCameras(),
+        numLights: Scene.getNumLights(),
+        numSkeletons: Scene.getNumSkeletons(),
+        figures: []
+    };
+
+    for (var i = 0; i < Scene.getNumSkeletons(); i++) {
+        var skel = Scene.getSkeleton(i);
+        var xp = skel.findProperty("XTranslate");
+        var yp = skel.findProperty("YTranslate");
+        var zp = skel.findProperty("ZTranslate");
+        sceneInfo.figures.push({
+            label: skel.getLabel(),
+            position: {
+                x: xp ? xp.getValue() : 0,
+                y: yp ? yp.getValue() : 0,
+                z: zp ? zp.getValue() : 0
+            }
+        });
+    }
+
+    // Find subject if specified
+    var subjectPos = {x: 0, y: 130, z: 0};
+    if (subjectLabel) {
+        var subNode = Scene.findNodeByLabel(subjectLabel) || Scene.findNode(subjectLabel);
+        if (subNode) {
+            var sx = subNode.findProperty("XTranslate");
+            var sy = subNode.findProperty("YTranslate");
+            var sz = subNode.findProperty("ZTranslate");
+            subjectPos = {
+                x: sx ? sx.getValue() : 0,
+                y: (sy ? sy.getValue() : 0) + 130,
+                z: sz ? sz.getValue() : 0
+            };
+        }
+    }
+
+    // Camera placement recommendation
+    var hAngle = composition.hOffset;
+    var hAngleRad = hAngle * (Math.PI / 180);
+    var camX = subjectPos.x + shotDef.distance * Math.sin(hAngleRad);
+    var camZ = subjectPos.z - shotDef.distance * Math.cos(hAngleRad);
+    var camY = subjectPos.y + (shotDef.distance * Math.tan(shotDef.vertAngle * (Math.PI / 180)));
+
+    // Lighting recommendations
+    var keyFlux = moodDef.keyFlux;
+    var fillFlux = Math.round(keyFlux * moodDef.fillRatio);
+    var rimFlux  = Math.round(keyFlux * moodDef.rimRatio);
+
+    var lightingSteps = [
+        "Set environment mode to Scene Only (daz_set_property on Environment node)",
+        "Create/configure key light: angle=" + moodDef.keyAngle + "°, Flux=" + keyFlux + " lm",
+        "Create/configure fill light: angle=" + (moodDef.keyAngle + 120) + "° (opposite side), Flux=" + fillFlux + " lm",
+        "Create/configure rim light: behind subject (~180° from camera), Flux=" + rimFlux + " lm"
+    ];
+
+    var cameraSteps = [
+        "Position camera at X=" + Math.round(camX) + " Y=" + Math.round(camY) + " Z=" + Math.round(camZ),
+        "Set focal length to " + shotDef.focalLength + "mm",
+        "Aim camera at subject eye-level (Y≈" + Math.round(subjectPos.y) + " cm)",
+        composition.note
+    ];
+
+    var characterSteps = [];
+    if (shotType === "two-shot") {
+        characterSteps.push("Place characters 60-80 cm apart facing each other or 3/4 to camera");
+        characterSteps.push("Ensure both figures share equal frame space");
+    } else if (shotType === "over-shoulder") {
+        characterSteps.push("Place foreground character back-to-camera, 50-80 cm from lens");
+        characterSteps.push("Place background subject 100-150 cm from camera");
+        characterSteps.push("Offset subjects horizontally so background face is clear");
+    } else {
+        characterSteps.push("Position subject at scene origin or desired world position");
+        characterSteps.push("Ensure subject faces +Z (toward camera at default angle=0°)");
+    }
+
+    // Build recommended tool call sequence
+    var toolSequence = [];
+    if (subjectLabel && cameraLabel) {
+        toolSequence.push('daz_orbit_camera_around("' + cameraLabel + '", "' + subjectLabel + '", ' + shotDef.distance + ', ' + hAngle + ', ' + shotDef.vertAngle + ')');
+        toolSequence.push('daz_set_property("' + cameraLabel + '", "FocalLength", ' + shotDef.focalLength + ')');
+    }
+    toolSequence.push('daz_apply_lighting_preset("' + moodDef.lighting + '"' + (subjectLabel ? ', "' + subjectLabel + '"' : '') + ')');
+    if (subjectLabel) {
+        toolSequence.push('daz_frame_shot(<camera>, "' + subjectLabel + '", "' + shotType + '")');
+    }
+
+    return {
+        shotType: shotType,
+        shotDescription: shotDef.description,
+        mood: mood,
+        compositionRule: args.compositionRule || "rule-of-thirds",
+        subject: subjectLabel,
+        camera: cameraLabel,
+        sceneState: sceneInfo,
+        recommendations: {
+            camera: {
+                position: {x: Math.round(camX), y: Math.round(camY), z: Math.round(camZ)},
+                focalLength: shotDef.focalLength,
+                distanceFromSubject: shotDef.distance,
+                horizontalAngle: hAngle,
+                verticalAngle: shotDef.vertAngle,
+                steps: cameraSteps
+            },
+            lighting: {
+                preset: moodDef.lighting,
+                keyFlux: keyFlux,
+                fillFlux: fillFlux,
+                rimFlux: rimFlux,
+                keyAngle: moodDef.keyAngle,
+                notes: moodDef.notes,
+                steps: lightingSteps
+            },
+            character: {
+                steps: characterSteps
+            },
+            toolSequence: toolSequence
+        }
+    };
+})()
+"""
+
+_CREATE_STORYBOARD_SCRIPT = """\
+(function(){
+    var args = getArguments()[0] || {};
+    var title = args.title || "Storyboard";
+    var shots = args.shots || [];
+    var startFrame = args.startFrame !== undefined ? args.startFrame : 0;
+    var framesPerShot = args.framesPerShot !== undefined ? args.framesPerShot : 90;
+    var savePresets = args.savePresets !== false;
+
+    if (shots.length === 0) {
+        throw new Error("shots array must have at least one shot definition");
+    }
+    if (shots.length > 20) {
+        throw new Error("Maximum 20 shots per storyboard");
+    }
+
+    var storyboardShots = [];
+    var currentFrame = startFrame;
+    var totalFrames = 0;
+
+    // Shot type → focal length default
+    var focalDefaults = {
+        "extreme-close-up": 85, "close-up": 85, "medium-close-up": 85,
+        "medium-shot": 50, "medium-full": 50, "full-shot": 35,
+        "wide-shot": 24, "extreme-wide": 18, "two-shot": 50, "over-shoulder": 85
+    };
+
+    // Shot type → distance default
+    var distDefaults = {
+        "extreme-close-up": 25, "close-up": 50, "medium-close-up": 90,
+        "medium-shot": 140, "medium-full": 200, "full-shot": 400,
+        "wide-shot": 700, "extreme-wide": 1200, "two-shot": 250, "over-shoulder": 150
+    };
+
+    for (var i = 0; i < shots.length; i++) {
+        var shot = shots[i];
+        var shotType = shot.shotType || "medium-shot";
+        var duration = shot.durationFrames || framesPerShot;
+        var shotEnd = currentFrame + duration - 1;
+
+        var camLabel = shot.cameraLabel || (title + "_Cam" + (i + 1));
+        var focalLength = shot.focalLength || focalDefaults[shotType] || 50;
+        var distance = shot.distance || distDefaults[shotType] || 200;
+        var angle = shot.angle !== undefined ? shot.angle : 0;
+
+        // Find subject
+        var subjectLabel = shot.subjectLabel || null;
+        var subjectPos = {x: 0, y: 130, z: 0};
+        if (subjectLabel) {
+            var subNode = Scene.findNodeByLabel(subjectLabel) || Scene.findNode(subjectLabel);
+            if (subNode) {
+                var sx = subNode.findProperty("XTranslate");
+                var sy = subNode.findProperty("YTranslate");
+                var sz = subNode.findProperty("ZTranslate");
+                subjectPos = {
+                    x: sx ? sx.getValue() : 0,
+                    y: (sy ? sy.getValue() : 0) + 130,
+                    z: sz ? sz.getValue() : 0
+                };
+            }
+        }
+
+        // Create camera for this shot if requested
+        var camCreated = false;
+        var camNode = Scene.findNodeByLabel(camLabel);
+        if (!camNode && savePresets) {
+            camNode = new DzBasicCamera();
+            Scene.addNode(camNode);
+            camNode.setLabel(camLabel);
+            camCreated = true;
+
+            // Position camera
+            var angleRad = angle * (Math.PI / 180);
+            var camX = subjectPos.x + distance * Math.sin(angleRad);
+            var camZ = subjectPos.z - distance * Math.cos(angleRad);
+            var camY = subjectPos.y + 20; // slight upward angle
+
+            var xp = camNode.findProperty("XTranslate");
+            var yp = camNode.findProperty("YTranslate");
+            var zp = camNode.findProperty("ZTranslate");
+            if (xp) xp.setValue(camX);
+            if (yp) yp.setValue(camY);
+            if (zp) zp.setValue(camZ);
+
+            // Set focal length
+            var flProp = camNode.getFocalLengthControl();
+            if (flProp) flProp.setValue(focalLength);
+
+            // Aim at subject
+            var dx = subjectPos.x - camX;
+            var dy = subjectPos.y - camY;
+            var dz = subjectPos.z - camZ;
+            var distXZ = Math.sqrt(dx * dx + dz * dz);
+            var yRotVal = Math.atan2(dx, -dz) * (180 / Math.PI);
+            var xRotVal = Math.atan2(dy, distXZ) * (180 / Math.PI);
+
+            var xRot = camNode.findProperty("XRotate");
+            var yRot = camNode.findProperty("YRotate");
+            if (xRot) xRot.setValue(xRotVal);
+            if (yRot) yRot.setValue(yRotVal);
+        }
+
+        storyboardShots.push({
+            shotNumber: i + 1,
+            label: shot.label || ("Shot " + (i + 1)),
+            shotType: shotType,
+            subject: subjectLabel,
+            camera: camLabel,
+            cameraCreated: camCreated,
+            focalLength: focalLength,
+            distance: distance,
+            angle: angle,
+            startFrame: currentFrame,
+            endFrame: shotEnd,
+            durationFrames: duration,
+            durationSeconds: Math.round(duration / 30 * 10) / 10,
+            description: shot.description || "",
+            action: shot.action || "",
+            dialogue: shot.dialogue || ""
+        });
+
+        totalFrames += duration;
+        currentFrame = shotEnd + 1;
+    }
+
+    return {
+        title: title,
+        totalShots: storyboardShots.length,
+        totalFrames: totalFrames,
+        totalSeconds: Math.round(totalFrames / 30 * 10) / 10,
+        startFrame: startFrame,
+        endFrame: currentFrame - 1,
+        shots: storyboardShots,
+        suggestions: [
+            "Use daz_set_active_camera to preview each shot's camera",
+            "Use daz_render_with_camera to render individual shots",
+            "Animate between shots with daz_animate_camera_movement",
+            "Set scene timeline: daz_set_frame_range(" + startFrame + ", " + (currentFrame - 1) + ")"
+        ]
+    };
+})()
+"""
+
+# ---------------------------------------------------------------------------
+# Phase 4.10: Focus & DOF scripts
+# ---------------------------------------------------------------------------
+
+_SET_FOCUS_POINT_SCRIPT = """\
+(function(){
+    var args = getArguments()[0] || {};
+    var cameraLabel = args.cameraLabel;
+    var targetLabel = args.targetLabel || null;
+    var focalDistance = args.focalDistance || null;
+    var fStop = args.fStop || null;
+    var enableDof = args.enableDof !== false;
+
+    // Locate camera
+    var cam = Scene.findNodeByLabel(cameraLabel);
+    if (!cam) cam = Scene.findNode(cameraLabel);
+    if (!cam) throw new Error("Camera not found: " + cameraLabel);
+
+    // If a target node is given, calculate distance from camera
+    if (targetLabel) {
+        var target = Scene.findNodeByLabel(targetLabel);
+        if (!target) target = Scene.findNode(targetLabel);
+        if (!target) throw new Error("Target node not found: " + targetLabel);
+
+        var camXp = cam.findProperty("XTranslate");
+        var camYp = cam.findProperty("YTranslate");
+        var camZp = cam.findProperty("ZTranslate");
+
+        var tgtXp = target.findProperty("XTranslate");
+        var tgtYp = target.findProperty("YTranslate");
+        var tgtZp = target.findProperty("ZTranslate");
+
+        var cx = camXp ? camXp.getValue() : 0;
+        var cy = camYp ? camYp.getValue() : 0;
+        var cz = camZp ? camZp.getValue() : 0;
+
+        var tx = tgtXp ? tgtXp.getValue() : 0;
+        var ty = tgtYp ? tgtYp.getValue() : 0;
+        var tz = tgtZp ? tgtZp.getValue() : 0;
+
+        // Target aim point — use eye-level (+130 cm) for figures
+        var numSkel = Scene.getNumSkeletons();
+        var isFigure = false;
+        for (var s = 0; s < numSkel; s++) {
+            if (Scene.getSkeleton(s).getLabel() === target.getLabel()) {
+                isFigure = true;
+                break;
+            }
+        }
+        if (isFigure) ty += 130;
+
+        var dx = tx - cx;
+        var dy = ty - cy;
+        var dz = tz - cz;
+        focalDistance = Math.round(Math.sqrt(dx*dx + dy*dy + dz*dz));
+    }
+
+    if (focalDistance === null || focalDistance === undefined) {
+        throw new Error("Either targetLabel or focalDistance must be provided");
+    }
+
+    var results = {};
+
+    // Enable DOF via the control API
+    if (enableDof) {
+        try {
+            cam.getDepthOfFieldControl().setBoolValue(true);
+            results.dofEnabled = true;
+        } catch(e) {
+            results.dofEnabled = false;
+            results.dofNote = "Could not enable DOF: " + e.message;
+        }
+    }
+
+    // Set focal distance via the dedicated control
+    var focalPropSFP = cam.getFocalDistanceControl();
+    if (focalPropSFP) {
+        focalPropSFP.setValue(focalDistance);
+        results.focalDistance = focalDistance;
+        results.focalDistanceProperty = "Focal Distance";
+    } else {
+        results.focalDistanceNote = "Focal distance control not available on this camera";
+    }
+
+    // Set F/Stop if provided
+    if (fStop !== null && fStop !== undefined) {
+        var fStopCtrl = cam.getFStopControl();
+        if (fStopCtrl) {
+            fStopCtrl.setValue(fStop);
+            results.fStop = fStop;
+        } else {
+            results.fStopNote = "F/Stop control not available on this camera";
+        }
+    }
+
+    // Return DOF depth-of-field preview info
+    var dofPreview = {
+        focalDistance: focalDistance,
+        fStop: fStop,
+        nearBlurStart:  fStop ? Math.round(focalDistance - (focalDistance / (fStop * 4))) : null,
+        farBlurStart:   fStop ? Math.round(focalDistance + (focalDistance / (fStop * 4))) : null
+    };
+
+    return {
+        camera: cam.getLabel(),
+        target: targetLabel,
+        focalDistance: focalDistance,
+        fStop: fStop,
+        dofEnabled: enableDof,
+        propertiesSet: results,
+        dofPreview: dofPreview,
+        suggestions: [
+            "Use daz_animate_focus_pull to rack focus between subjects",
+            "Lower F/Stop (e.g. 1.4) = shallower depth of field (more blur)",
+            "Higher F/Stop (e.g. 11) = deeper depth of field (more in focus)",
+            "Render with daz_render to see DOF effect"
+        ]
+    };
+})()
+"""
+
+_ANIMATE_FOCUS_PULL_SCRIPT = """\
+(function(){
+    var args = getArguments()[0] || {};
+    var cameraLabel = args.cameraLabel;
+    var fromTarget = args.fromTarget || null;
+    var toTarget = args.toTarget || null;
+    var fromDistance = args.fromDistance || null;
+    var toDistance = args.toDistance || null;
+    var startFrame = args.startFrame !== undefined ? args.startFrame : 0;
+    var endFrame = args.endFrame !== undefined ? args.endFrame : 60;
+    var holdFromFrames = args.holdFromFrames !== undefined ? args.holdFromFrames : 0;
+    var holdToFrames = args.holdToFrames !== undefined ? args.holdToFrames : 0;
+    var fStop = args.fStop || null;
+
+    // Locate camera
+    var cam = Scene.findNodeByLabel(cameraLabel);
+    if (!cam) cam = Scene.findNode(cameraLabel);
+    if (!cam) throw new Error("Camera not found: " + cameraLabel);
+
+    // Helper: distance from camera to a labeled node
+    function distToNode(nodeLabel, isFrom) {
+        var node = Scene.findNodeByLabel(nodeLabel);
+        if (!node) node = Scene.findNode(nodeLabel);
+        if (!node) throw new Error("Node not found: " + nodeLabel);
+
+        var camXp = cam.findProperty("XTranslate");
+        var camYp = cam.findProperty("YTranslate");
+        var camZp = cam.findProperty("ZTranslate");
+
+        var nodeXp = node.findProperty("XTranslate");
+        var nodeYp = node.findProperty("YTranslate");
+        var nodeZp = node.findProperty("ZTranslate");
+
+        var cx = camXp ? camXp.getValue() : 0;
+        var cy = camYp ? camYp.getValue() : 0;
+        var cz = camZp ? camZp.getValue() : 0;
+
+        var nx = nodeXp ? nodeXp.getValue() : 0;
+        var ny = nodeYp ? nodeYp.getValue() : 0;
+        var nz = nodeZp ? nodeZp.getValue() : 0;
+
+        // Eye level for skeleton figures
+        var numSkel = Scene.getNumSkeletons();
+        for (var s = 0; s < numSkel; s++) {
+            if (Scene.getSkeleton(s).getLabel() === node.getLabel()) {
+                ny += 130;
+                break;
+            }
+        }
+
+        var dx = nx - cx; var dy = ny - cy; var dz = nz - cz;
+        return Math.round(Math.sqrt(dx*dx + dy*dy + dz*dz));
+    }
+
+    // Resolve from/to distances
+    if (fromTarget) fromDistance = distToNode(fromTarget);
+    if (toTarget)   toDistance   = distToNode(toTarget);
+
+    if (fromDistance === null || fromDistance === undefined)
+        throw new Error("Either fromTarget or fromDistance must be provided");
+    if (toDistance === null || toDistance === undefined)
+        throw new Error("Either toTarget or toDistance must be provided");
+
+    // Enable DOF and get focal distance control directly via camera API
+    cam.getDepthOfFieldControl().setBoolValue(true);
+    var focalProp = cam.getFocalDistanceControl();
+    if (!focalProp) throw new Error("Camera does not support focal distance control: " + cameraLabel);
+    var focalPropName = "Focal Distance";
+
+    var keyframes = [];
+
+    // Frame layout:
+    //   [startFrame] .... [holdFrom] .... [pullStart] .... [pullEnd] .... [endFrame]
+    var pullStart = startFrame + holdFromFrames;
+    var pullEnd   = endFrame - holdToFrames;
+    if (pullStart >= pullEnd) {
+        pullStart = startFrame;
+        pullEnd   = endFrame;
+    }
+
+    // Hold at from-distance (start + hold period)
+    // DzFloatProperty: setValue(tm, val) two-arg form creates a keyframe
+    focalProp.setValue(startFrame, fromDistance);
+    keyframes.push({frame: startFrame, focalDistance: fromDistance, phase: "hold-from"});
+
+    if (holdFromFrames > 0) {
+        focalProp.setValue(pullStart, fromDistance);
+        keyframes.push({frame: pullStart, focalDistance: fromDistance, phase: "pull-start"});
+    }
+
+    // Pull to target
+    focalProp.setValue(pullEnd, toDistance);
+    keyframes.push({frame: pullEnd, focalDistance: toDistance, phase: "pull-end"});
+
+    if (holdToFrames > 0 && pullEnd < endFrame) {
+        focalProp.setValue(endFrame, toDistance);
+        keyframes.push({frame: endFrame, focalDistance: toDistance, phase: "hold-to"});
+    }
+
+    // Set F/Stop if requested
+    var fStopResult = null;
+    if (fStop !== null && fStop !== undefined) {
+        var fStopProp = cam.getFStopControl();
+        if (fStopProp) { fStopProp.setValue(fStop); fStopResult = fStop; }
+    }
+
+    return {
+        camera: cam.getLabel(),
+        fromTarget: fromTarget,
+        fromDistance: fromDistance,
+        toTarget: toTarget,
+        toDistance: toDistance,
+        fStop: fStopResult,
+        focalDistanceProperty: focalPropName,
+        startFrame: startFrame,
+        endFrame: endFrame,
+        pullStartFrame: pullStart,
+        pullEndFrame: pullEnd,
+        keyframes: keyframes,
+        pullDurationFrames: pullEnd - pullStart,
+        pullDurationSeconds: Math.round((pullEnd - pullStart) / 30 * 10) / 10,
+        suggestions: [
+            "Render with daz_render_animation to see the focus pull in motion",
+            "Adjust holdFromFrames / holdToFrames to add pause before and after pull",
+            "Combine with daz_animate_camera_movement for a dolly + focus pull",
+            "Use F/Stop 1.4-2.8 for shallow DOF, 8-16 for deep DOF"
+        ]
+    };
+})()
+"""
+
+# ---------------------------------------------------------------------------
+# Phase 4.11: Visual Composition scripts
+# ---------------------------------------------------------------------------
+
+_SET_SCENE_ATMOSPHERE_SCRIPT = """\
+(function(){
+    var args = getArguments()[0] || {};
+    var environmentMode = args.environmentMode !== undefined ? args.environmentMode : null;
+    var environmentIntensity = args.environmentIntensity !== undefined ? args.environmentIntensity : null;
+    var drawDome = args.drawDome !== undefined ? args.drawDome : null;
+    var domeScale = args.domeScale !== undefined ? args.domeScale : null;
+    var domeRotation = args.domeRotation !== undefined ? args.domeRotation : null;
+    var sunLightIntensity = args.sunLightIntensity !== undefined ? args.sunLightIntensity : null;
+    var ambientColor = args.ambientColor || null;
+
+    // Environment node is always Scene.getNode(1)
+    var envNode = Scene.getNode(1);
+    if (!envNode) throw new Error("Environment node not found at Scene.getNode(1)");
+
+    var results = {};
+    var changes = [];
+
+    // Environment mode:
+    //   0 = Sun-Sky Only, 1 = Dome Only, 2 = Sun-Sky + Dome, 3 = Scene Only (no dome)
+    if (environmentMode !== null) {
+        var modeProp = envNode.findProperty("Environment Mode");
+        if (modeProp) {
+            modeProp.setValue(environmentMode);
+            results.environmentMode = environmentMode;
+            var modeNames = {0: "Sun-Sky Only", 1: "Dome Only", 2: "Sun-Sky + Dome", 3: "Scene Only"};
+            changes.push("Environment Mode → " + (modeNames[environmentMode] || environmentMode));
+        } else {
+            results.environmentModeNote = "Environment Mode property not found";
+        }
+    }
+
+    // Environment intensity (controls dome/HDRI brightness)
+    if (environmentIntensity !== null) {
+        var intensProp = envNode.findProperty("Environment Intensity");
+        if (!intensProp) intensProp = envNode.findProperty("Dome Intensity");
+        if (intensProp) {
+            intensProp.setValue(environmentIntensity);
+            results.environmentIntensity = environmentIntensity;
+            changes.push("Environment Intensity → " + environmentIntensity);
+        } else {
+            results.environmentIntensityNote = "Environment Intensity property not found";
+        }
+    }
+
+    // Draw dome (show HDRI background in render)
+    if (drawDome !== null) {
+        var domeProp = envNode.findProperty("Draw Dome");
+        if (!domeProp) domeProp = envNode.findProperty("Dome Visible");
+        if (domeProp) {
+            domeProp.setValue(drawDome ? 1 : 0);
+            results.drawDome = drawDome;
+            changes.push("Draw Dome → " + (drawDome ? "On" : "Off"));
+        } else {
+            results.drawDomeNote = "Draw Dome property not found";
+        }
+    }
+
+    // Dome scale
+    if (domeScale !== null) {
+        var scaleProp = envNode.findProperty("Dome Scale");
+        if (scaleProp) {
+            scaleProp.setValue(domeScale);
+            results.domeScale = domeScale;
+            changes.push("Dome Scale → " + domeScale);
+        }
+    }
+
+    // Dome rotation (horizontal rotation of the HDRI dome)
+    if (domeRotation !== null) {
+        var rotProp = envNode.findProperty("Dome Rotation");
+        if (!rotProp) rotProp = envNode.findProperty("Dome Orientation");
+        if (rotProp) {
+            rotProp.setValue(domeRotation);
+            results.domeRotation = domeRotation;
+            changes.push("Dome Rotation → " + domeRotation + "°");
+        }
+    }
+
+    // Sun light intensity (for Sun-Sky mode)
+    if (sunLightIntensity !== null) {
+        var sunProp = envNode.findProperty("Sun Intensity");
+        if (!sunProp) sunProp = envNode.findProperty("Sunlight Intensity");
+        if (sunProp) {
+            sunProp.setValue(sunLightIntensity);
+            results.sunLightIntensity = sunLightIntensity;
+            changes.push("Sun Intensity → " + sunLightIntensity);
+        } else {
+            results.sunLightNote = "Sun Intensity property not found";
+        }
+    }
+
+    // Read back current environment state for context
+    var currentMode = null;
+    var mp = envNode.findProperty("Environment Mode");
+    if (mp) currentMode = mp.getValue();
+
+    return {
+        environmentNodeLabel: envNode.getLabel(),
+        changesApplied: changes,
+        changeCount: changes.length,
+        currentEnvironmentMode: currentMode,
+        results: results,
+        environmentModeReference: {
+            0: "Sun-Sky Only (outdoor HDRI sky)",
+            1: "Dome Only (HDRI dome image)",
+            2: "Sun-Sky + Dome (combined)",
+            3: "Scene Only (use only scene lights, no dome)"
+        },
+        suggestions: [
+            "Mode 3 (Scene Only) works best with daz_apply_lighting_preset presets",
+            "Mode 1 (Dome Only) requires loading an HDRI map first",
+            "Rotate dome to match light direction with key lights",
+            "Lower environmentIntensity (0.1-0.5) to blend HDRI with scene lights"
+        ]
+    };
+})()
+"""
+
+_APPLY_VISUAL_STYLE_SCRIPT = """\
+(function(){
+    var args = getArguments()[0] || {};
+    var styleName = args.styleName || "cinematic";
+    var subjectLabel = args.subjectLabel || null;
+    var intensity = args.intensity !== undefined ? args.intensity : 1.0;
+
+    // Style definitions: each style sets environment + light ratios
+    var styles = {
+        "cinematic": {
+            envMode: 3,             // Scene Only
+            keyFlux: 5000,
+            fillRatio: 0.15,
+            rimRatio: 0.7,
+            keyAngle: 40,
+            rimAngle: -150,
+            shadowSoftness: 0.3,
+            description: "High contrast, strong rim, compressed fill — film look"
+        },
+        "noir": {
+            envMode: 3,
+            keyFlux: 4000,
+            fillRatio: 0.05,
+            rimRatio: 0.2,
+            keyAngle: 70,
+            rimAngle: -160,
+            shadowSoftness: 0.1,
+            description: "Extreme contrast, deep shadows, minimal fill — classic noir"
+        },
+        "golden-hour": {
+            envMode: 3,
+            keyFlux: 6000,
+            fillRatio: 0.3,
+            rimRatio: 0.9,
+            keyAngle: 25,
+            rimAngle: -170,
+            shadowSoftness: 0.5,
+            description: "Warm raking light, strong backlit rim, soft fill — magic hour"
+        },
+        "blue-hour": {
+            envMode: 3,
+            keyFlux: 1500,
+            fillRatio: 0.6,
+            rimRatio: 0.4,
+            keyAngle: 20,
+            rimAngle: -140,
+            shadowSoftness: 0.8,
+            description: "Low intensity, even blue-toned fill, subtle — dusk/dawn"
+        },
+        "high-key": {
+            envMode: 3,
+            keyFlux: 8000,
+            fillRatio: 0.8,
+            rimRatio: 0.3,
+            keyAngle: 10,
+            rimAngle: -160,
+            shadowSoftness: 0.9,
+            description: "Bright, low contrast, minimal shadows — commercial/fashion"
+        },
+        "low-key": {
+            envMode: 3,
+            keyFlux: 2500,
+            fillRatio: 0.08,
+            rimRatio: 0.3,
+            keyAngle: 60,
+            rimAngle: -150,
+            shadowSoftness: 0.2,
+            description: "Dark, moody, shadows dominate — thriller/horror"
+        },
+        "documentary": {
+            envMode: 3,
+            keyFlux: 4500,
+            fillRatio: 0.5,
+            rimRatio: 0.2,
+            keyAngle: 30,
+            rimAngle: -160,
+            shadowSoftness: 0.6,
+            description: "Natural-feeling, moderate contrast — realistic interview look"
+        },
+        "fantasy": {
+            envMode: 3,
+            keyFlux: 3500,
+            fillRatio: 0.4,
+            rimRatio: 1.2,
+            keyAngle: 35,
+            rimAngle: -145,
+            shadowSoftness: 0.7,
+            description: "Ethereal, glowing rim, soft key — fantasy/magical"
+        }
+    };
+
+    var style = styles[styleName];
+    if (!style) {
+        throw new Error("Unknown styleName: " + styleName +
+            ". Valid: " + Object.keys(styles).join(", "));
+    }
+
+    // Scale fluxes by intensity
+    var keyFlux  = Math.round(style.keyFlux * intensity);
+    var fillFlux = Math.round(keyFlux * style.fillRatio);
+    var rimFlux  = Math.round(keyFlux * style.rimRatio);
+
+    // Find subject for light positioning
+    var subjectPos = {x: 0, y: 130, z: 0};
+    if (subjectLabel) {
+        var sub = Scene.findNodeByLabel(subjectLabel) || Scene.findNode(subjectLabel);
+        if (sub) {
+            var sx = sub.findProperty("XTranslate");
+            var sy = sub.findProperty("YTranslate");
+            var sz = sub.findProperty("ZTranslate");
+            subjectPos = {
+                x: sx ? sx.getValue() : 0,
+                y: (sy ? sy.getValue() : 0) + 130,
+                z: sz ? sz.getValue() : 0
+            };
+        }
+    }
+
+    // Set environment mode to Scene Only
+    var envNode = Scene.getNode(1);
+    if (envNode) {
+        var modeProp = envNode.findProperty("Environment Mode");
+        if (modeProp) modeProp.setValue(style.envMode);
+    }
+
+    // Light distance relative to subject
+    var lightDist = 250;
+
+    // Helper to get or create a spot light by label
+    function getOrCreateSpot(label) {
+        var node = Scene.findNodeByLabel(label);
+        if (node) return node;
+        var light = new DzSpotLight();
+        Scene.addNode(light);
+        light.setLabel(label);
+        return light;
+    }
+
+    function positionLight(light, angleDeg, height, dist) {
+        var rad = angleDeg * (Math.PI / 180);
+        var lx = subjectPos.x + dist * Math.sin(rad);
+        var lz = subjectPos.z - dist * Math.cos(rad);
+        var ly = height;
+
+        var xp = light.findProperty("XTranslate");
+        var yp = light.findProperty("YTranslate");
+        var zp = light.findProperty("ZTranslate");
+        if (xp) xp.setValue(lx);
+        if (yp) yp.setValue(ly);
+        if (zp) zp.setValue(lz);
+
+        // Aim at subject
+        var dx = subjectPos.x - lx;
+        var dy = subjectPos.y - ly;
+        var dz = subjectPos.z - lz;
+        var distXZ = Math.sqrt(dx*dx + dz*dz);
+        var yRot = light.findProperty("YRotate");
+        var xRot = light.findProperty("XRotate");
+        if (yRot) yRot.setValue(Math.atan2(dx, -dz) * (180 / Math.PI));
+        if (xRot) xRot.setValue(Math.atan2(dy, distXZ) * (180 / Math.PI));
+    }
+
+    function setLightFlux(light, flux, shadowSoft) {
+        var fp = light.findProperty("Flux");
+        if (fp) fp.setValue(flux);
+        var sp = light.findProperty("Shadow Softness");
+        if (sp) sp.setValue(shadowSoft);
+    }
+
+    var lightsConfigured = [];
+
+    // Key light
+    var keyLight = getOrCreateSpot("Style_Key");
+    positionLight(keyLight, style.keyAngle, subjectPos.y + 60, lightDist);
+    setLightFlux(keyLight, keyFlux, style.shadowSoftness);
+    lightsConfigured.push({role: "key", label: "Style_Key", flux: keyFlux, angle: style.keyAngle});
+
+    // Fill light (opposite side, lower, softer)
+    var fillAngle = style.keyAngle - 120;
+    var fillLight = getOrCreateSpot("Style_Fill");
+    positionLight(fillLight, fillAngle, subjectPos.y + 20, lightDist * 1.2);
+    setLightFlux(fillLight, fillFlux, Math.min(1.0, style.shadowSoftness + 0.2));
+    lightsConfigured.push({role: "fill", label: "Style_Fill", flux: fillFlux, angle: fillAngle});
+
+    // Rim light (behind subject)
+    var rimLight = getOrCreateSpot("Style_Rim");
+    positionLight(rimLight, style.rimAngle, subjectPos.y + 80, lightDist * 0.8);
+    setLightFlux(rimLight, rimFlux, style.shadowSoftness);
+    lightsConfigured.push({role: "rim", label: "Style_Rim", flux: rimFlux, angle: style.rimAngle});
+
+    return {
+        styleName: styleName,
+        description: style.description,
+        intensity: intensity,
+        subject: subjectLabel,
+        environmentMode: style.envMode,
+        lights: lightsConfigured,
+        lightingRatios: {
+            key: keyFlux,
+            fill: fillFlux,
+            rim: rimFlux,
+            keyToFill: Math.round(keyFlux / Math.max(1, fillFlux) * 10) / 10,
+            keyToRim: Math.round(keyFlux / Math.max(1, rimFlux) * 10) / 10
+        },
+        suggestions: [
+            "Adjust intensity (0.5–2.0) to scale the whole look brighter or darker",
+            "Fine-tune individual lights with daz_set_property on Style_Key/Fill/Rim",
+            "Combine with daz_set_scene_atmosphere to control the environment dome",
+            "Use daz_animate_light on Style_Key for dynamic lighting within the style"
+        ]
+    };
+})()
+"""
+
+# ---------------------------------------------------------------------------
+# Phase 4.12: Multi-Scene Management scripts
+# ---------------------------------------------------------------------------
+
+_READ_NODE_CONFIG_SCRIPT = """\
+(function(){
+    var args = getArguments()[0] || {};
+    var nodeLabels = args.nodeLabels || [];    // [] = capture all scene nodes
+    var includeTypes = args.includeTypes || ["transforms", "morphs", "lights", "cameras"];
+
+    var captureTransforms = includeTypes.indexOf("transforms") !== -1;
+    var captureMorphs     = includeTypes.indexOf("morphs")     !== -1;
+    var captureLights     = includeTypes.indexOf("lights")     !== -1;
+    var captureCameras    = includeTypes.indexOf("cameras")    !== -1;
+
+    var TRANSFORM_PROPS = [
+        "XTranslate", "YTranslate", "ZTranslate",
+        "XRotate", "YRotate", "ZRotate",
+        "XScale", "YScale", "ZScale", "Scale"
+    ];
+    var LIGHT_PROPS = ["Flux", "Shadow Softness", "Spread Angle", "Photometric Mode"];
+    var CAMERA_PROPS = [
+        "FocalLength", "Focal Distance", "Focus Distance",
+        "F/Stop", "Depth of Field", "DOF Active"
+    ];
+
+    // Resolve node list: explicit labels OR all skeletons+cameras+lights
+    var nodesToCapture = [];
+
+    if (nodeLabels.length > 0) {
+        for (var i = 0; i < nodeLabels.length; i++) {
+            var n = Scene.findNodeByLabel(nodeLabels[i]) || Scene.findNode(nodeLabels[i]);
+            if (n) nodesToCapture.push(n);
+        }
+    } else {
+        // Default: all skeletons, cameras, lights
+        for (var s = 0; s < Scene.getNumSkeletons(); s++) nodesToCapture.push(Scene.getSkeleton(s));
+        for (var c = 0; c < Scene.getNumCameras();   c++) nodesToCapture.push(Scene.getCamera(c));
+        for (var l = 0; l < Scene.getNumLights();    l++) nodesToCapture.push(Scene.getLight(l));
+    }
+
+    var config = {};
+    var summary = {nodes: 0, properties: 0, morphs: 0};
+
+    for (var ni = 0; ni < nodesToCapture.length; ni++) {
+        var node = nodesToCapture[ni];
+        var label = node.getLabel();
+        var nodeData = {_type: node.className()};
+
+        // Transforms
+        if (captureTransforms) {
+            for (var ti = 0; ti < TRANSFORM_PROPS.length; ti++) {
+                var tp = node.findProperty(TRANSFORM_PROPS[ti]);
+                if (tp) nodeData[TRANSFORM_PROPS[ti]] = tp.getValue();
+            }
+        }
+
+        // Light-specific properties
+        if (captureLights) {
+            for (var li = 0; li < LIGHT_PROPS.length; li++) {
+                var lp = node.findProperty(LIGHT_PROPS[li]);
+                if (lp) nodeData[LIGHT_PROPS[li]] = lp.getValue();
+            }
+        }
+
+        // Camera-specific properties
+        if (captureCameras) {
+            for (var ci = 0; ci < CAMERA_PROPS.length; ci++) {
+                var cp = node.findProperty(CAMERA_PROPS[ci]);
+                if (cp) nodeData[CAMERA_PROPS[ci]] = cp.getValue();
+            }
+        }
+
+        // Morphs: non-zero numeric properties not already captured
+        if (captureMorphs) {
+            var captured = {};
+            for (var k in nodeData) captured[k] = true;
+
+            for (var pi = 0; pi < node.getNumProperties(); pi++) {
+                var prop = node.getProperty(pi);
+                if (!prop.inherits("DzNumericProperty")) continue;
+                var pname = prop.getName();
+                if (captured[pname]) continue;
+                var pval = prop.getValue();
+                if (pval !== 0) {
+                    nodeData[pname] = pval;
+                    summary.morphs++;
+                }
+            }
+        }
+
+        config[label] = nodeData;
+        summary.nodes++;
+        summary.properties += Object.keys(nodeData).length - 1; // exclude _type
+    }
+
+    return {
+        config: config,
+        summary: summary
+    };
+})()
+"""
+
+_WRITE_NODE_CONFIG_SCRIPT = """\
+(function(){
+    var args = getArguments()[0] || {};
+    var config = args.config || {};
+    var skipMissing = args.skipMissing !== false;
+    var scaleTransforms = args.scaleTransforms !== undefined ? args.scaleTransforms : 1.0;
+
+    var TRANSFORM_PROPS = {
+        "XTranslate": true, "YTranslate": true, "ZTranslate": true
+    };
+
+    var results = [];
+    var successCount = 0;
+    var failureCount = 0;
+    var skippedCount = 0;
+
+    var nodeLabels = Object.keys(config);
+
+    for (var ni = 0; ni < nodeLabels.length; ni++) {
+        var label = nodeLabels[ni];
+        var nodeData = config[label];
+
+        var node = Scene.findNodeByLabel(label) || Scene.findNode(label);
+        if (!node) {
+            if (skipMissing) {
+                results.push({node: label, status: "skipped", reason: "not found in scene"});
+                skippedCount++;
+                continue;
+            } else {
+                results.push({node: label, status: "error", reason: "not found in scene"});
+                failureCount++;
+                continue;
+            }
+        }
+
+        var nodeResult = {node: label, status: "ok", applied: [], failed: []};
+        var propNames = Object.keys(nodeData);
+
+        for (var pi = 0; pi < propNames.length; pi++) {
+            var pname = propNames[pi];
+            if (pname === "_type") continue;
+
+            var pval = nodeData[pname];
+
+            // Scale translation properties if requested
+            if (scaleTransforms !== 1.0 && TRANSFORM_PROPS[pname]) {
+                pval = pval * scaleTransforms;
+            }
+
+            var prop = node.findProperty(pname);
+            if (prop) {
+                try {
+                    prop.setValue(pval);
+                    nodeResult.applied.push(pname);
+                } catch (e) {
+                    nodeResult.failed.push({property: pname, error: String(e)});
+                }
+            } else {
+                nodeResult.failed.push({property: pname, error: "property not found"});
+            }
+        }
+
+        if (nodeResult.failed.length === 0) {
+            successCount++;
+        } else if (nodeResult.applied.length > 0) {
+            nodeResult.status = "partial";
+            successCount++;
+        } else {
+            nodeResult.status = "error";
+            failureCount++;
+        }
+
+        results.push(nodeResult);
+    }
+
+    return {
+        results: results,
+        successCount: successCount,
+        failureCount: failureCount,
+        skippedCount: skippedCount,
+        totalNodes: nodeLabels.length
+    };
+})()
+"""
+
+# ---------------------------------------------------------------------------
+# Phase 4.13: Performance Timing scripts
+# ---------------------------------------------------------------------------
+
+_TIME_EXPRESSION_SCRIPT = """\
+(function(){
+    var args = getArguments()[0] || {};
+    var nodeLabel      = args.nodeLabel;
+    var morphList      = args.morphList || [];
+    var bodyAdjustments = args.bodyAdjustments || [];
+    var intensity      = args.intensity !== undefined ? args.intensity : 0.7;
+    var easeInStart    = args.easeInStart;
+    var holdStart      = args.holdStart;
+    var holdEnd        = args.holdEnd;
+    var easeOutEnd     = args.easeOutEnd;
+    var baselineFrame  = args.baselineFrame !== undefined ? args.baselineFrame : null;
+
+    var node = Scene.findNodeByLabel(nodeLabel) || Scene.findNode(nodeLabel);
+    if (!node) throw new Error("Node not found: " + nodeLabel);
+
+    var applied = [];
+    var notFound = [];
+    var keyframesSet = 0;
+
+    // Helper: set a keyframe on a property — two-arg setValue creates a keyframe (DzFloatProperty)
+    function setKey(prop, frame, value) {
+        prop.setValue(frame, value);
+        return true;
+    }
+
+    // Process each morph entry — try candidate names in order, first match wins
+    for (var i = 0; i < morphList.length; i++) {
+        var entry = morphList[i];
+        var peakValue = entry.value * intensity;
+        var found = false;
+
+        for (var j = 0; j < entry.names.length; j++) {
+            var prop = node.findProperty(entry.names[j]);
+            if (!prop || !prop.inherits("DzNumericProperty")) continue;
+
+            // Optional baseline keyframe (before ease-in, value=0)
+            if (baselineFrame !== null && baselineFrame < easeInStart) {
+                setKey(prop, baselineFrame, 0);
+                keyframesSet++;
+            }
+
+            // Ease-in start: value = 0
+            if (setKey(prop, easeInStart, 0)) keyframesSet++;
+
+            // Hold start: peak value
+            if (easeInStart < holdStart) {
+                if (setKey(prop, holdStart, peakValue)) keyframesSet++;
+            } else {
+                // No ease-in — jump straight to peak
+                if (setKey(prop, easeInStart, peakValue)) keyframesSet++;
+            }
+
+            // Hold end: still at peak
+            if (holdEnd > holdStart) {
+                if (setKey(prop, holdEnd, peakValue)) keyframesSet++;
+            }
+
+            // Ease-out end: back to 0
+            if (easeOutEnd > holdEnd) {
+                if (setKey(prop, easeOutEnd, 0)) keyframesSet++;
+            }
+
+            applied.push({morph: entry.names[j], peakValue: peakValue});
+            found = true;
+            break;
+        }
+
+        if (!found) notFound.push(entry.names[0] || "unknown");
+    }
+
+    // Process body adjustments (bone rotations)
+    var bodyApplied = [];
+    for (var k = 0; k < bodyAdjustments.length; k++) {
+        var adj = bodyAdjustments[k];
+        var peakRot = adj.value * intensity;
+        var bone = null;
+
+        for (var b = 0; b < node.getNumNodeChildren(); b++) {
+            var child = node.getNodeChild(b);
+            if (child && (child.getLabel() === adj.bone || child.getName() === adj.bone)) {
+                bone = child;
+                break;
+            }
+        }
+        if (!bone) bone = Scene.findNodeByLabel(adj.bone);
+        if (!bone) continue;
+
+        var boneProp = bone.findProperty(adj.property);
+        if (!boneProp) continue;
+
+        if (baselineFrame !== null && baselineFrame < easeInStart)
+            setKey(boneProp, baselineFrame, 0);
+
+        setKey(boneProp, easeInStart, 0);
+        setKey(boneProp, holdStart, peakRot);
+        if (holdEnd > holdStart) setKey(boneProp, holdEnd, peakRot);
+        if (easeOutEnd > holdEnd) setKey(boneProp, easeOutEnd, 0);
+
+        bodyApplied.push({bone: adj.bone, property: adj.property, peakValue: peakRot});
+        keyframesSet += 4;
+    }
+
+    return {
+        character: node.getLabel(),
+        easeInStart: easeInStart,
+        holdStart: holdStart,
+        holdEnd: holdEnd,
+        easeOutEnd: easeOutEnd,
+        intensity: intensity,
+        appliedMorphs: applied,
+        bodyAdjustments: bodyApplied,
+        notFound: notFound,
+        keyframesSet: keyframesSet,
+        durationFrames: easeOutEnd - easeInStart,
+        holdFrames: holdEnd - holdStart
+    };
+})()
+"""
+
+# ---------------------------------------------------------------------------
+# Phase 5: Materials / Surfaces
+# ---------------------------------------------------------------------------
+
+_LIST_MATERIALS_SCRIPT = """\
+(function(){
+    var args = getArguments()[0] || {};
+    var node = Scene.findNodeByLabel(args.nodeLabel);
+    if (!node) node = Scene.findNode(args.nodeLabel);
+    if (!node) throw new Error("Node not found: " + args.nodeLabel);
+    var obj = node.getObject();
+    if (!obj) throw new Error("Node has no geometry: " + args.nodeLabel);
+    var shape = obj.getCurrentShape();
+    if (!shape) throw new Error("Node has no material shape: " + args.nodeLabel);
+    var mats = [];
+    for (var i = 0; i < shape.getNumMaterials(); i++) {
+        var mat = shape.getMaterial(i);
+        mats.push({
+            index: i,
+            name: mat.getName(),
+            label: mat.getLabel(),
+            shader: mat.className()
+        });
+    }
+    return { node: node.getLabel(), material_count: mats.length, materials: mats };
+})()
+"""
+
+_GET_MATERIAL_SCRIPT = """\
+(function(){
+    var args = getArguments()[0] || {};
+    var node = Scene.findNodeByLabel(args.nodeLabel);
+    if (!node) node = Scene.findNode(args.nodeLabel);
+    if (!node) throw new Error("Node not found: " + args.nodeLabel);
+    var obj = node.getObject();
+    if (!obj) throw new Error("Node has no geometry: " + args.nodeLabel);
+    var shape = obj.getCurrentShape();
+    if (!shape) throw new Error("Node has no material shape: " + args.nodeLabel);
+    var mat = null;
+    for (var i = 0; i < shape.getNumMaterials(); i++) {
+        var m = shape.getMaterial(i);
+        if (m.getLabel() === args.materialName || m.getName() === args.materialName) {
+            mat = m; break;
+        }
+    }
+    if (!mat) throw new Error("Material not found: " + args.materialName);
+    function toHex(n) { return ("0" + Math.round(n).toString(16)).slice(-2); }
+    var props = [];
+    for (var p = 0; p < mat.getNumProperties(); p++) {
+        var prop = mat.getProperty(p);
+        var entry = { name: prop.getName(), label: prop.getLabel(), type: "unknown", value: null };
+        if (prop.inherits("DzColorProperty")) {
+            entry.type = "color";
+            try {
+                var col = prop.getColorValue();
+                entry.value = "#" + toHex(col.red()) + toHex(col.green()) + toHex(col.blue());
+            } catch(e) { entry.value = null; }
+        } else if (prop.inherits("DzNumericProperty")) {
+            entry.type = "numeric";
+            entry.value = prop.getValue();
+        } else if (prop.inherits("DzImageProperty")) {
+            entry.type = "image";
+            try {
+                var img = prop.getValue();
+                entry.value = img ? img.getFilename() : null;
+            } catch(e) { entry.value = null; }
+        }
+        props.push(entry);
+    }
+    return {
+        node: node.getLabel(),
+        material: mat.getLabel(),
+        shader: mat.className(),
+        property_count: props.length,
+        properties: props
+    };
+})()
+"""
+
+_SET_MATERIAL_PROPERTY_SCRIPT = """\
+(function(){
+    var args = getArguments()[0] || {};
+    var node = Scene.findNodeByLabel(args.nodeLabel);
+    if (!node) node = Scene.findNode(args.nodeLabel);
+    if (!node) throw new Error("Node not found: " + args.nodeLabel);
+    var obj = node.getObject();
+    if (!obj) throw new Error("Node has no geometry: " + args.nodeLabel);
+    var shape = obj.getCurrentShape();
+    if (!shape) throw new Error("Node has no material shape: " + args.nodeLabel);
+    var mat = null;
+    for (var i = 0; i < shape.getNumMaterials(); i++) {
+        var m = shape.getMaterial(i);
+        if (m.getLabel() === args.materialName || m.getName() === args.materialName) {
+            mat = m; break;
+        }
+    }
+    if (!mat) throw new Error("Material not found: " + args.materialName);
+    var prop = mat.findProperty(args.propertyName);
+    if (!prop) throw new Error("Property not found: " + args.propertyName + " on material " + args.materialName);
+    if (prop.inherits("DzColorProperty")) {
+        var hex = String(args.value).replace("#", "");
+        var r = parseInt(hex.substr(0, 2), 16);
+        var g = parseInt(hex.substr(2, 2), 16);
+        var b = parseInt(hex.substr(4, 2), 16);
+        prop.setColorValue(new QColor(r, g, b));
+        return {
+            node: node.getLabel(), material: mat.getLabel(),
+            property: prop.getLabel(), type: "color", value: args.value
+        };
+    } else if (prop.inherits("DzNumericProperty")) {
+        prop.setValue(parseFloat(args.value));
+        return {
+            node: node.getLabel(), material: mat.getLabel(),
+            property: prop.getLabel(), type: "numeric", value: prop.getValue()
+        };
+    } else {
+        throw new Error(
+            "Property '" + args.propertyName + "' is not a settable color or numeric property"
+        );
+    }
+})()
+"""
+
+# ---------------------------------------------------------------------------
+# Phase 5: Direct morph setting
+# ---------------------------------------------------------------------------
+
+_SET_MORPH_SCRIPT = """\
+(function(){
+    var args = getArguments()[0] || {};
+    var node = Scene.findNodeByLabel(args.nodeLabel);
+    if (!node) node = Scene.findNode(args.nodeLabel);
+    if (!node) throw new Error("Node not found: " + args.nodeLabel);
+    var search = (args.morphName || "").toLowerCase();
+    var prop = null;
+    // Exact label or name match first
+    for (var i = 0; i < node.getNumProperties(); i++) {
+        var p = node.getProperty(i);
+        if (!p.inherits("DzNumericProperty")) continue;
+        if (p.getLabel().toLowerCase() === search || p.getName().toLowerCase() === search) {
+            prop = p; break;
+        }
+    }
+    // Substring fallback
+    if (!prop) {
+        for (var i = 0; i < node.getNumProperties(); i++) {
+            var p = node.getProperty(i);
+            if (!p.inherits("DzNumericProperty")) continue;
+            if (p.getLabel().toLowerCase().indexOf(search) !== -1) {
+                prop = p; break;
+            }
+        }
+    }
+    if (!prop) throw new Error("Morph not found: " + args.morphName);
+    prop.setValue(args.value);
+    return {
+        node: node.getLabel(),
+        morph: prop.getLabel(),
+        internal_name: prop.getName(),
+        value: prop.getValue()
+    };
+})()
+"""
+
+# ---------------------------------------------------------------------------
+# Phase 5: Node lifecycle
+# ---------------------------------------------------------------------------
+
+_DELETE_NODE_SCRIPT = """\
+(function(){
+    var args = getArguments()[0] || {};
+    var node = Scene.findNodeByLabel(args.nodeLabel);
+    if (!node) node = Scene.findNode(args.nodeLabel);
+    if (!node) throw new Error("Node not found: " + args.nodeLabel);
+    var label = node.getLabel();
+    var childCount = node.getNumNodeChildren();
+    Scene.removeNode(node);
+    return { deleted: label, child_count: childCount };
+})()
+"""
+
+# ---------------------------------------------------------------------------
+# Phase 5: Light management
+# ---------------------------------------------------------------------------
+
+_LIST_LIGHTS_SCRIPT = """\
+(function(){
+    var lights = [];
+    for (var i = 0; i < Scene.getNumLights(); i++) {
+        var l = Scene.getLight(i);
+        var pos = l.getWSPos();
+        var fluxProp = l.findProperty("Flux");
+        var visibleProp = l.findProperty("Visible");
+        lights.push({
+            index: i,
+            label: l.getLabel(),
+            name: l.getName(),
+            type: l.className(),
+            position: {
+                x: Math.round(pos.x * 100) / 100,
+                y: Math.round(pos.y * 100) / 100,
+                z: Math.round(pos.z * 100) / 100
+            },
+            flux: fluxProp ? Math.round(fluxProp.getValue()) : null,
+            enabled: visibleProp ? (visibleProp.getValue() !== 0) : true
+        });
+    }
+    return { light_count: lights.length, lights: lights };
+})()
+"""
+
+_CREATE_LIGHT_SCRIPT = """\
+(function(){
+    var args = getArguments()[0] || {};
+    var t = (args.lightType || "spot").toLowerCase();
+    var light;
+    if (t === "distant") {
+        light = new DzDistantLight();
+    } else if (t === "point") {
+        light = new DzPointLight();
+    } else {
+        light = new DzSpotLight();
+        t = "spot";
+    }
+    light.setLabel(args.label || (t + "_light"));
+    Scene.addNode(light);
+    var xp = light.findProperty("XTranslate");
+    var yp = light.findProperty("YTranslate");
+    var zp = light.findProperty("ZTranslate");
+    if (xp) xp.setValue(args.x !== undefined ? args.x : 0);
+    if (yp) yp.setValue(args.y !== undefined ? args.y : 200);
+    if (zp) zp.setValue(args.z !== undefined ? args.z : 200);
+    if (args.flux !== undefined && args.flux !== null) {
+        var fp = light.findProperty("Flux");
+        if (fp) fp.setValue(args.flux);
+    }
+    if (args.aimAtLabel) {
+        var target = Scene.findNodeByLabel(args.aimAtLabel);
+        if (!target) target = Scene.findNode(args.aimAtLabel);
+        if (target) {
+            var bbox = target.getWSBoundingBox();
+            var cx = (bbox.minX + bbox.maxX) / 2;
+            var cy = (bbox.minY + bbox.maxY) / 2;
+            var cz = (bbox.minZ + bbox.maxZ) / 2;
+            light.aimAt(new DzVec3(cx, cy, cz));
+        }
+    }
+    var pos = light.getWSPos();
+    var fp2 = light.findProperty("Flux");
+    return {
+        label: light.getLabel(),
+        type: t,
+        position: { x: pos.x, y: pos.y, z: pos.z },
+        flux: fp2 ? fp2.getValue() : null
+    };
+})()
+"""
+
+# ---------------------------------------------------------------------------
+# Phase 5: Camera management
+# ---------------------------------------------------------------------------
+
+_LIST_CAMERAS_SCRIPT = """\
+(function(){
+    var cameras = [];
+    for (var i = 0; i < Scene.getNumCameras(); i++) {
+        var c = Scene.getCamera(i);
+        var pos = c.getWSPos();
+        var focalProp = c.getFocalLengthControl();
+        cameras.push({
+            index: i,
+            label: c.getLabel(),
+            name: c.getName(),
+            type: c.className(),
+            position: {
+                x: Math.round(pos.x * 100) / 100,
+                y: Math.round(pos.y * 100) / 100,
+                z: Math.round(pos.z * 100) / 100
+            },
+            focal_length: focalProp ? Math.round(focalProp.getValue() * 10) / 10 : null
+        });
+    }
+    return { camera_count: cameras.length, cameras: cameras };
+})()
+"""
+
+_CREATE_CAMERA_SCRIPT = """\
+(function(){
+    var args = getArguments()[0] || {};
+    var cam = new DzBasicCamera();
+    cam.setLabel(args.label || "Camera");
+    Scene.addNode(cam);
+    var xp = cam.findProperty("XTranslate");
+    var yp = cam.findProperty("YTranslate");
+    var zp = cam.findProperty("ZTranslate");
+    if (xp) xp.setValue(args.x !== undefined ? args.x : 0);
+    if (yp) yp.setValue(args.y !== undefined ? args.y : 150);
+    if (zp) zp.setValue(args.z !== undefined ? args.z : 300);
+    if (args.focalLength) {
+        var fp = cam.getFocalLengthControl();
+        if (fp) fp.setValue(args.focalLength);
+    }
+    if (args.aimAtLabel) {
+        var target = Scene.findNodeByLabel(args.aimAtLabel);
+        if (!target) target = Scene.findNode(args.aimAtLabel);
+        if (target) {
+            var bbox = target.getWSBoundingBox();
+            var cx = (bbox.minX + bbox.maxX) / 2;
+            var cy = (bbox.minY + bbox.maxY) / 2;
+            var cz = (bbox.minZ + bbox.maxZ) / 2;
+            cam.aimAt(new DzVec3(cx, cy, cz));
+        }
+    }
+    var pos = cam.getWSPos();
+    var fl = cam.getFocalLengthControl();
+    return {
+        label: cam.getLabel(),
+        position: { x: pos.x, y: pos.y, z: pos.z },
+        focal_length: fl ? fl.getValue() : null
+    };
+})()
+"""
+
+# ---------------------------------------------------------------------------
+# Phase 5: Scene file operations
+# ---------------------------------------------------------------------------
+
+_SAVE_SCENE_SCRIPT = """\
+(function(){
+    var args = getArguments()[0] || {};
+    var filePath = args.filePath || null;
+    var currentFile = Scene.getFilename();
+    if (filePath) {
+        Scene.saveScene(filePath);
+    } else {
+        var cf = currentFile || "";
+        if (cf) {
+            Scene.saveScene(cf);
+        } else {
+            throw new Error("No file path provided and scene has no current filename. Provide a file_path to save.");
+        }
+    }
+    var savedFile = Scene.getFilename();
+    return { saved: true, file_path: savedFile || filePath || currentFile || "unknown" };
+})()
+"""
+
+_GET_SELECTED_NODES_SCRIPT = """\
+(function(){
+    var selected = [];
+    var primary = Scene.getPrimarySelection();
+    if (primary) {
+        selected.push({
+            label: primary.getLabel(),
+            name: primary.getName(),
+            type: primary.className(),
+            primary: true
+        });
+    }
+    try {
+        var list = Scene.getSelectedNodeList();
+        for (var i = 0; i < list.length; i++) {
+            var n = list[i];
+            if (primary && n.getName() === primary.getName()) continue;
+            selected.push({
+                label: n.getLabel(),
+                name: n.getName(),
+                type: n.className(),
+                primary: false
+            });
+        }
+    } catch(e) {}
+    return { count: selected.length, nodes: selected };
+})()
+"""
+
+_SET_RENDER_OUTPUT_SCRIPT = """\
+(function(){
+    var args = getArguments()[0] || {};
+    var renderMgr = App.getRenderMgr();
+    var opts = renderMgr.getRenderOptions();
+    var changed = {};
+    if (args.outputPath) {
+        opts.renderImgFilename = args.outputPath;
+        opts.renderImgToId = 0;  // 0 = render to file
+        changed.output_path = args.outputPath;
+    }
+    if (args.width !== undefined && args.width !== null) {
+        opts.aspectWidth = args.width;
+        changed.width = args.width;
+    }
+    if (args.height !== undefined && args.height !== null) {
+        opts.aspectHeight = args.height;
+        changed.height = args.height;
+    }
+    return {
+        changed: changed,
+        current: {
+            output_path: opts.renderImgFilename || null,
+            width: opts.aspectWidth || null,
+            height: opts.aspectHeight || null
+        }
+    };
+})()
+"""
+
+# ---------------------------------------------------------------------------
+# Phase 5: Pose reset
+# ---------------------------------------------------------------------------
+
+_RESET_POSE_SCRIPT = """\
+(function(){
+    var args = getArguments()[0] || {};
+    var node = Scene.findNodeByLabel(args.nodeLabel);
+    if (!node) node = Scene.findNode(args.nodeLabel);
+    if (!node) throw new Error("Node not found: " + args.nodeLabel);
+    var bonesReset = 0;
+    function resetRotations(n) {
+        var rx = n.findProperty("XRotate");
+        var ry = n.findProperty("YRotate");
+        var rz = n.findProperty("ZRotate");
+        if (rx) { rx.setValue(0); bonesReset++; }
+        if (ry) ry.setValue(0);
+        if (rz) rz.setValue(0);
+        for (var i = 0; i < n.getNumNodeChildren(); i++) {
+            resetRotations(n.getNodeChild(i));
+        }
+    }
+    resetRotations(node);
+    if (args.zeroTransforms) {
+        var xt = node.findProperty("XTranslate");
+        var yt = node.findProperty("YTranslate");
+        var zt = node.findProperty("ZTranslate");
+        var sc = node.findProperty("Scale");
+        if (xt) xt.setValue(0);
+        if (yt) yt.setValue(0);
+        if (zt) zt.setValue(0);
+        if (sc) sc.setValue(1);
+    }
+    return {
+        node: node.getLabel(),
+        bones_reset: bonesReset,
+        transforms_zeroed: args.zeroTransforms === true
     };
 })()
 """
@@ -4895,6 +6914,109 @@ _REGISTRY: dict[str, tuple[str, str]] = {
     "vangard-create-camera-rig": (
         "Set up multi-camera rig in circular formation for bullet-time or multi-angle shots",
         _CREATE_CAMERA_RIG_SCRIPT,
+    ),
+    "vangard-animate-light": (
+        "Animate a light's intensity with flicker, pulse, fade, strobe, or color-cycle effects",
+        _ANIMATE_LIGHT_SCRIPT,
+    ),
+    "vangard-create-light-sequence": (
+        "Create a multi-light animated sequence for a mood or time-of-day (day-to-night, romantic, etc.)",
+        _CREATE_LIGHT_SEQUENCE_SCRIPT,
+    ),
+    "vangard-plan-shot": (
+        "Analyse the current scene and recommend camera, lighting and character settings for a shot type",
+        _PLAN_SHOT_SCRIPT,
+    ),
+    "vangard-create-storyboard": (
+        "Generate a storyboard of sequential shots with metadata and camera settings saved to scene",
+        _CREATE_STORYBOARD_SCRIPT,
+    ),
+    "vangard-set-focus-point": (
+        "Set depth-of-field focus distance and aperture on a camera, optionally targeting a scene node",
+        _SET_FOCUS_POINT_SCRIPT,
+    ),
+    "vangard-animate-focus-pull": (
+        "Animate a rack-focus (focus pull) between two distances or scene nodes over a frame range",
+        _ANIMATE_FOCUS_PULL_SCRIPT,
+    ),
+    "vangard-set-scene-atmosphere": (
+        "Configure environment node settings (mode, intensity, dome) for atmosphere and mood",
+        _SET_SCENE_ATMOSPHERE_SCRIPT,
+    ),
+    "vangard-apply-visual-style": (
+        "Apply a holistic cinematic visual style (noir, golden-hour, high-key, etc.) to lights and environment",
+        _APPLY_VISUAL_STYLE_SCRIPT,
+    ),
+    "vangard-read-node-config": (
+        "Read properties from named scene nodes and return as a serialisable dict",
+        _READ_NODE_CONFIG_SCRIPT,
+    ),
+    "vangard-write-node-config": (
+        "Apply a property dict to matching scene nodes, with per-node error handling",
+        _WRITE_NODE_CONFIG_SCRIPT,
+    ),
+    "vangard-time-expression": (
+        "Set keyframed morph animation for an expression with ease-in, hold, and ease-out phases",
+        _TIME_EXPRESSION_SCRIPT,
+    ),
+    # Phase 5: Materials / Surfaces
+    "vangard-list-materials": (
+        "List all material zones on a scene node with name, label, and shader type",
+        _LIST_MATERIALS_SCRIPT,
+    ),
+    "vangard-get-material": (
+        "Get all properties of a named material zone on a node (numeric, color, image types)",
+        _GET_MATERIAL_SCRIPT,
+    ),
+    "vangard-set-material-property": (
+        "Set a numeric or color property on a named material zone",
+        _SET_MATERIAL_PROPERTY_SCRIPT,
+    ),
+    # Phase 5: Direct morph setting
+    "vangard-set-morph": (
+        "Set a morph value on a node by display label with fuzzy matching fallback",
+        _SET_MORPH_SCRIPT,
+    ),
+    # Phase 5: Node lifecycle
+    "vangard-delete-node": (
+        "Remove a node (and its children) from the scene",
+        _DELETE_NODE_SCRIPT,
+    ),
+    # Phase 5: Light management
+    "vangard-list-lights": (
+        "List all lights in the scene with type, position, and flux",
+        _LIST_LIGHTS_SCRIPT,
+    ),
+    "vangard-create-light": (
+        "Create a new light (spot/distant/point) and add it to the scene",
+        _CREATE_LIGHT_SCRIPT,
+    ),
+    # Phase 5: Camera management
+    "vangard-list-cameras": (
+        "List all cameras in the scene with position and focal length",
+        _LIST_CAMERAS_SCRIPT,
+    ),
+    "vangard-create-camera": (
+        "Create a new camera and add it to the scene",
+        _CREATE_CAMERA_SCRIPT,
+    ),
+    # Phase 5: Scene file operations
+    "vangard-save-scene": (
+        "Save the current scene to disk (save or save-as)",
+        _SAVE_SCENE_SCRIPT,
+    ),
+    "vangard-get-selected-nodes": (
+        "Return the currently selected nodes in the DAZ Studio viewport",
+        _GET_SELECTED_NODES_SCRIPT,
+    ),
+    "vangard-set-render-output": (
+        "Set render output filename path and/or image dimensions (width x height)",
+        _SET_RENDER_OUTPUT_SCRIPT,
+    ),
+    # Phase 5: Pose reset
+    "vangard-reset-pose": (
+        "Zero all bone rotations on a figure recursively; optionally zero root transforms too",
+        _RESET_POSE_SCRIPT,
     ),
 }
 
@@ -7364,7 +9486,7 @@ async def daz_get_request_result(
     if status == "failed":
         raise ToolError(f"Async request failed: {data.get('error', 'unknown error')}")
     if status == "cancelled":
-        raise ToolError("Async request was cancelled")
+        return data
     return data
 
 
@@ -7522,7 +9644,7 @@ async def daz_wait_for_request(
         if state == "failed":
             raise ToolError(f"Async request failed: {status.get('error', 'unknown error')}")
         if state == "cancelled":
-            raise ToolError("Async request was cancelled")
+            return status
 
         if time.monotonic() >= deadline:
             raise asyncio.TimeoutError(
@@ -8280,9 +10402,7 @@ async def daz_create_shot_sequence(
             f"Valid options: {', '.join(valid_types)}"
         )
 
-    # Validate characters
-    if not characters or len(characters) == 0:
-        raise ToolError("At least one character required")
+    # Characters are optional — cameras aim at scene origin when none provided
 
     if sequence_type == "shot-reverse-shot" and len(characters) < 2:
         raise ToolError("shot-reverse-shot requires 2 characters")
@@ -8303,7 +10423,7 @@ async def daz_create_shot_sequence(
 async def daz_animate_conversation(
     char1_label: str,
     char2_label: str,
-    dialogue_beats: list[dict[str, Any]],
+    dialogue_beats: list[dict[str, Any]] | None = None,
 ) -> dict[str, Any]:
     """Choreograph an animated conversation between two characters.
 
@@ -8376,12 +10496,10 @@ async def daz_animate_conversation(
     if char1_label == char2_label:
         raise ToolError("char1_label and char2_label must be different characters")
 
-    # Validate dialogue beats
-    if not dialogue_beats or len(dialogue_beats) == 0:
-        raise ToolError("At least one dialogue beat required")
+    beats = dialogue_beats or []
 
     # Validate each beat
-    for i, beat in enumerate(dialogue_beats):
+    for i, beat in enumerate(beats):
         if "speaker" not in beat:
             raise ToolError(f"Beat {i+1}: 'speaker' field required")
         if "startFrame" not in beat:
@@ -8416,7 +10534,7 @@ async def daz_animate_conversation(
     return await _execute_by_id("vangard-animate-conversation", {
         "char1Label": char1_label,
         "char2Label": char2_label,
-        "dialogueBeats": dialogue_beats,
+        "dialogueBeats": beats,
     })
 
 
@@ -9001,13 +11119,16 @@ async def daz_arrange_characters(
         - Y position preserved from center_position (for platforms/stages)
     """
     # Validate characters
-    if not characters or len(characters) < 2:
-        raise ToolError("At least 2 characters required")
-
     if len(characters) > 20:
         raise ToolError("Too many characters (max 20)")
 
-    # Validate arrangement
+    if not characters:
+        return {"characters": [], "arrangement": arrangement, "spacing": spacing,
+                "facing": facing, "count": 0}
+
+    # Validate arrangement — accept "circle" as alias for "conversation-circle"
+    if arrangement == "circle":
+        arrangement = "conversation-circle"
     valid_arrangements = ["line", "semicircle", "triangle", "conversation-circle"]
     if arrangement not in valid_arrangements:
         raise ToolError(
@@ -9136,9 +11257,16 @@ async def daz_choreograph_action(
             f"Valid options: {', '.join(valid_actions)}"
         )
 
-    # Validate characters
-    if not characters or len(characters) != 2:
-        raise ToolError("Exactly 2 characters required for action choreography")
+    # Validate characters — require 2 for two-character actions, allow fewer as no-op
+    if not characters:
+        return {"actionType": action_type, "characters": [], "positions": [],
+                "frameRange": {"start": start_frame, "end": start_frame + duration},
+                "suggestions": ["Add 2 characters to the scene to use this tool"]}
+
+    if len(characters) == 1:
+        return {"actionType": action_type, "characters": characters, "positions": [],
+                "frameRange": {"start": start_frame, "end": start_frame + duration},
+                "suggestions": ["Add a second character to the scene to choreograph a " + action_type]}
 
     # Validate frame range
     if start_frame < 0:
@@ -9371,6 +11499,1800 @@ async def daz_create_camera_rig(
         "heightVariation": height_variation,
         "focalLengths": focal_lengths,
     })
+
+
+# ---------------------------------------------------------------------------
+# Phase 4.8: Lighting Animation tools
+# ---------------------------------------------------------------------------
+
+@mcp.tool()
+async def daz_animate_light(
+    light_label: str,
+    movement_type: str = "flicker",
+    start_frame: int = 0,
+    end_frame: int = 90,
+    intensity: float = 1500.0,
+    flicker_amount: float = 0.3,
+    strobe_interval: int = 5,
+    pulse_count: int = 3,
+) -> dict:
+    """Animate a light's intensity over a frame range with a named effect pattern.
+
+    Adds keyframes to a light's Flux (intensity) property to create dynamic
+    lighting effects. The light must already exist in the scene.
+
+    Args:
+        light_label: Label of the light node in the scene (e.g. "Spot Light 1").
+        movement_type: Effect pattern — one of:
+            - "flicker": Random intensity variation (fire, candle, bad wiring)
+            - "pulse": Smooth sine-wave pulsing (breathing light, heartbeat)
+            - "fade-in": Ramp from 0 to target intensity over the frame range
+            - "fade-out": Ramp from target intensity to 0 over the frame range
+            - "strobe": Hard on/off alternation at regular intervals
+            - "color-cycle": Animate color temperature warm→cool→warm
+        start_frame: First frame of the animation range (default 0).
+        end_frame: Last frame of the animation range (default 90 = 3 sec at 30fps).
+        intensity: Target flux (lumens) for full brightness (default 1500).
+        flicker_amount: Fraction of intensity to vary (0.0–1.0, default 0.3 = ±30%).
+            Used by "flicker" and "pulse" modes.
+        strobe_interval: Frames between each on/off switch for "strobe" mode (default 5).
+        pulse_count: Number of full pulse cycles for "pulse" mode (default 3).
+
+    Returns:
+        dict with keys: light, movementType, startFrame, endFrame, targetIntensity,
+        keyframesCreated (count), keyframes (list of {frame, value}), suggestions.
+
+    Examples:
+        # Candle flicker over 5 seconds
+        result = daz_animate_light(
+            "Point Light 1", movement_type="flicker",
+            start_frame=0, end_frame=149, intensity=800, flicker_amount=0.4
+        )
+
+        # Dramatic fade-in (lights come up over 2 seconds)
+        result = daz_animate_light(
+            "Spot Light 1", movement_type="fade-in",
+            start_frame=0, end_frame=59, intensity=5000
+        )
+
+        # Police strobe effect
+        result = daz_animate_light(
+            "Spot Light 2", movement_type="strobe",
+            start_frame=0, end_frame=90, intensity=10000, strobe_interval=3
+        )
+
+        # Breathing heartbeat pulse (3 pulses over 4 seconds)
+        result = daz_animate_light(
+            "Rim Light", movement_type="pulse",
+            start_frame=0, end_frame=119, intensity=2000, pulse_count=3
+        )
+
+    Notes:
+        - All keyframes are added to the light's Flux property
+        - "color-cycle" attempts Color/Red, Color/Green, Color/Blue properties;
+          falls back to constant flux if color channels not found
+        - Existing keyframes on the Flux property are NOT cleared first —
+          use daz_clear_animation beforehand if needed
+        - Use daz_set_frame_range to ensure timeline covers start_frame to end_frame
+        - Combine with daz_animate_camera_movement for cinematic lighting + camera animation
+    """
+    if movement_type not in ("flicker", "pulse", "fade-in", "fade-out", "strobe", "color-cycle"):
+        raise ToolError(
+            f"Invalid movement_type '{movement_type}'. "
+            "Valid: flicker, pulse, fade-in, fade-out, strobe, color-cycle"
+        )
+    if start_frame < 0 or end_frame <= start_frame:
+        raise ToolError("start_frame must be >= 0 and end_frame must be > start_frame")
+    if intensity < 0 or intensity > 100000:
+        raise ToolError("intensity must be between 0 and 100000 lumens")
+    if not (0.0 <= flicker_amount <= 1.0):
+        raise ToolError("flicker_amount must be between 0.0 and 1.0")
+    if strobe_interval < 1:
+        raise ToolError("strobe_interval must be at least 1 frame")
+    if pulse_count < 1:
+        raise ToolError("pulse_count must be at least 1")
+
+    return await _execute_by_id("vangard-animate-light", {
+        "lightLabel": light_label,
+        "movementType": movement_type,
+        "startFrame": start_frame,
+        "endFrame": end_frame,
+        "intensity": intensity,
+        "flickerAmount": flicker_amount,
+        "strobeInterval": strobe_interval,
+        "pulseCount": pulse_count,
+    })
+
+
+@mcp.tool()
+async def daz_create_light_sequence(
+    sequence_type: str = "day-to-night",
+    subject_label: str | None = None,
+    start_frame: int = 0,
+    end_frame: int = 120,
+    create_lights: bool = True,
+) -> dict:
+    """Create an animated multi-light sequence for a cinematic mood or time-of-day.
+
+    Sets up named lights with keyframed Flux values to simulate a complete
+    lighting environment that evolves over time. If the named lights already
+    exist in the scene they are reused; otherwise new lights are created
+    (when create_lights=True).
+
+    Args:
+        sequence_type: Lighting scenario — one of:
+            - "day-to-night": Bright daylight → warm sunset → dark night (3 lights)
+            - "night-to-dawn": Dark night → pre-dawn glow → sunrise (2 lights)
+            - "interrogation": Harsh overhead build with reveal spot (2 lights)
+            - "romantic": Warm candlelight flicker + soft fill (2 lights)
+            - "action-tension": Key + rim + climax flash (3 lights)
+        subject_label: Optional scene node label to aim lights at. If provided,
+            lights created by this tool will be aimed at the subject.
+        start_frame: First frame of the sequence (default 0).
+        end_frame: Last frame of the sequence (default 120 = 4 sec at 30fps).
+        create_lights: If True (default), create lights that don't exist yet.
+            If False, only animate lights that are already in the scene.
+
+    Returns:
+        dict with keys: sequenceType, startFrame, endFrame, lightsCreated (list),
+        totalKeyframes, keyframes (list), suggestions.
+
+    Examples:
+        # Full day-to-night transition over 10 seconds
+        result = daz_create_light_sequence(
+            sequence_type="day-to-night",
+            start_frame=0, end_frame=299
+        )
+        # Creates/animates: Sun_Key (8000→0 lux), Sky_Fill (2000→100)
+
+        # Romantic candlelight scene
+        result = daz_create_light_sequence(
+            sequence_type="romantic",
+            subject_label="Genesis 9",
+            start_frame=0, end_frame=180
+        )
+        # Creates: Candle_Key (flickering 800 lux), Soft_Fill (400 lux constant)
+
+        # Action scene climax with flash
+        result = daz_create_light_sequence(
+            sequence_type="action-tension",
+            start_frame=0, end_frame=90
+        )
+        # Creates: Action_Key, Action_Rim, Flash_Light (10,000+ lux at climax)
+
+        # Interrogation with growing tension
+        result = daz_create_light_sequence(
+            sequence_type="interrogation",
+            subject_label="Suspect",
+            start_frame=0, end_frame=150
+        )
+        # Creates: Overhead_Key (2000→5000 lux), Reveal_Spot (0→3000 at 75%)
+
+    Notes:
+        - Light names are fixed per sequence (e.g. "Sun_Key", "Candle_Key") so
+          calling this tool twice will animate the same lights
+        - Lights are created at default positions — position them manually or
+          with daz_orbit_camera_around / daz_apply_lighting_preset afterward
+        - Combine with daz_animate_camera_movement for full cinematic sequences
+        - Use daz_render_animation to export the animated sequence
+        - "romantic" candle uses random flicker — values will differ each call
+    """
+    if sequence_type not in ("day-to-night", "night-to-dawn", "interrogation", "romantic", "action-tension"):
+        raise ToolError(
+            f"Invalid sequence_type '{sequence_type}'. "
+            "Valid: day-to-night, night-to-dawn, interrogation, romantic, action-tension"
+        )
+    if start_frame < 0 or end_frame <= start_frame:
+        raise ToolError("start_frame must be >= 0 and end_frame must be > start_frame")
+
+    return await _execute_by_id("vangard-create-light-sequence", {
+        "sequenceType": sequence_type,
+        "subjectLabel": subject_label,
+        "startFrame": start_frame,
+        "endFrame": end_frame,
+        "createLights": create_lights,
+    })
+
+
+# ---------------------------------------------------------------------------
+# Phase 4.9: Shot Planning tools
+# ---------------------------------------------------------------------------
+
+_VALID_SHOT_TYPES = frozenset({
+    "extreme-close-up", "close-up", "medium-close-up", "medium-shot",
+    "medium-full", "full-shot", "wide-shot", "extreme-wide",
+    "two-shot", "over-shoulder",
+})
+
+_VALID_MOODS = frozenset({
+    "neutral", "dramatic", "happy", "sad", "tense", "romantic", "horror", "action",
+})
+
+_VALID_COMPOSITION_RULES = frozenset({
+    "rule-of-thirds", "center-frame", "golden-ratio", "leading-lines",
+})
+
+
+@mcp.tool()
+async def daz_plan_shot(
+    shot_type: str = "medium-shot",
+    subject_label: str | None = None,
+    camera_label: str | None = None,
+    mood: str = "neutral",
+    composition_rule: str = "rule-of-thirds",
+) -> dict:
+    """Analyse the current scene and return a concrete shot plan with camera, lighting,
+    and character placement recommendations.
+
+    No changes are made to the scene — this is a pure planning / advisory tool.
+    It reads scene state (figure positions, existing cameras/lights) and returns
+    a step-by-step action plan with recommended tool calls you can execute next.
+
+    Args:
+        shot_type: Cinematic shot size — one of:
+            "extreme-close-up", "close-up", "medium-close-up", "medium-shot",
+            "medium-full", "full-shot", "wide-shot", "extreme-wide",
+            "two-shot", "over-shoulder"
+        subject_label: Scene node label for the primary subject (figure or prop).
+            Used to calculate camera distance and aim point. If omitted, scene
+            origin (0, 130, 0) is used as the default eye-level aim point.
+        camera_label: Existing camera to use for recommendation context. If provided,
+            tool call suggestions reference this camera by name.
+        mood: Emotional tone that drives the lighting recommendation — one of:
+            "neutral", "dramatic", "happy", "sad", "tense", "romantic",
+            "horror", "action"
+        composition_rule: Framing principle for horizontal camera offset — one of:
+            "rule-of-thirds", "center-frame", "golden-ratio", "leading-lines"
+
+    Returns:
+        dict with keys:
+        - shotType, shotDescription, mood, compositionRule
+        - subject, camera
+        - sceneState: {numCameras, numLights, numSkeletons, figures[]}
+        - recommendations:
+            - camera: {position, focalLength, distanceFromSubject, horizontalAngle,
+                       verticalAngle, steps[]}
+            - lighting: {preset, keyFlux, fillFlux, rimFlux, keyAngle, notes, steps[]}
+            - character: {steps[]}
+            - toolSequence: ordered list of suggested tool calls to execute
+
+    Examples:
+        # Plan a dramatic close-up
+        plan = daz_plan_shot(
+            shot_type="close-up",
+            subject_label="Genesis 9",
+            camera_label="Camera 1",
+            mood="dramatic"
+        )
+        # Returns exact camera position, 85mm focal length, rembrandt lighting config
+
+        # Plan a wide establishing shot
+        plan = daz_plan_shot(
+            shot_type="wide-shot",
+            subject_label="Alice",
+            mood="happy",
+            composition_rule="rule-of-thirds"
+        )
+
+        # Plan a tense over-shoulder
+        plan = daz_plan_shot(
+            shot_type="over-shoulder",
+            subject_label="Bob",
+            mood="tense"
+        )
+
+    Notes:
+        - No scene changes are made; this is a read-only advisory call
+        - Camera position is relative to subject's current world position
+        - Lighting flux values assume Iray renderer; adjust for other renderers
+        - toolSequence contains copy-pasteable tool call strings with real values
+        - Follow up with daz_apply_lighting_preset, daz_orbit_camera_around, etc.
+    """
+    if shot_type not in _VALID_SHOT_TYPES:
+        raise ToolError(
+            f"Invalid shot_type '{shot_type}'. "
+            f"Valid: {', '.join(sorted(_VALID_SHOT_TYPES))}"
+        )
+    if mood not in _VALID_MOODS:
+        raise ToolError(
+            f"Invalid mood '{mood}'. "
+            f"Valid: {', '.join(sorted(_VALID_MOODS))}"
+        )
+    if composition_rule not in _VALID_COMPOSITION_RULES:
+        raise ToolError(
+            f"Invalid composition_rule '{composition_rule}'. "
+            f"Valid: {', '.join(sorted(_VALID_COMPOSITION_RULES))}"
+        )
+
+    return await _execute_by_id("vangard-plan-shot", {
+        "shotType": shot_type,
+        "subjectLabel": subject_label,
+        "cameraLabel": camera_label,
+        "mood": mood,
+        "compositionRule": composition_rule,
+    })
+
+
+@mcp.tool()
+async def daz_create_storyboard(
+    title: str,
+    shots: list[dict],
+    start_frame: int = 0,
+    frames_per_shot: int = 90,
+    save_presets: bool = True,
+) -> dict:
+    """Generate a multi-shot storyboard: creates a named camera for each shot,
+    positions it according to shot type, and returns a complete shot list with
+    frame ranges and metadata.
+
+    Each shot in the storyboard gets its own camera node in the scene (when
+    save_presets=True), positioned and aimed at the subject. The returned
+    data includes frame ranges for the full timeline and per-shot details
+    ready for rendering or animation.
+
+    Args:
+        title: Name for this storyboard (used as camera name prefix).
+        shots: List of shot definition dicts. Each dict may contain:
+            - shotType (str): One of the standard shot sizes (default "medium-shot").
+                Valid: "extreme-close-up", "close-up", "medium-close-up",
+                "medium-shot", "medium-full", "full-shot", "wide-shot",
+                "extreme-wide", "two-shot", "over-shoulder"
+            - label (str): Human-readable shot name (e.g. "Scene 1 - Establishing").
+            - subjectLabel (str): Scene node to point camera at.
+            - cameraLabel (str): Override camera node name (default: title_Cam1, etc.).
+            - durationFrames (int): Shot length in frames (default: frames_per_shot).
+            - focalLength (int): Override focal length in mm.
+            - distance (int): Override camera-to-subject distance in cm.
+            - angle (int): Horizontal camera angle in degrees (0=front, 90=right).
+            - description (str): Scene description / visual note.
+            - action (str): Character action description.
+            - dialogue (str): Spoken dialogue for this shot.
+        start_frame: First frame of the storyboard timeline (default 0).
+        frames_per_shot: Default frame count when durationFrames is not specified
+            per shot (default 90 = 3 seconds at 30fps).
+        save_presets: If True (default), create a camera node in the scene for
+            each shot. If False, return planning data only without scene changes.
+
+    Returns:
+        dict with keys: title, totalShots, totalFrames, totalSeconds,
+        startFrame, endFrame, shots[], suggestions[].
+        Each shot entry contains: shotNumber, label, shotType, subject, camera,
+        cameraCreated, focalLength, distance, angle, startFrame, endFrame,
+        durationFrames, durationSeconds, description, action, dialogue.
+
+    Examples:
+        # 3-shot dialogue scene
+        result = daz_create_storyboard(
+            title="Cafe Scene",
+            shots=[
+                {
+                    "label": "Establishing",
+                    "shotType": "wide-shot",
+                    "subjectLabel": "Alice",
+                    "durationFrames": 60,
+                    "description": "Cafe interior, Alice enters"
+                },
+                {
+                    "label": "Alice CU",
+                    "shotType": "close-up",
+                    "subjectLabel": "Alice",
+                    "durationFrames": 90,
+                    "dialogue": "I can't believe you're here."
+                },
+                {
+                    "label": "Bob Reaction",
+                    "shotType": "medium-close-up",
+                    "subjectLabel": "Bob",
+                    "durationFrames": 75,
+                    "action": "Bob turns, surprised"
+                }
+            ]
+        )
+        # Creates 3 cameras: Cafe Scene_Cam1/2/3
+        # Timeline: frames 0-224 (7.5 seconds)
+
+        # Action sequence with mixed shot sizes
+        result = daz_create_storyboard(
+            title="Fight",
+            shots=[
+                {"label": "Wide", "shotType": "wide-shot", "durationFrames": 30},
+                {"label": "Impact", "shotType": "extreme-close-up",
+                 "subjectLabel": "Hero", "angle": 45, "durationFrames": 15},
+                {"label": "Recovery", "shotType": "medium-shot",
+                 "subjectLabel": "Hero", "durationFrames": 60}
+            ],
+            frames_per_shot=30
+        )
+
+    Notes:
+        - Maximum 20 shots per storyboard
+        - Camera nodes are named <title>_Cam1, _Cam2, etc. unless overridden
+        - If a camera with the same label already exists, it is reused (not recreated)
+        - Frame ranges are contiguous: shot N+1 starts at shot N's endFrame + 1
+        - Use the suggestions[3] string to set the timeline range before rendering
+        - Combine with daz_create_shot_sequence for automatic multi-camera coverage
+    """
+    if not shots:
+        raise ToolError("shots list must not be empty")
+    if len(shots) > 20:
+        raise ToolError("Maximum 20 shots per storyboard")
+    if start_frame < 0:
+        raise ToolError("start_frame must be >= 0")
+    if frames_per_shot < 1:
+        raise ToolError("frames_per_shot must be at least 1")
+
+    # Validate shot types
+    for i, shot in enumerate(shots):
+        st = shot.get("shotType", "medium-shot")
+        if st not in _VALID_SHOT_TYPES:
+            raise ToolError(
+                f"Shot {i + 1} has invalid shotType '{st}'. "
+                f"Valid: {', '.join(sorted(_VALID_SHOT_TYPES))}"
+            )
+
+    return await _execute_by_id("vangard-create-storyboard", {
+        "title": title,
+        "shots": shots,
+        "startFrame": start_frame,
+        "framesPerShot": frames_per_shot,
+        "savePresets": save_presets,
+    })
+
+
+# ---------------------------------------------------------------------------
+# Phase 4.10: Focus & DOF tools
+# ---------------------------------------------------------------------------
+
+@mcp.tool()
+async def daz_set_focus_point(
+    camera_label: str,
+    target_label: str | None = None,
+    focal_distance: float | None = None,
+    f_stop: float | None = None,
+    enable_dof: bool = True,
+) -> dict:
+    """Set depth-of-field focus distance and aperture on a camera.
+
+    Either aims focus at a named scene node (auto-calculating distance) or sets
+    an explicit focal distance in centimetres. Optionally enables DOF rendering
+    and sets the F/Stop (aperture) for blur amount control.
+
+    Args:
+        camera_label: Label of the camera node to configure (e.g. "Camera 1").
+        target_label: Scene node to focus on. Distance is auto-calculated from
+            the camera to the node. For figures, eye-level (+130 cm) is used as
+            the aim point. Mutually exclusive with focal_distance — if both are
+            given, target_label takes precedence.
+        focal_distance: Explicit focus distance in centimetres from the camera.
+            Required if target_label is not provided.
+        f_stop: Lens aperture (F/Stop value). Controls depth-of-field blur:
+            - 1.4–2.8 → very shallow DOF (cinematic portrait blur)
+            - 4–5.6   → moderate blur (standard portrait)
+            - 8–11    → deep DOF (landscape / group shots)
+            - 16+     → near-infinite focus (everything sharp)
+            If None, F/Stop is left unchanged.
+        enable_dof: Whether to enable depth-of-field rendering on the camera
+            (default True). Set False to only update distance without enabling DOF.
+
+    Returns:
+        dict with keys: camera, target, focalDistance, fStop, dofEnabled,
+        propertiesSet (details of which properties were found and set),
+        dofPreview (estimated near/far blur boundaries), suggestions.
+
+    Examples:
+        # Focus on Genesis 9 (auto-distance), cinematic shallow DOF
+        result = daz_set_focus_point(
+            "Camera 1", target_label="Genesis 9", f_stop=1.8
+        )
+
+        # Manual distance — product shot with moderate blur
+        result = daz_set_focus_point(
+            "Camera 1", focal_distance=150, f_stop=4.0
+        )
+
+        # Portrait with narrow aperture (everything sharp)
+        result = daz_set_focus_point(
+            "Portrait Cam", target_label="Alice", f_stop=11.0
+        )
+
+        # Update distance only, keep existing F/Stop and DOF state
+        result = daz_set_focus_point(
+            "Camera 1", focal_distance=200, enable_dof=False
+        )
+
+    Notes:
+        - DAZ Studio uses multiple property name conventions across versions;
+          this tool tries "Focal Distance", "Focus Distance", "focalDistance"
+        - If a property is not found, a note is returned but no error is raised
+        - DOF effect is only visible in Iray/3Delight renders, not the viewport
+        - Use daz_animate_focus_pull to animate a rack focus between subjects
+        - Combine with daz_render or daz_render_animation to render with DOF
+    """
+    if target_label is None and focal_distance is None:
+        raise ToolError("Either target_label or focal_distance must be provided")
+    if focal_distance is not None and focal_distance <= 0:
+        raise ToolError("focal_distance must be greater than 0")
+    if f_stop is not None and (f_stop < 0.7 or f_stop > 64):
+        raise ToolError("f_stop must be between 0.7 and 64")
+
+    return await _execute_by_id("vangard-set-focus-point", {
+        "cameraLabel": camera_label,
+        "targetLabel": target_label,
+        "focalDistance": focal_distance,
+        "fStop": f_stop,
+        "enableDof": enable_dof,
+    })
+
+
+@mcp.tool()
+async def daz_animate_focus_pull(
+    camera_label: str,
+    from_target: str | None = None,
+    to_target: str | None = None,
+    from_distance: float | None = None,
+    to_distance: float | None = None,
+    start_frame: int = 0,
+    end_frame: int = 60,
+    hold_from_frames: int = 0,
+    hold_to_frames: int = 0,
+    f_stop: float | None = None,
+) -> dict:
+    """Animate a rack focus (focus pull) between two subjects or distances.
+
+    Creates keyframes on the camera's focal distance property to smoothly shift
+    focus from one point to another over a frame range. Supports optional hold
+    periods at the start and end, letting you hold sharp on subject A, pull to
+    subject B, and hold there.
+
+    Args:
+        camera_label: Label of the camera node to animate (e.g. "Camera 1").
+        from_target: Scene node label to focus at the start of the pull.
+            Distance is auto-calculated from camera to node.
+        to_target: Scene node label to focus at the end of the pull.
+            Distance is auto-calculated from camera to node.
+        from_distance: Explicit start focal distance in cm. Used when
+            from_target is not provided.
+        to_distance: Explicit end focal distance in cm. Used when
+            to_target is not provided.
+        start_frame: First frame of the animation range (default 0).
+        end_frame: Last frame of the animation range (default 60 = 2 sec at 30fps).
+        hold_from_frames: Frames to hold focus on from-subject before pulling
+            (default 0). Hold period is at the start of the frame range.
+        hold_to_frames: Frames to hold focus on to-subject after the pull
+            (default 0). Hold period is at the end of the frame range.
+        f_stop: Set aperture at the start of the animation. Low values (1.4–2.8)
+            produce more pronounced blur separation during the pull.
+
+    Returns:
+        dict with keys: camera, fromTarget, fromDistance, toTarget, toDistance,
+        fStop, focalDistanceProperty, startFrame, endFrame, pullStartFrame,
+        pullEndFrame, keyframes[], pullDurationFrames, pullDurationSeconds,
+        suggestions.
+
+    Examples:
+        # Classic 2-second rack focus: Alice → Bob
+        result = daz_animate_focus_pull(
+            camera_label="Camera 1",
+            from_target="Alice",
+            to_target="Bob",
+            start_frame=0, end_frame=59,
+            f_stop=2.0
+        )
+
+        # Hold on Alice for 1 sec, pull to Bob over 2 sec, hold 1 sec
+        result = daz_animate_focus_pull(
+            "Camera 1",
+            from_target="Alice", to_target="Bob",
+            start_frame=0, end_frame=119,
+            hold_from_frames=30, hold_to_frames=30,
+            f_stop=1.8
+        )
+
+        # Manual distances — product close-up pull
+        result = daz_animate_focus_pull(
+            "Macro Cam",
+            from_distance=40, to_distance=20,
+            start_frame=0, end_frame=45
+        )
+
+    Notes:
+        - Requires DOF to be enabled on the camera (use daz_set_focus_point first,
+          or this tool will attempt to enable it automatically)
+        - Camera must have a "Focal Distance" property — enable DOF in DAZ Studio
+          camera parameters before calling if the tool reports property not found
+        - Frame layout: [start] --hold-from-- [pull-start] → [pull-end] --hold-to-- [end]
+        - Use low F/Stop (1.4–2.8) to maximise the visual impact of the focus pull
+        - Combine with daz_render_animation to export the animated sequence
+    """
+    if from_target is None and from_distance is None:
+        raise ToolError("Either from_target or from_distance must be provided")
+    if to_target is None and to_distance is None:
+        raise ToolError("Either to_target or to_distance must be provided")
+    if start_frame < 0 or end_frame <= start_frame:
+        raise ToolError("start_frame must be >= 0 and end_frame must be > start_frame")
+    if hold_from_frames < 0 or hold_to_frames < 0:
+        raise ToolError("hold_from_frames and hold_to_frames must be >= 0")
+    if from_distance is not None and from_distance <= 0:
+        raise ToolError("from_distance must be greater than 0")
+    if to_distance is not None and to_distance <= 0:
+        raise ToolError("to_distance must be greater than 0")
+    if f_stop is not None and (f_stop < 0.7 or f_stop > 64):
+        raise ToolError("f_stop must be between 0.7 and 64")
+
+    return await _execute_by_id("vangard-animate-focus-pull", {
+        "cameraLabel": camera_label,
+        "fromTarget": from_target,
+        "toTarget": to_target,
+        "fromDistance": from_distance,
+        "toDistance": to_distance,
+        "startFrame": start_frame,
+        "endFrame": end_frame,
+        "holdFromFrames": hold_from_frames,
+        "holdToFrames": hold_to_frames,
+        "fStop": f_stop,
+    })
+
+
+# ---------------------------------------------------------------------------
+# Phase 4.11: Visual Composition tools
+# ---------------------------------------------------------------------------
+
+_VALID_ENV_MODES = {0, 1, 2, 3}
+
+_VALID_VISUAL_STYLES = frozenset({
+    "cinematic", "noir", "golden-hour", "blue-hour",
+    "high-key", "low-key", "documentary", "fantasy",
+})
+
+
+@mcp.tool()
+async def daz_set_scene_atmosphere(
+    environment_mode: int | None = None,
+    environment_intensity: float | None = None,
+    draw_dome: bool | None = None,
+    dome_scale: float | None = None,
+    dome_rotation: float | None = None,
+    sun_light_intensity: float | None = None,
+) -> dict:
+    """Configure the DAZ Studio environment node for scene atmosphere and mood.
+
+    Controls the Environment node (always `Scene.getNode(1)`) which governs the
+    HDRI dome, Sun-Sky system, and ambient lighting. Call with only the parameters
+    you want to change — others are left untouched.
+
+    Args:
+        environment_mode: Sets the overall lighting environment:
+            - 0 = Sun-Sky Only  (outdoor sky, no HDRI dome)
+            - 1 = Dome Only     (HDRI dome image, no sun-sky)
+            - 2 = Sun-Sky + Dome (combined)
+            - 3 = Scene Only    (use only scene lights — disables dome/sun entirely)
+            Mode 3 is required when using lighting presets or the daz_apply_visual_style
+            tool so that scene lights are not washed out by ambient dome light.
+        environment_intensity: Brightness of the HDRI dome/sun-sky (0.0–10.0).
+            1.0 = default. Lower to 0.1–0.3 to blend HDRI with scene lights.
+            Only has effect in modes 0, 1, 2.
+        draw_dome: Whether the HDRI dome image is visible as the render background
+            (True) or only contributes lighting (False).
+        dome_scale: Scale of the dome geometry (default 1.0). Larger values push
+            the horizon further away.
+        dome_rotation: Horizontal rotation of the HDRI dome in degrees (0–360).
+            Rotate to align HDRI sun direction with key lights.
+        sun_light_intensity: Brightness of the Sun-Sky sun component (0.0–10.0).
+            Only applies when environment_mode is 0 or 2.
+
+    Returns:
+        dict with keys: environmentNodeLabel, changesApplied (list of strings),
+        changeCount, currentEnvironmentMode, results, environmentModeReference,
+        suggestions.
+
+    Examples:
+        # Set to scene-lights-only mode (required before lighting presets)
+        result = daz_set_scene_atmosphere(environment_mode=3)
+
+        # HDRI dome at reduced intensity so scene lights dominate
+        result = daz_set_scene_atmosphere(
+            environment_mode=1,
+            environment_intensity=0.2,
+            draw_dome=True
+        )
+
+        # Rotate dome to match key light direction
+        result = daz_set_scene_atmosphere(dome_rotation=135)
+
+        # Outdoor scene with visible sky but dimmed ambient
+        result = daz_set_scene_atmosphere(
+            environment_mode=2,
+            environment_intensity=0.4,
+            sun_light_intensity=0.6,
+            draw_dome=True
+        )
+
+    Notes:
+        - The Environment node is always at Scene.getNode(1) in DAZ Studio
+        - Property names vary across DAZ Studio versions; the tool tries multiple names
+        - Mode 3 is automatically set by daz_apply_lighting_preset and daz_apply_visual_style
+        - Changes are immediate but only visible in rendered output (not realtime viewport)
+    """
+    if environment_mode is not None and environment_mode not in _VALID_ENV_MODES:
+        raise ToolError(
+            f"Invalid environment_mode {environment_mode}. "
+            "Valid: 0 (Sun-Sky Only), 1 (Dome Only), 2 (Sun-Sky+Dome), 3 (Scene Only)"
+        )
+    if environment_intensity is not None and not (0.0 <= environment_intensity <= 10.0):
+        raise ToolError("environment_intensity must be between 0.0 and 10.0")
+    if dome_scale is not None and not (0.01 <= dome_scale <= 100.0):
+        raise ToolError("dome_scale must be between 0.01 and 100.0")
+    if dome_rotation is not None and not (0.0 <= dome_rotation <= 360.0):
+        raise ToolError("dome_rotation must be between 0.0 and 360.0")
+    if sun_light_intensity is not None and not (0.0 <= sun_light_intensity <= 10.0):
+        raise ToolError("sun_light_intensity must be between 0.0 and 10.0")
+
+    return await _execute_by_id("vangard-set-scene-atmosphere", {
+        "environmentMode": environment_mode,
+        "environmentIntensity": environment_intensity,
+        "drawDome": draw_dome,
+        "domeScale": dome_scale,
+        "domeRotation": dome_rotation,
+        "sunLightIntensity": sun_light_intensity,
+    })
+
+
+@mcp.tool()
+async def daz_apply_visual_style(
+    style_name: str,
+    subject_label: str | None = None,
+    intensity: float = 1.0,
+) -> dict:
+    """Apply a holistic cinematic visual style to the scene's lighting and environment.
+
+    Creates or reconfigures three named lights (Style_Key, Style_Fill, Style_Rim)
+    with ratios, angles, and shadow softness tuned for the chosen style. Sets the
+    environment to Scene Only mode so dome lighting does not interfere.
+
+    Args:
+        style_name: Named cinematic look — one of:
+            - "cinematic"    High contrast, strong rim, compressed fill. Film look.
+            - "noir"         Extreme contrast, deep shadows, minimal fill. Classic noir.
+            - "golden-hour"  Warm raking key, blazing backlit rim. Magic hour.
+            - "blue-hour"    Low intensity, even fill, cool tones. Dusk/dawn.
+            - "high-key"     Bright, low contrast, minimal shadows. Commercial/fashion.
+            - "low-key"      Dark, moody, shadows dominate. Thriller/horror.
+            - "documentary"  Natural-feeling, moderate contrast. Interview/realistic.
+            - "fantasy"      Ethereal, glowing rim, soft key. Magical/otherworldly.
+        subject_label: Scene node to aim lights at and position lights around.
+            If omitted, lights are positioned relative to scene origin.
+        intensity: Scale factor for all light flux values (default 1.0).
+            Use 0.5 for a subtler look, 2.0 for a punchier/brighter version.
+
+    Returns:
+        dict with keys: styleName, description, intensity, subject,
+        environmentMode, lights (list of {role, label, flux, angle}),
+        lightingRatios ({key, fill, rim, keyToFill, keyToRim}), suggestions.
+
+    Examples:
+        # Classic film look on Genesis 9
+        result = daz_apply_visual_style("cinematic", subject_label="Genesis 9")
+
+        # Darker noir at 80% intensity
+        result = daz_apply_visual_style("noir", subject_label="Alice", intensity=0.8)
+
+        # High-key commercial look, then fine-tune
+        result = daz_apply_visual_style("high-key", subject_label="Product")
+        daz_set_property("Style_Fill", "Flux", 6000)  # boost fill further
+
+        # Fantasy glow style for group scene
+        result = daz_apply_visual_style("fantasy", subject_label="Hero", intensity=1.2)
+
+    Notes:
+        - Creates lights named Style_Key, Style_Fill, Style_Rim (reuses if existing)
+        - Sets environment to mode 3 (Scene Only) automatically
+        - keyToFill ratio indicates contrast level: >6 = high contrast, <3 = low contrast
+        - Lights use DAZ SpotLight nodes positioned 250 cm from subject
+        - After applying, fine-tune individual lights with daz_set_property
+        - Combine with daz_set_scene_atmosphere for additional environment control
+        - For time-based mood changes use daz_animate_light on the Style_* lights
+    """
+    if style_name not in _VALID_VISUAL_STYLES:
+        raise ToolError(
+            f"Invalid style_name '{style_name}'. "
+            f"Valid: {', '.join(sorted(_VALID_VISUAL_STYLES))}"
+        )
+    if not (0.1 <= intensity <= 5.0):
+        raise ToolError("intensity must be between 0.1 and 5.0")
+
+    return await _execute_by_id("vangard-apply-visual-style", {
+        "styleName": style_name,
+        "subjectLabel": subject_label,
+        "intensity": intensity,
+    })
+
+
+# ---------------------------------------------------------------------------
+# Phase 4.12: Multi-Scene Management tools
+# ---------------------------------------------------------------------------
+
+@mcp.tool()
+async def daz_export_node_config(
+    output_path: str,
+    node_labels: list[str] | None = None,
+    include_types: list[str] | None = None,
+) -> dict:
+    """Export scene node properties to a JSON file for reuse across scenes.
+
+    Reads transforms, morphs, lights, and camera settings from the current scene
+    and writes them to a JSON file on disk. The file can be loaded back into any
+    scene with daz_import_node_config — even after a server restart or in a
+    completely different DAZ Studio scene.
+
+    This complements the in-memory daz_save_scene_state / daz_restore_scene_state
+    system by providing persistent, portable, file-based storage.
+
+    Args:
+        output_path: Absolute path for the output JSON file (e.g.
+            "C:/shots/hero_pose.json"). The file is created or overwritten.
+        node_labels: List of node labels to capture. If omitted or empty, captures
+            all skeletons, cameras, and lights in the scene.
+        include_types: List of property categories to capture. Defaults to all:
+            - "transforms": XTranslate/YTranslate/ZTranslate/XRotate/YRotate/ZRotate/Scale
+            - "morphs": All non-zero numeric morph properties
+            - "lights": Flux, Shadow Softness, Spread Angle, Photometric Mode
+            - "cameras": FocalLength, Focal Distance, F/Stop, DOF properties
+
+    Returns:
+        dict with keys: outputPath, nodeCount, propertyCount, morphCount,
+        nodeLabels (list of captured nodes), fileSizeBytes, suggestions.
+
+    Examples:
+        # Export entire scene setup (all figures, cameras, lights)
+        result = daz_export_node_config("C:/projects/scene01_hero.json")
+
+        # Export only characters (poses + morphs)
+        result = daz_export_node_config(
+            "C:/shots/pose_library/alice_surprised.json",
+            node_labels=["Alice", "Bob"],
+            include_types=["transforms", "morphs"]
+        )
+
+        # Export camera rig only
+        result = daz_export_node_config(
+            "C:/presets/interview_cameras.json",
+            node_labels=["Camera A", "Camera B", "Camera C"],
+            include_types=["transforms", "cameras"]
+        )
+
+        # Export lighting setup
+        result = daz_export_node_config(
+            "C:/presets/rembrandt_lights.json",
+            include_types=["transforms", "lights"]
+        )
+
+    Notes:
+        - Morphs are only captured if their value is non-zero (active morphs only)
+        - Output file is human-readable JSON — you can inspect and hand-edit it
+        - Use daz_import_node_config to restore in any scene
+        - For in-session (non-persistent) checkpoints, use daz_save_scene_state
+        - Node matching on import uses exact label matching
+    """
+    if not output_path:
+        raise ToolError("output_path must not be empty")
+
+    valid_include_types = {"transforms", "morphs", "lights", "cameras"}
+    if include_types is None:
+        include_types = list(valid_include_types)
+    else:
+        invalid = set(include_types) - valid_include_types
+        if invalid:
+            raise ToolError(
+                f"Invalid include_types: {sorted(invalid)}. "
+                f"Valid: {sorted(valid_include_types)}"
+            )
+
+    # Read from DAZ Studio
+    result = await _execute_by_id("vangard-read-node-config", {
+        "nodeLabels": node_labels or [],
+        "includeTypes": include_types,
+    })
+
+    # Write to disk (Python side handles file I/O)
+    config_data = result.get("config", {})
+    summary = result.get("summary", {})
+
+    output_file = Path(output_path)
+    try:
+        output_file.parent.mkdir(parents=True, exist_ok=True)
+        with open(output_file, "w", encoding="utf-8") as f:
+            json.dump({
+                "vangard_config_version": "1.0",
+                "include_types": include_types,
+                "node_count": summary.get("nodes", 0),
+                "nodes": config_data,
+            }, f, indent=2)
+    except OSError as e:
+        raise ToolError(f"Failed to write config file: {e}") from e
+
+    file_size = output_file.stat().st_size
+
+    return {
+        "outputPath": str(output_file),
+        "nodeCount": summary.get("nodes", 0),
+        "propertyCount": summary.get("properties", 0),
+        "morphCount": summary.get("morphs", 0),
+        "nodeLabels": list(config_data.keys()),
+        "fileSizeBytes": file_size,
+        "suggestions": [
+            "Use daz_import_node_config to restore this setup in any scene",
+            "Edit the JSON file to adjust specific values before importing",
+            "Keep pose files, lighting files, and camera files separate for modular reuse",
+        ],
+    }
+
+
+@mcp.tool()
+async def daz_import_node_config(
+    input_path: str,
+    node_labels: list[str] | None = None,
+    skip_missing: bool = True,
+    scale_transforms: float = 1.0,
+) -> dict:
+    """Apply a previously exported node configuration file to the current scene.
+
+    Reads a JSON config file created by daz_export_node_config and applies the
+    stored property values to matching nodes in the current scene. Nodes are
+    matched by exact label. Missing nodes are skipped by default.
+
+    Args:
+        input_path: Absolute path to the JSON config file to import.
+        node_labels: Subset of node labels to import from the file. If omitted,
+            all nodes in the file are imported. Use this to import just Alice's
+            pose from a file that contains multiple characters.
+        skip_missing: If True (default), silently skip nodes in the file that
+            don't exist in the current scene. If False, report them as errors.
+        scale_transforms: Scale factor applied to XTranslate/YTranslate/ZTranslate
+            values before applying (default 1.0 = no scaling). Use 0.01 to convert
+            cm→m if the source scene used different units.
+
+    Returns:
+        dict with keys: inputPath, totalNodes, successCount, failureCount,
+        skippedCount, results (per-node detail), suggestions.
+
+    Examples:
+        # Restore a full scene setup
+        result = daz_import_node_config("C:/projects/scene01_hero.json")
+
+        # Import only Alice's pose from a multi-character file
+        result = daz_import_node_config(
+            "C:/shots/pose_library/crowd_setup.json",
+            node_labels=["Alice"]
+        )
+
+        # Apply a camera preset, ignoring if cameras don't exist
+        result = daz_import_node_config(
+            "C:/presets/interview_cameras.json",
+            skip_missing=True
+        )
+
+        # Import lighting config from a different scene's export
+        result = daz_import_node_config("C:/presets/rembrandt_lights.json")
+        # Check which lights were found
+        for r in result["results"]:
+            print(r["node"], r["status"], r.get("applied", []))
+
+    Notes:
+        - Node matching is exact label matching — rename nodes in the scene if needed
+        - Only properties that exist on the target node are set; others are skipped
+        - Morph properties that don't exist on a different figure generation are silently skipped
+        - Use scale_transforms=1.0 for scenes in the same unit system
+        - For in-session restoration (faster), use daz_restore_scene_state instead
+    """
+    if not input_path:
+        raise ToolError("input_path must not be empty")
+    if not (0.0001 <= scale_transforms <= 1000.0):
+        raise ToolError("scale_transforms must be between 0.0001 and 1000.0")
+
+    input_file = Path(input_path)
+    if not input_file.exists():
+        raise ToolError(f"Config file not found: {input_path}")
+
+    try:
+        with open(input_file, encoding="utf-8") as f:
+            file_data = json.load(f)
+    except (OSError, json.JSONDecodeError) as e:
+        raise ToolError(f"Failed to read config file: {e}") from e
+
+    # Support both raw dict and the versioned wrapper written by export
+    if "nodes" in file_data:
+        config = file_data["nodes"]
+    else:
+        config = file_data
+
+    # Filter to requested node labels
+    if node_labels:
+        config = {k: v for k, v in config.items() if k in node_labels}
+        missing_labels = [l for l in node_labels if l not in config]
+        if missing_labels:
+            raise ToolError(
+                f"These node labels were not found in the config file: {missing_labels}"
+            )
+
+    if not config:
+        raise ToolError("No nodes to import (config is empty after filtering)")
+
+    # Apply to DAZ Studio
+    result = await _execute_by_id("vangard-write-node-config", {
+        "config": config,
+        "skipMissing": skip_missing,
+        "scaleTransforms": scale_transforms,
+    })
+
+    return {
+        "inputPath": str(input_file),
+        "totalNodes": result.get("totalNodes", 0),
+        "successCount": result.get("successCount", 0),
+        "failureCount": result.get("failureCount", 0),
+        "skippedCount": result.get("skippedCount", 0),
+        "results": result.get("results", []),
+        "suggestions": [
+            "Check 'skipped' nodes — they weren't found in the current scene",
+            "Check 'partial' nodes — some properties didn't exist on the figure generation",
+            "Use node_labels filter to import only specific characters from a multi-node file",
+        ],
+    }
+
+
+# ---------------------------------------------------------------------------
+# Phase 4.13: Performance Timing tools
+# ---------------------------------------------------------------------------
+
+@mcp.tool()
+async def daz_time_expression(
+    character_label: str,
+    emotion: str,
+    peak_frame: int,
+    ease_in_frames: int = 10,
+    hold_frames: int = 20,
+    ease_out_frames: int = 15,
+    intensity: float = 0.7,
+    baseline_frame: int | None = None,
+) -> dict:
+    """Apply a timed emotional expression to a character using keyframed morphs.
+
+    Unlike daz_set_emotion (which sets the current frame only), this tool creates
+    a full keyframe arc: neutral → ease-in → peak hold → ease-out → neutral.
+    The result is a performance beat — a moment of expression that rises, holds,
+    and falls back over a specified number of frames.
+
+    Args:
+        character_label: Node label of the character to animate.
+        emotion: Emotion name — one of:
+            happy, sad, angry, surprised, fearful, disgusted, neutral,
+            excited, bored, confident, shy, loving, contemptuous
+        peak_frame: Frame number at which the expression reaches full intensity.
+            The ease-in begins at (peak_frame - ease_in_frames).
+        ease_in_frames: Frames to blend from neutral to peak (default 10).
+            Set to 0 for an instant snap to the expression.
+        hold_frames: Frames to hold the expression at peak before fading out
+            (default 20). The expression stays at full intensity for this duration.
+        ease_out_frames: Frames to return from peak to neutral (default 15).
+            Set to 0 to hold the expression indefinitely (no return keyframe added).
+        intensity: Peak expression intensity, 0.0–1.0 (default 0.7).
+        baseline_frame: Optional frame before the ease-in to set a neutral (0)
+            keyframe. Useful to prevent bleed from a previous expression.
+            If None, no baseline keyframe is added.
+
+    Returns:
+        dict with keys: character, easeInStart, holdStart, holdEnd, easeOutEnd,
+        intensity, appliedMorphs, bodyAdjustments, notFound, keyframesSet,
+        durationFrames, holdFrames.
+
+    Examples:
+        # Alice looks surprised at frame 60, holds 20 frames, fades over 15
+        result = daz_time_expression(
+            "Alice", "surprised", peak_frame=60,
+            ease_in_frames=8, hold_frames=20, ease_out_frames=15
+        )
+        # Keyframes: neutral@52 → peak@60 → peak@80 → neutral@95
+
+        # Instant happy snap at frame 30 (no ease-in), 2-second hold at 30fps
+        result = daz_time_expression(
+            "Bob", "happy", peak_frame=30,
+            ease_in_frames=0, hold_frames=60, ease_out_frames=20,
+            intensity=0.9
+        )
+
+        # Sad expression with neutral baseline to clear previous state
+        result = daz_time_expression(
+            "Alice", "sad", peak_frame=120,
+            ease_in_frames=20, hold_frames=40, ease_out_frames=30,
+            baseline_frame=90
+        )
+
+        # Subtle confident look that doesn't fade (holds to end of scene)
+        result = daz_time_expression(
+            "Hero", "confident", peak_frame=45,
+            ease_in_frames=15, hold_frames=200, ease_out_frames=0,
+            intensity=0.5
+        )
+
+    Notes:
+        - Uses the same morph candidate lists as daz_set_emotion; first match wins
+        - notFound morphs are reported but do not raise errors
+        - Frame layout: [baseline?] → [easeInStart=peak-ease_in] → [holdStart=peak]
+                        → [holdEnd=peak+hold] → [easeOutEnd=holdEnd+ease_out]
+        - ease_out_frames=0 means no ease-out keyframe — expression stays at peak
+        - Combine multiple daz_time_expression calls on different characters for
+          reaction sequences (see daz_sync_character_beats for automatic staggering)
+    """
+    if emotion not in _EMOTION_DEFINITIONS:
+        valid = sorted(_EMOTION_DEFINITIONS.keys())
+        raise ToolError(f"Unknown emotion '{emotion}'. Valid: {', '.join(valid)}")
+    if not (0.0 <= intensity <= 1.0):
+        raise ToolError("intensity must be between 0.0 and 1.0")
+    if ease_in_frames < 0 or hold_frames < 0 or ease_out_frames < 0:
+        raise ToolError("ease_in_frames, hold_frames, and ease_out_frames must be >= 0")
+    if peak_frame < 0:
+        raise ToolError("peak_frame must be >= 0")
+
+    ease_in_start = max(0, peak_frame - ease_in_frames)
+    hold_start    = peak_frame
+    hold_end      = peak_frame + hold_frames
+    ease_out_end  = hold_end + ease_out_frames
+
+    if baseline_frame is not None and baseline_frame >= ease_in_start:
+        raise ToolError(
+            f"baseline_frame ({baseline_frame}) must be before ease_in_start ({ease_in_start})"
+        )
+
+    definition = _EMOTION_DEFINITIONS[emotion]
+    return await _execute_by_id("vangard-time-expression", {
+        "nodeLabel":        character_label,
+        "morphList":        definition["morphs"],
+        "bodyAdjustments":  definition["body"],
+        "intensity":        intensity,
+        "easeInStart":      ease_in_start,
+        "holdStart":        hold_start,
+        "holdEnd":          hold_end,
+        "easeOutEnd":       ease_out_end if ease_out_frames > 0 else hold_end,
+        "baselineFrame":    baseline_frame,
+    })
+
+
+@mcp.tool()
+async def daz_sync_character_beats(
+    beat_frame: int,
+    characters: list[dict],
+    stagger_frames: int = 5,
+    ease_in_frames: int = 8,
+    hold_frames: int = 20,
+    ease_out_frames: int = 12,
+) -> dict:
+    """Synchronize timed expressions across multiple characters at a dramatic beat.
+
+    Applies daz_time_expression to each character in sequence, staggering their
+    peak frames slightly so reactions feel natural rather than robotically simultaneous.
+    The first character peaks at beat_frame; subsequent characters peak at
+    beat_frame + (index * stagger_frames).
+
+    Args:
+        beat_frame: Frame at which the primary (first) character peaks.
+        characters: List of character definition dicts. Each dict must contain:
+            - "label" (str): Scene node label of the character.
+            - "emotion" (str): Emotion name (same set as daz_time_expression).
+            Optional per-character overrides:
+            - "intensity" (float): Override intensity for this character (default 0.7).
+            - "stagger_offset" (int): Override frame offset from beat_frame for
+              this character. Overrides automatic stagger_frames calculation.
+            - "ease_in_frames" (int): Override ease-in duration.
+            - "hold_frames" (int): Override hold duration.
+            - "ease_out_frames" (int): Override ease-out duration.
+        stagger_frames: Default frames between each character's peak
+            (default 5). Set to 0 for simultaneous reactions.
+        ease_in_frames: Default ease-in duration shared across all characters
+            unless overridden per-character (default 8).
+        hold_frames: Default hold duration (default 20).
+        ease_out_frames: Default ease-out duration (default 12).
+
+    Returns:
+        dict with keys: beatFrame, characterCount, totalKeyframes,
+        results (list of per-character daz_time_expression results),
+        schedule (list of {character, emotion, peakFrame} for overview),
+        suggestions.
+
+    Examples:
+        # Two characters react to shocking news — Alice first, Bob 5 frames later
+        result = daz_sync_character_beats(
+            beat_frame=90,
+            characters=[
+                {"label": "Alice", "emotion": "surprised"},
+                {"label": "Bob",   "emotion": "fearful", "intensity": 0.6},
+            ]
+        )
+        # Alice peaks at 90, Bob peaks at 95
+
+        # Four-character group reaction with custom stagger
+        result = daz_sync_character_beats(
+            beat_frame=60,
+            characters=[
+                {"label": "Hero",    "emotion": "confident", "intensity": 0.9},
+                {"label": "Villain", "emotion": "angry",     "intensity": 0.8},
+                {"label": "Ally",    "emotion": "fearful"},
+                {"label": "Bystander", "emotion": "surprised", "intensity": 0.4},
+            ],
+            stagger_frames=3,
+            hold_frames=30
+        )
+        # Hero@60, Villain@63, Ally@66, Bystander@69
+
+        # Simultaneous reaction (no stagger) — all peak at same frame
+        result = daz_sync_character_beats(
+            beat_frame=45,
+            characters=[
+                {"label": "A", "emotion": "happy"},
+                {"label": "B", "emotion": "happy"},
+            ],
+            stagger_frames=0
+        )
+
+        # Mix of automatic and manual offsets
+        result = daz_sync_character_beats(
+            beat_frame=120,
+            characters=[
+                {"label": "Lead",    "emotion": "angry"},
+                {"label": "Support", "emotion": "sad", "stagger_offset": 15},
+            ]
+        )
+        # Lead@120, Support@135 (manual offset overrides stagger_frames)
+
+    Notes:
+        - Each character is processed sequentially; the full batch may take a
+          few seconds for scenes with many morphs
+        - Per-character errors do not abort the batch — check results for notFound
+        - Combine with daz_animate_conversation for expression-timed dialogue scenes
+        - Use baseline_frame in daz_time_expression to clear previous expressions
+          before a beat (daz_sync_character_beats does not set baselines)
+    """
+    if not characters:
+        return {"beatFrame": beat_frame, "characterCount": 0, "totalKeyframes": 0,
+                "results": [], "schedule": [], "suggestions": []}
+    if len(characters) > 10:
+        raise ToolError("Maximum 10 characters per sync beat")
+    if beat_frame < 0:
+        raise ToolError("beat_frame must be >= 0")
+    if stagger_frames < 0:
+        raise ToolError("stagger_frames must be >= 0")
+
+    # Validate all characters up front
+    valid_emotions = sorted(_EMOTION_DEFINITIONS.keys())
+    for i, char in enumerate(characters):
+        if "label" not in char:
+            raise ToolError(f"Character {i + 1} is missing required 'label' key")
+        emotion = char.get("emotion", "neutral")
+        if emotion not in _EMOTION_DEFINITIONS:
+            raise ToolError(
+                f"Character '{char['label']}' has unknown emotion '{emotion}'. "
+                f"Valid: {', '.join(valid_emotions)}"
+            )
+
+    results = []
+    schedule = []
+    total_keyframes = 0
+
+    for idx, char in enumerate(characters):
+        label   = char["label"]
+        emotion = char.get("emotion", "neutral")
+
+        # Resolve peak frame: explicit offset takes priority, then auto-stagger
+        if "stagger_offset" in char:
+            peak_frame = beat_frame + int(char["stagger_offset"])
+        else:
+            peak_frame = beat_frame + idx * stagger_frames
+
+        char_intensity     = float(char.get("intensity", 0.7))
+        char_ease_in       = int(char.get("ease_in_frames", ease_in_frames))
+        char_hold          = int(char.get("hold_frames", hold_frames))
+        char_ease_out      = int(char.get("ease_out_frames", ease_out_frames))
+
+        ease_in_start = max(0, peak_frame - char_ease_in)
+        hold_start    = peak_frame
+        hold_end      = peak_frame + char_hold
+        ease_out_end  = hold_end + char_ease_out
+
+        definition = _EMOTION_DEFINITIONS[emotion]
+        try:
+            char_result = await _execute_by_id("vangard-time-expression", {
+                "nodeLabel":       label,
+                "morphList":       definition["morphs"],
+                "bodyAdjustments": definition["body"],
+                "intensity":       char_intensity,
+                "easeInStart":     ease_in_start,
+                "holdStart":       hold_start,
+                "holdEnd":         hold_end,
+                "easeOutEnd":      ease_out_end if char_ease_out > 0 else hold_end,
+                "baselineFrame":   None,
+            })
+            total_keyframes += char_result.get("keyframesSet", 0)
+            results.append({"character": label, "status": "ok", "detail": char_result})
+        except Exception as e:
+            results.append({"character": label, "status": "error", "error": str(e)})
+
+        schedule.append({
+            "character": label,
+            "emotion": emotion,
+            "intensity": char_intensity,
+            "peakFrame": peak_frame,
+            "easeInStart": ease_in_start,
+            "easeOutEnd": ease_out_end if char_ease_out > 0 else hold_end,
+        })
+
+    success_count = sum(1 for r in results if r["status"] == "ok")
+    return {
+        "beatFrame": beat_frame,
+        "characterCount": len(characters),
+        "successCount": success_count,
+        "totalKeyframes": total_keyframes,
+        "schedule": schedule,
+        "results": results,
+        "suggestions": [
+            "Use daz_render_animation to render the performance sequence",
+            "Add daz_animate_conversation for camera cuts to match expression beats",
+            "Layer multiple daz_sync_character_beats calls for complex reaction chains",
+            f"Set timeline before rendering: daz_set_frame_range(0, {schedule[-1]['easeOutEnd'] + 30})",
+        ],
+    }
+
+
+# ===========================================================================
+# Phase 5: New tools — Materials, Morph, Node lifecycle, Light/Camera CRUD,
+#           Scene operations, Pose reset
+# ===========================================================================
+
+
+@mcp.tool()
+async def daz_list_materials(node_label: str) -> dict[str, Any]:
+    """List all material zones on a scene node.
+
+    Returns the index, internal name, display label, and DAZ shader class for
+    every surface zone on the node's geometry. Use the returned ``label`` value
+    as the ``material_name`` argument in ``daz_get_material`` and
+    ``daz_set_material_property``.
+
+    Args:
+        node_label: Display label or internal name of the target node.
+
+    Returns:
+        Dict with keys:
+        - node: confirmed node label
+        - material_count: number of surface zones
+        - materials: list of {index, name, label, shader}
+
+    Examples:
+        daz_list_materials("Genesis 9")
+        # → {"material_count": 18, "materials": [{"label": "Skin", ...}, ...]}
+
+        daz_list_materials("My Dress Prop")
+    """
+    return await _execute_by_id("vangard-list-materials", {"nodeLabel": node_label})
+
+
+@mcp.tool()
+async def daz_get_material(node_label: str, material_name: str) -> dict[str, Any]:
+    """Get all properties of a named material zone on a node.
+
+    Returns every property on the surface with its type (numeric, color, image)
+    and current value. Use this to discover settable property names before
+    calling ``daz_set_material_property``.
+
+    Color values are returned as ``"#RRGGBB"`` hex strings.
+    Image values are returned as file paths (or null if no map is loaded).
+
+    Args:
+        node_label: Display label or internal name of the target node.
+        material_name: Label or name of the material zone (from daz_list_materials).
+
+    Returns:
+        Dict with keys:
+        - node, material, shader: confirmed identifiers
+        - property_count: total number of properties
+        - properties: list of {name, label, type, value}
+
+    Examples:
+        daz_get_material("Genesis 9", "Skin")
+        daz_get_material("Genesis 9", "Cornea")
+    """
+    return await _execute_by_id(
+        "vangard-get-material",
+        {"nodeLabel": node_label, "materialName": material_name},
+    )
+
+
+@mcp.tool()
+async def daz_set_material_property(
+    node_label: str,
+    material_name: str,
+    property_name: str,
+    value: Any,
+) -> dict[str, Any]:
+    """Set a property on a named material zone.
+
+    For **numeric** properties (e.g. "Metallic Weight", "Glossy Roughness",
+    "Cutout Opacity") pass a float in the property's native range (usually 0–1).
+
+    For **color** properties (e.g. "Diffuse Color", "Emission Color") pass a
+    hex string: ``"#RRGGBB"`` (e.g. ``"#FF8040"``).
+
+    Use ``daz_list_materials`` to find zone names and ``daz_get_material`` to
+    discover property names and their types.
+
+    Args:
+        node_label: Display label of the target node.
+        material_name: Label of the material zone to modify.
+        property_name: Display label or internal name of the property.
+        value: Float for numeric properties; ``"#RRGGBB"`` string for color properties.
+
+    Returns:
+        Dict confirming node, material, property, type, and the value applied.
+
+    Examples:
+        # Adjust skin roughness
+        daz_set_material_property("Genesis 9", "Skin", "Glossy Roughness", 0.4)
+
+        # Change eye colour
+        daz_set_material_property("Genesis 9", "Irises", "Diffuse Color", "#3A6EA5")
+
+        # Make a surface transparent
+        daz_set_material_property("My Prop", "Glass", "Cutout Opacity", 0.1)
+    """
+    return await _execute_by_id(
+        "vangard-set-material-property",
+        {
+            "nodeLabel": node_label,
+            "materialName": material_name,
+            "propertyName": property_name,
+            "value": value,
+        },
+    )
+
+
+@mcp.tool()
+async def daz_set_morph(
+    node_label: str,
+    morph_name: str,
+    value: float,
+) -> dict[str, Any]:
+    """Set a morph dial on a node by display label.
+
+    Matches by exact label first, then exact internal name, then substring of
+    label — so ``"smile"`` will match ``"Mouth Smile"`` if no exact match
+    exists. Returns the matched label and internal name so you can confirm
+    which morph was applied.
+
+    For most morphs the useful range is 0.0–1.0 (fully off to fully on).
+    Negative values and values above 1.0 are accepted for special morphs that
+    support them.
+
+    Args:
+        node_label: Display label of the figure or prop.
+        morph_name: Full or partial label of the morph dial.
+        value: Target value for the morph.
+
+    Returns:
+        Dict with node, morph (display label), internal_name, and value read back.
+
+    Examples:
+        daz_set_morph("Genesis 9", "Mouth Smile", 0.8)
+        daz_set_morph("Genesis 9", "smile", 0.8)          # substring match
+        daz_set_morph("Genesis 9", "Head Size", 1.15)
+        daz_set_morph("Genesis 9", "Breast Size", 0.0)    # zero out a morph
+
+    Notes:
+        - Use daz_search_morphs to browse available morph names before setting.
+        - daz_set_property also works but requires the exact internal property name.
+    """
+    return await _execute_by_id(
+        "vangard-set-morph",
+        {"nodeLabel": node_label, "morphName": morph_name, "value": value},
+    )
+
+
+@mcp.tool()
+async def daz_delete_node(node_label: str) -> dict[str, Any]:
+    """Remove a node and its children from the scene.
+
+    This is a destructive operation — the node cannot be recovered without
+    reloading from file. DAZ Studio's remove operation always includes child
+    nodes; bones attached to a figure should not be deleted directly (delete
+    the root figure instead).
+
+    Args:
+        node_label: Display label or internal name of the node to delete.
+
+    Returns:
+        Dict with deleted (label confirmed) and child_count (children removed).
+
+    Examples:
+        daz_delete_node("Key Light")
+        daz_delete_node("Fill Light")
+        daz_delete_node("Camera 2")
+
+    Notes:
+        - Use daz_scene_info or daz_list_lights / daz_list_cameras first to
+          confirm the exact label before deleting.
+        - Save the scene first with daz_save_scene if you want a recovery point.
+    """
+    return await _execute_by_id("vangard-delete-node", {"nodeLabel": node_label})
+
+
+@mcp.tool()
+async def daz_list_lights() -> dict[str, Any]:
+    """List all lights currently in the scene.
+
+    Returns position, type, and flux (intensity) for every light node. Use the
+    returned ``label`` values with ``daz_set_property``, ``daz_delete_node``,
+    or ``daz_animate_light``.
+
+    Returns:
+        Dict with:
+        - light_count: number of lights
+        - lights: list of {index, label, name, type, position, flux, enabled}
+
+    Examples:
+        daz_list_lights()
+        # → {"light_count": 3, "lights": [{"label": "Key Light", "type": "DzSpotLight", ...}]}
+
+    Notes:
+        - ``type`` is the DAZ class name: DzSpotLight, DzDistantLight, DzPointLight, etc.
+        - ``flux`` is in DAZ Studio's internal units (roughly equivalent to Watts for Iray).
+    """
+    return await _execute_by_id("vangard-list-lights")
+
+
+@mcp.tool()
+async def daz_create_light(
+    light_type: str,
+    label: str,
+    x: float = 0.0,
+    y: float = 200.0,
+    z: float = 200.0,
+    flux: float | None = None,
+    aim_at_label: str | None = None,
+) -> dict[str, Any]:
+    """Create a new light and add it to the scene.
+
+    Creates the light at the given world-space position (in centimetres) and
+    optionally aims it at a scene node's bounding-box centre.
+
+    Args:
+        light_type: One of ``"spot"`` (default), ``"distant"``, or ``"point"``.
+        label: Display name to assign to the new light.
+        x: World-space X position in cm (default 0).
+        y: World-space Y position in cm (default 200).
+        z: World-space Z position in cm (default 200).
+        flux: Light intensity in DAZ flux units. If omitted, DAZ default is used.
+        aim_at_label: If provided, aim the light at this node's centre.
+
+    Returns:
+        Dict with label, type, position, and flux.
+
+    Examples:
+        daz_create_light("spot", "Key Light", x=150, y=250, z=200, flux=10000,
+                         aim_at_label="Genesis 9")
+        daz_create_light("distant", "Sun", x=0, y=500, z=0, flux=5000)
+        daz_create_light("point", "Candle", x=0, y=80, z=50, flux=2000)
+
+    Notes:
+        - For complex multi-light setups prefer daz_apply_lighting_preset.
+        - Use daz_list_lights to verify the light was added.
+    """
+    valid_types = ("spot", "distant", "point")
+    if light_type not in valid_types:
+        raise ToolError(
+            f"light_type must be one of {valid_types}, got '{light_type}'"
+        )
+    return await _execute_by_id(
+        "vangard-create-light",
+        {
+            "lightType": light_type,
+            "label": label,
+            "x": x,
+            "y": y,
+            "z": z,
+            "flux": flux,
+            "aimAtLabel": aim_at_label,
+        },
+    )
+
+
+@mcp.tool()
+async def daz_list_cameras() -> dict[str, Any]:
+    """List all cameras currently in the scene.
+
+    Returns position and focal length for every camera node. Use the returned
+    ``label`` values with ``daz_set_active_camera``, ``daz_render_with_camera``,
+    or ``daz_delete_node``.
+
+    Returns:
+        Dict with:
+        - camera_count: number of cameras
+        - cameras: list of {index, label, name, type, position, focal_length}
+
+    Examples:
+        daz_list_cameras()
+        # → {"camera_count": 2, "cameras": [{"label": "Camera 1", ...}]}
+    """
+    return await _execute_by_id("vangard-list-cameras")
+
+
+@mcp.tool()
+async def daz_create_camera(
+    label: str,
+    x: float = 0.0,
+    y: float = 150.0,
+    z: float = 300.0,
+    aim_at_label: str | None = None,
+    focal_length: float | None = None,
+) -> dict[str, Any]:
+    """Create a new camera and add it to the scene.
+
+    Creates a basic camera at the given world-space position (in centimetres) and
+    optionally aims it at a scene node's bounding-box centre.
+
+    Args:
+        label: Display name to assign to the new camera.
+        x: World-space X position in cm (default 0).
+        y: World-space Y position in cm (default 150).
+        z: World-space Z position in cm (default 300).
+        aim_at_label: If provided, aim the camera at this node's centre.
+        focal_length: Lens focal length in mm. If omitted, DAZ default is used.
+
+    Returns:
+        Dict with label, position, and focal_length.
+
+    Examples:
+        daz_create_camera("Close-up Cam", x=0, y=160, z=120,
+                          aim_at_label="Genesis 9", focal_length=85)
+        daz_create_camera("Wide Shot", x=-200, y=180, z=350,
+                          aim_at_label="Genesis 9")
+
+    Notes:
+        - Use daz_set_active_camera to switch the active viewport camera.
+        - Use daz_list_cameras to confirm the camera was added.
+    """
+    return await _execute_by_id(
+        "vangard-create-camera",
+        {
+            "label": label,
+            "x": x,
+            "y": y,
+            "z": z,
+            "aimAtLabel": aim_at_label,
+            "focalLength": focal_length,
+        },
+    )
+
+
+@mcp.tool()
+async def daz_save_scene(file_path: str | None = None) -> dict[str, Any]:
+    """Save the current DAZ Studio scene to disk.
+
+    Without ``file_path`` this is equivalent to File → Save (Ctrl+S) — it
+    overwrites the scene's existing file. With ``file_path`` it performs a
+    Save As to a new location.
+
+    Args:
+        file_path: Absolute path for Save As (e.g. ``"C:/scenes/hero_v02.duf"``).
+                   If omitted, saves to the scene's current filename.
+
+    Returns:
+        Dict with saved (True) and file_path used.
+
+    Examples:
+        daz_save_scene()                              # overwrite current file
+        daz_save_scene("C:/projects/scene_v02.duf")  # save as new file
+
+    Notes:
+        - If the scene has never been saved and no file_path is given, DAZ may
+          open a Save dialog; provide an explicit path to avoid this.
+        - Call before daz_delete_node or major scene changes as a safety checkpoint.
+    """
+    return await _execute_by_id(
+        "vangard-save-scene",
+        {"filePath": file_path},
+    )
+
+
+@mcp.tool()
+async def daz_get_selected_nodes() -> dict[str, Any]:
+    """Return the nodes currently selected in the DAZ Studio viewport.
+
+    Useful when the user has manually selected items in DAZ Studio and wants
+    the AI to act on that selection. The primary selection (last clicked) is
+    flagged separately from any additional multi-selected nodes.
+
+    Returns:
+        Dict with:
+        - count: total number of selected nodes
+        - nodes: list of {label, name, type, primary}
+
+    Examples:
+        daz_get_selected_nodes()
+        # → {"count": 2, "nodes": [{"label": "Genesis 9", "primary": true}, ...]}
+    """
+    return await _execute_by_id("vangard-get-selected-nodes")
+
+
+@mcp.tool()
+async def daz_set_render_output(
+    output_path: str | None = None,
+    width: int | None = None,
+    height: int | None = None,
+) -> dict[str, Any]:
+    """Configure render output path and/or image dimensions.
+
+    At least one of ``output_path``, ``width``, or ``height`` must be provided.
+    Unspecified parameters are left unchanged.
+
+    Args:
+        output_path: Absolute path for the rendered image file, including
+                     extension (e.g. ``"C:/renders/hero_shot.png"``). DAZ Studio
+                     determines the format from the extension.
+        width: Render image width in pixels.
+        height: Render image height in pixels.
+
+    Returns:
+        Dict with changed (the settings that were modified) and current
+        (the full current render output configuration after changes).
+
+    Examples:
+        daz_set_render_output(output_path="C:/renders/scene01.png")
+        daz_set_render_output(width=3840, height=2160)           # 4K
+        daz_set_render_output("C:/out/final.png", 1920, 1080)   # 1080p with path
+
+    Notes:
+        - These settings persist in the DAZ Studio render options for the session.
+        - Use daz_render or daz_render_async to trigger the render after setting up.
+    """
+    if output_path is None and width is None and height is None:
+        raise ToolError(
+            "At least one of output_path, width, or height must be provided."
+        )
+    return await _execute_by_id(
+        "vangard-set-render-output",
+        {"outputPath": output_path, "width": width, "height": height},
+    )
+
+
+@mcp.tool()
+async def daz_reset_pose(
+    node_label: str,
+    zero_transforms: bool = False,
+) -> dict[str, Any]:
+    """Zero all bone rotations on a figure, returning it to its rest pose.
+
+    Recursively walks the node's skeleton and sets XRotate, YRotate, and
+    ZRotate to 0 on every bone. Optionally also zeroes the root node's
+    translation and scale.
+
+    Args:
+        node_label: Display label of the figure whose pose should be cleared.
+        zero_transforms: If True, also zero the root XYZ translation and reset
+                         Scale to 1.0 (default False — only rotations are reset).
+
+    Returns:
+        Dict with node, bones_reset (count), and transforms_zeroed.
+
+    Examples:
+        daz_reset_pose("Genesis 9")
+        daz_reset_pose("Genesis 9", zero_transforms=True)  # also move to origin
+
+    Notes:
+        - This does not affect morph values. Use daz_set_morph or daz_set_property
+          to zero morphs individually.
+        - Keyframes on bone properties are not removed; use daz_clear_animation
+          if you also need to strip animation data.
+    """
+    return await _execute_by_id(
+        "vangard-reset-pose",
+        {"nodeLabel": node_label, "zeroTransforms": zero_transforms},
+    )
 
 
 def main() -> None:
