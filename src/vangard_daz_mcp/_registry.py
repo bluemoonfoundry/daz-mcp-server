@@ -1345,7 +1345,7 @@ _APPLY_LIGHTING_PRESET_SCRIPT = """\
     }
 
     // Set environment to scene-lights-only
-    var envNode = Scene.getNode(1);
+    var envNode = Scene.findNodeByLabel("Environment Options");
     if (envNode) {
         var envMode = envNode.findProperty("Environment Mode");
         if (envMode) envMode.setValue(3);
@@ -4388,9 +4388,9 @@ _SET_SCENE_ATMOSPHERE_SCRIPT = """\
     var sunLightIntensity = args.sunLightIntensity !== undefined ? args.sunLightIntensity : null;
     var ambientColor = args.ambientColor || null;
 
-    // Environment node is always Scene.getNode(1)
-    var envNode = Scene.getNode(1);
-    if (!envNode) throw new Error("Environment node not found at Scene.getNode(1)");
+    // Environment node is found by its label, not a fixed scene index
+    var envNode = Scene.findNodeByLabel("Environment Options");
+    if (!envNode) throw new Error("Environment node not found (expected label 'Environment Options')");
 
     var results = {};
     var changes = [];
@@ -4615,7 +4615,7 @@ _APPLY_VISUAL_STYLE_SCRIPT = """\
     }
 
     // Set environment mode to Scene Only
-    var envNode = Scene.getNode(1);
+    var envNode = Scene.findNodeByLabel("Environment Options");
     if (envNode) {
         var modeProp = envNode.findProperty("Environment Mode");
         if (modeProp) modeProp.setValue(style.envMode);

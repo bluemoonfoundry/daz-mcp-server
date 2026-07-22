@@ -233,7 +233,7 @@ _VALIDATE_SCENE_SCRIPT = """\
 
     // --- 2. Lighting checks ---
     var numLights = Scene.getNumLights();
-    var envNode = Scene.getNode(1);
+    var envNode = Scene.findNodeByLabel("Environment Options");
     var envMode = envNode ? envNode.findProperty("Environment Mode") : null;
     var envModeVal = envMode ? envMode.getValue() : 0;
     var hasEnvLight = (envModeVal !== 3);  // not scene-only -> env dome contributes
@@ -355,7 +355,8 @@ async def daz_execute(
     3. ✅ Wrap scripts returning values in IIFE:
        (function(){ return Scene.getNumNodes(); })()
 
-    4. ✅ Environment node is ALWAYS Scene.getNode(1) - not findNodeByLabel()
+    4. ✅ Environment node: use Scene.findNodeByLabel("Environment Options")
+       (not a fixed Scene.getNode(index) - node order is scene-dependent)
 
     For detailed examples and documentation, use the daz_script_help tool first.
 

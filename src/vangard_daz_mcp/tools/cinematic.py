@@ -1964,7 +1964,8 @@ async def daz_set_scene_atmosphere(
 ) -> dict:
     """Configure the DAZ Studio environment node for scene atmosphere and mood.
 
-    Controls the Environment node (always `Scene.getNode(1)`) which governs the
+    Controls the Environment node (found via `Scene.findNodeByLabel("Environment Options")`)
+    which governs the
     HDRI dome, Sun-Sky system, and ambient lighting. Call with only the parameters
     you want to change — others are left untouched.
 
@@ -2016,7 +2017,7 @@ async def daz_set_scene_atmosphere(
         )
 
     Notes:
-        - The Environment node is always at Scene.getNode(1) in DAZ Studio
+        - The Environment node is located via Scene.findNodeByLabel("Environment Options")
         - Property names vary across DAZ Studio versions; the tool tries multiple names
         - Mode 3 is automatically set by daz_apply_lighting_preset and daz_apply_visual_style
         - Changes are immediate but only visible in rendered output (not realtime viewport)
