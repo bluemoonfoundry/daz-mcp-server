@@ -13,7 +13,7 @@
 - **@SKILL_CINEMA.md**: Cameras, lighting, animation, shot composition, and rendering.
 
 ## Architecture Summary
-- **Version:** 0.5.0
+- **Version:** 0.6.0
 - **Bridge:** Connects to DazScriptServer (port 18811)
 - **Registry:** 137 tools registered across 13 tool modules.
 - **Structure:** Modular — `_mcp.py` holds shared FastMCP instance; `tools/__init__.py` imports all 13 modules so `@mcp.tool()` decorators fire at import time.
