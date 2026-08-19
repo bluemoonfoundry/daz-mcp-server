@@ -3437,6 +3437,16 @@ Execute a DazScript file from disk.
 
 **Use when:** Running complex scripts stored in files, especially scripts that use `include()` or `getScriptFileName()`.
 
+#### `daz_execute_file_async`
+Submit a DazScript file as a background job and return its `request_id`
+immediately. The file is loaded by DAZ Studio when the job starts, preserving
+`getScriptFileName()` and relative `include()` behavior.
+
+Use `daz_get_request_status`, `daz_get_request_result`, and
+`daz_cancel_request` to manage the job. Prefer this over `daz_execute_file` for
+pose sweeps, simulations, exports, and other work that can exceed the MCP HTTP
+timeout.
+
 ---
 
 ## Features
@@ -3631,7 +3641,7 @@ vangard-daz-mcp/
 │       ├── render.py          # Sync/async render, batch, animation export (16 tools)
 │       ├── animation.py       # Keyframes, timeline, frame range (7 tools)
 │       ├── material.py        # Materials: list, get, set, presets, copy (5 tools)
-│       ├── utility.py         # Status, execute, docs, validate, macros (18 tools)
+│       ├── utility.py         # Status, execute, docs, validate, macros (19 tools)
 │       ├── content.py         # Content browser, search, compatibility (6 tools)
 │       ├── cinematic.py       # Shot sequences, camera paths, storyboard (22 tools)
 │       └── wardrobe.py        # Clothing, dForce, subdivision, export (10 tools)
@@ -3645,10 +3655,10 @@ vangard-daz-mcp/
 
 ### Architecture
 
-- **FastMCP 3.x server** with stdio transport (137 tools registered)
+- **FastMCP 3.x server** with stdio transport (138 tools registered)
 - **Modular tool package**: 13 focused modules under `tools/`; `@mcp.tool()` decorators fire at import time via the shared `mcp` instance from `_mcp.py`, avoiding circular imports with `server.py`
 - **httpx.AsyncClient** for HTTP requests to DazScriptServer; managed in `_client.py` singleton
-- **dazpy SDK** (installed from PyPI as `dazpy>=2.6.0`): synchronous Python SDK; all dazpy calls wrapped in `asyncio.to_thread` via `run_dazpy()`
+- **dazpy SDK** (installed from PyPI as `dazpy>=2.8.0`): synchronous Python SDK; all dazpy calls wrapped in `asyncio.to_thread` via `run_dazpy()`
 - **Script registry** (`_registry.py`): high-level tool scripts pre-registered at startup, executed by ID; auto-re-registered on 404 when DAZ Studio restarts
 - **lifespan context** manages httpx client initialization and cleanup
 

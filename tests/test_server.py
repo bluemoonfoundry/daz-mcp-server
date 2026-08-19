@@ -30,6 +30,7 @@ from vangard_daz_mcp.tools.utility import (
     daz_status,
     daz_execute,
     daz_execute_file,
+    daz_execute_file_async,
     daz_wait_for_scene_event,
 )
 
@@ -172,6 +173,38 @@ async def test_daz_execute_file_failure(mock_daz):
     mock_daz.post("/execute").mock(return_value=_fail("File not found"))
     with pytest.raises(ToolError, match="File not found"):
         await daz_execute_file(script_file="C:/scripts/missing.dsa")
+
+
+async def test_daz_execute_file_async_returns_job_and_preserves_payload(mock_daz):
+    route = mock_daz.post("/execute/async").mock(
+        return_value=httpx.Response(
+            200,
+            json={
+                "request_id": "execute-file-123",
+                "status": "queued",
+                "submitted_at": "2026-08-18T12:00:00Z",
+            },
+        )
+    )
+
+    result = await daz_execute_file_async(
+        script_file="C:/scripts/pose-probe.dsa",
+        args={"mode": "probe"},
+    )
+
+    assert result["request_id"] == "execute-file-123"
+    assert result["status"] == "queued"
+    assert route.calls.last.request.content == (
+        b'{"scriptFile":"C:/scripts/pose-probe.dsa","args":{"mode":"probe"}}'
+    )
+
+
+async def test_daz_execute_file_async_http_failure(mock_daz):
+    mock_daz.post("/execute/async").mock(
+        return_value=httpx.Response(400, json={"error": "File not found"})
+    )
+    with pytest.raises(httpx.HTTPStatusError, match="400"):
+        await daz_execute_file_async(script_file="C:/scripts/missing.dsa")
 
 
 # ---------------------------------------------------------------------------

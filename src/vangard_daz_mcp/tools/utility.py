@@ -13,7 +13,13 @@ from typing import Any
 import httpx
 from fastmcp.exceptions import ToolError
 
-from .._mcp import mcp, _execute_by_id, _execute_payload, _execute_raw
+from .._mcp import (
+    mcp,
+    _execute_async_payload,
+    _execute_by_id,
+    _execute_payload,
+    _execute_raw,
+)
 from .._client import get_http_client
 from .._errors import handle_network_error, check_response
 
@@ -106,6 +112,33 @@ async def daz_execute_file(
     if args is not None:
         payload["args"] = args
     return await _execute_payload(payload)
+
+
+@mcp.tool()
+async def daz_execute_file_async(
+    script_file: str,
+    args: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    """Submit a DazScript file as a background job and return immediately.
+
+    Use this for long-running file-backed work such as pose sweeps, simulations,
+    exports, and batch renders. DAZ Studio loads the file when the queued job
+    starts, so ``getScriptFileName()`` and relative ``include()`` calls keep
+    working. Poll with ``daz_get_request_status``, fetch the final response with
+    ``daz_get_request_result``, or stop queued work with ``daz_cancel_request``.
+
+    Args:
+        script_file: Absolute path to the .dsa/.ds file on the DAZ Studio machine.
+        args: Optional JSON-serialisable object available through
+            ``getArguments()[0]`` in the script.
+
+    Returns:
+        The queued job record: request_id, status, and submitted_at.
+    """
+    payload: dict[str, Any] = {"scriptFile": script_file}
+    if args is not None:
+        payload["args"] = args
+    return await _execute_async_payload(payload)
 
 
 @mcp.tool()

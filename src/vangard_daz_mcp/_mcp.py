@@ -67,6 +67,17 @@ async def _execute_raw(script: str, args: dict[str, Any] | None = None) -> dict[
     return await _execute_payload(payload)
 
 
+async def _execute_async_payload(payload: dict[str, Any]) -> dict[str, Any]:
+    """Submit a prebuilt payload to ``/execute/async`` and return its job record."""
+    client = get_http_client()
+    try:
+        response = await client.post("/execute/async", json=payload)
+        check_response(response)
+    except (httpx.ConnectError, httpx.ConnectTimeout, httpx.TimeoutException) as exc:
+        handle_network_error(exc)
+    return response.json()
+
+
 async def _execute(script: str, args: dict[str, Any] | None = None) -> Any:
     """POST an inline DazScript to DazScriptServer; raise ToolError on failure."""
     data = await _execute_raw(script, args)
