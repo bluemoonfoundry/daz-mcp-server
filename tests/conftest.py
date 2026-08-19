@@ -23,11 +23,11 @@ from __future__ import annotations
 import os
 import socket
 
-import httpx
 import pytest
 import pytest_asyncio
+from dazpy.aio import AsyncDazClient
 
-from vangard_daz_mcp._client import set_http_client
+from vangard_daz_mcp._client import DAZ_API_TOKEN, set_async_daz_client
 from vangard_daz_mcp._registry import _register_scripts
 from vangard_daz_mcp.tools.camera_light import daz_create_camera, daz_create_light
 from vangard_daz_mcp.tools.scene import daz_scene_info
@@ -55,7 +55,7 @@ def _daz_available() -> bool:
 
 @pytest_asyncio.fixture()
 async def live_client():
-    """Real AsyncClient wired into the server module.
+    """Real AsyncDazClient wired into the server module.
 
     Skips automatically if DAZ Studio is not reachable.
     Registers all scripts once per process (cached).
@@ -63,14 +63,16 @@ async def live_client():
     if not _daz_available():
         pytest.skip(f"DAZ Studio not reachable at {BASE_URL}")
 
-    async with httpx.AsyncClient(base_url=BASE_URL, timeout=30.0) as client:
-        set_http_client(client)
+    async with AsyncDazClient(
+        host="localhost", port=18811, token=DAZ_API_TOKEN or None, timeout=30.0
+    ) as client:
+        set_async_daz_client(client)
         if not _cache.get("scripts_registered"):
             await _register_scripts(client)
             _cache["scripts_registered"] = True
         yield client
 
-    set_http_client(None)
+    set_async_daz_client(None)
 
 
 # ---------------------------------------------------------------------------

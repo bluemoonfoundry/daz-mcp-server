@@ -5,12 +5,12 @@ import asyncio
 import os
 from typing import Any
 
-import httpx
+import dazpy.exceptions as daz_exc
 from fastmcp.exceptions import ToolError
 
 from .._mcp import mcp, _execute_by_id, _execute_by_id_async, _execute_render, _execute_render_batch
-from .._client import get_http_client
-from .._errors import handle_network_error, check_response
+from .._client import get_async_daz_client
+from .._errors import handle_dazpy_error
 
 
 # ---------------------------------------------------------------------------
@@ -265,11 +265,11 @@ async def daz_render_async(
     engine: str | None = None,
     iray_samples: int | None = None,
 ) -> dict[str, Any]:
-    """Start a render asynchronously via the dedicated render endpoint — returns immediately.
+    """Start a native render asynchronously and return immediately.
 
-    Uses POST /render directly, which supports native render parameters and
-    proper cancellation via daz_cancel_request(). Cancel IDs returned here have
-    the prefix "rnd-" and are routed to /render/:id/cancel automatically.
+    Supports native render parameters and cancellation via daz_cancel_request().
+    Render request IDs have the prefix "rnd-" so the protocol client selects
+    the correct cancellation operation automatically.
 
     Use daz_get_request_status() to poll and daz_get_request_result() for the result.
 
@@ -348,7 +348,7 @@ async def daz_batch_render_cameras_async(
 ) -> dict[str, Any]:
     """Queue renders from multiple cameras as a validated batch.
 
-    Uses POST /render/batch which validates ALL cameras before enqueuing any render.
+    The server validates ALL cameras before enqueuing any render.
     This is all-or-nothing: if any camera name is invalid the entire batch is rejected.
 
     Args:
@@ -402,8 +402,8 @@ async def daz_render_batch(
 ) -> dict[str, Any]:
     """Submit a batch of render variants — validated and queued atomically.
 
-    Uses POST /render/batch. All variants are validated before any render is
-    enqueued (all-or-nothing). Renders execute serially but are each independently
+    All variants are validated before any render is enqueued (all-or-nothing).
+    Renders execute serially but are each independently
     cancellable via daz_cancel_request().
 
     Args:
@@ -503,15 +503,14 @@ async def daz_get_request_status(request_id: str) -> dict[str, Any]:
             "queue_position": 2    # present while queued
         }
     """
-    client = get_http_client()
+    client = get_async_daz_client()
     try:
-        response = await client.get(f"/requests/{request_id}/status")
-    except (httpx.ConnectError, httpx.ConnectTimeout, httpx.TimeoutException) as exc:
-        handle_network_error(exc)
-    if response.status_code == 404:
+        data = await client.get_request_status(request_id)
+    except daz_exc.DazError as exc:
+        handle_dazpy_error(exc)
+    if data.get("status") == "not_found":
         raise ToolError(f"Request not found: {request_id}")
-    check_response(response)
-    return response.json()
+    return data
 
 
 @mcp.tool()
@@ -542,23 +541,19 @@ async def daz_get_request_result(
 
     Raises ToolError if the request failed.
     """
-    client = get_http_client()
-    params: dict[str, Any] = {
-        "wait": "true" if wait else "false",
-        "timeout": timeout_seconds,
-    }
+    client = get_async_daz_client()
     try:
-        response = await client.get(
-            f"/requests/{request_id}/result",
-            params=params,
-            timeout=timeout_seconds + 10.0,  # slightly longer than server timeout
+        data = await client.get_request_result(
+            request_id,
+            wait=wait,
+            wait_timeout=timeout_seconds,
         )
-    except (httpx.ConnectError, httpx.ConnectTimeout, httpx.TimeoutException) as exc:
-        handle_network_error(exc)
-    check_response(response)
+    except daz_exc.DazError as exc:
+        handle_dazpy_error(exc)
 
-    data = response.json()
     status = data.get("status", "unknown")
+    if status == "not_found":
+        raise ToolError(f"Request not found: {request_id}")
     if status == "failed":
         raise ToolError(f"Async request failed: {data.get('error', 'unknown error')}")
     if status == "cancelled":
@@ -574,8 +569,8 @@ async def daz_cancel_request(request_id: str) -> dict[str, Any]:
     For running renders: sends a killRender() signal to DAZ Studio; may take a
     few seconds to take effect as the renderer finishes the current tile.
 
-    Render requests (IDs starting with "rnd-") are routed to POST /render/:id/cancel
-    which issues killRender(). Script requests use DELETE /requests/:id.
+    Render requests (IDs starting with "rnd-") issue the server's render
+    cancellation operation; script requests use ordinary request cancellation.
 
     Args:
         request_id: Request ID returned by an async submission tool
@@ -588,18 +583,15 @@ async def daz_cancel_request(request_id: str) -> dict[str, Any]:
     Raises ToolError if the request is already finished (completed/failed/cancelled)
     or not found.
     """
-    client = get_http_client()
+    client = get_async_daz_client()
     try:
-        if request_id.startswith("rnd-"):
-            response = await client.post(f"/render/{request_id}/cancel")
-        else:
-            response = await client.delete(f"/requests/{request_id}")
-    except (httpx.ConnectError, httpx.ConnectTimeout, httpx.TimeoutException) as exc:
-        handle_network_error(exc)
-    if response.status_code == 404:
-        raise ToolError(f"Request not found: {request_id}")
-    check_response(response)
-    return response.json()
+        return await client.cancel_request_detail(request_id)
+    except daz_exc.ServerResponseError as exc:
+        if exc.status_code == 404:
+            raise ToolError(f"Request not found: {request_id}") from exc
+        handle_dazpy_error(exc)
+    except daz_exc.DazError as exc:
+        handle_dazpy_error(exc)
 
 
 @mcp.tool()
@@ -626,16 +618,11 @@ async def daz_list_requests(
             "cancelled": 0
         }
     """
-    client = get_http_client()
-    params: dict[str, Any] = {}
-    if status_filter is not None:
-        params["status"] = status_filter
+    client = get_async_daz_client()
     try:
-        response = await client.get("/requests", params=params)
-    except (httpx.ConnectError, httpx.ConnectTimeout, httpx.TimeoutException) as exc:
-        handle_network_error(exc)
-    check_response(response)
-    return response.json()
+        return await client.list_requests(status_filter)
+    except daz_exc.DazError as exc:
+        handle_dazpy_error(exc)
 
 
 # ---------------------------------------------------------------------------

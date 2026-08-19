@@ -9,19 +9,21 @@ from contextlib import asynccontextmanager
 from typing import Any
 
 import httpx
+from dazpy.aio import AsyncDazClient
+import dazpy.exceptions as daz_exc
 from fastmcp import FastMCP
-from fastmcp.exceptions import ToolError
 
 from ._client import (
     DAZ_API_TOKEN,
-    BASE_URL,
     CONTENT_BROWSER_URL,
+    DAZ_HOST,
+    DAZ_PORT,
     DAZ_TIMEOUT,
-    get_http_client,
-    set_http_client,
+    get_async_daz_client,
+    set_async_daz_client,
     set_content_browser_client,
 )
-from ._errors import handle_network_error, check_response
+from ._errors import handle_dazpy_error
 from ._registry import _register_scripts
 
 
@@ -29,87 +31,49 @@ from ._registry import _register_scripts
 # Execute helpers — used by all tool modules
 # ---------------------------------------------------------------------------
 
-async def _execute_payload(payload: dict[str, Any]) -> dict[str, Any]:
-    """POST a prebuilt /execute payload to DazScriptServer; raise ToolError on failure.
-
-    Returns the full response payload (success/result/output/error) — shared by
-    _execute_raw() (inline script), daz_execute_file (script-on-disk, a different
-    payload shape hitting the same /execute endpoint), and _execute() (which
-    further unwraps just "result").
-    """
-    client = get_http_client()
-    try:
-        response = await client.post("/execute", json=payload)
-        check_response(response)
-    except (httpx.ConnectError, httpx.ConnectTimeout, httpx.TimeoutException) as exc:
-        handle_network_error(exc)
-    data = response.json()
-    if not data.get("success", False):
-        output_lines = data.get("output", [])
-        error_msg = data.get("error") or "Script execution failed"
-        detail = error_msg
-        if output_lines:
-            detail += "\n\nCaptured output:\n" + "\n".join(output_lines)
-        raise ToolError(detail)
-    return data
+def _execution_payload(result: Any) -> dict[str, Any]:
+    """Preserve the public diagnostic shape for any dazpy execution result."""
+    return {
+        "success": result.success,
+        "result": result.value,
+        "output": result.output,
+        "error": result.error or None,
+        "request_id": result.request_id,
+        "duration_ms": result.duration_ms,
+    }
 
 
 async def _execute_raw(script: str, args: dict[str, Any] | None = None) -> dict[str, Any]:
-    """POST an inline DazScript to DazScriptServer; raise ToolError on failure.
-
-    Returns the full response payload (success/result/output/error) — used by
-    both _execute() (which unwraps just "result") and daz_execute (the public
-    MCP tool, which returns the full diagnostic payload to the caller).
-    """
-    payload: dict[str, Any] = {"script": script}
-    if args is not None:
-        payload["args"] = args
-    return await _execute_payload(payload)
-
-
-async def _execute_async_payload(payload: dict[str, Any]) -> dict[str, Any]:
-    """Submit a prebuilt payload to ``/execute/async`` and return its job record."""
-    client = get_http_client()
+    """Execute inline source through dazpy and preserve the diagnostic shape."""
     try:
-        response = await client.post("/execute/async", json=payload)
-        check_response(response)
-    except (httpx.ConnectError, httpx.ConnectTimeout, httpx.TimeoutException) as exc:
-        handle_network_error(exc)
-    return response.json()
+        result = await get_async_daz_client().execute(script, args)
+    except daz_exc.DazError as exc:
+        handle_dazpy_error(exc)
+    return _execution_payload(result)
 
 
 async def _execute(script: str, args: dict[str, Any] | None = None) -> Any:
-    """POST an inline DazScript to DazScriptServer; raise ToolError on failure."""
+    """Execute inline DazScript and unwrap its result value."""
     data = await _execute_raw(script, args)
     return data.get("result")
 
 
 async def _execute_by_id(script_id: str, args: dict[str, Any] | None = None) -> Any:
     """Call a registered script by ID; re-registers once on 404 (DAZ Studio restart)."""
-    client = get_http_client()
-    payload: dict[str, Any] = {}
-    if args is not None:
-        payload["args"] = args
+    client = get_async_daz_client()
     try:
-        response = await client.post(f"/scripts/{script_id}/execute", json=payload)
-    except (httpx.ConnectError, httpx.ConnectTimeout, httpx.TimeoutException) as exc:
-        handle_network_error(exc)
-    if response.status_code == 404:
+        result = await client.execute_registered(script_id, args)
+    except daz_exc.ServerResponseError as exc:
+        if exc.status_code != 404:
+            handle_dazpy_error(exc)
         await _register_scripts(client)
         try:
-            response = await client.post(f"/scripts/{script_id}/execute", json=payload)
-        except (httpx.ConnectError, httpx.ConnectTimeout, httpx.TimeoutException) as exc:
-            handle_network_error(exc)
-    check_response(response)
-    data = response.json()
-    if not data.get("success", False):
-        output_lines = data.get("output", [])
-        error_msg = data.get("error") or "Script execution failed"
-        detail = error_msg
-        if output_lines:
-            detail += "\n\nCaptured output:\n" + "\n".join(output_lines)
-        raise ToolError(detail)
-    return data.get("result")
+            result = await client.execute_registered(script_id, args)
+        except daz_exc.DazError as retry_exc:
+            handle_dazpy_error(retry_exc)
+    except daz_exc.DazError as exc:
+        handle_dazpy_error(exc)
+    return result.value
 
 
 async def _execute_by_id_async(
@@ -117,44 +81,45 @@ async def _execute_by_id_async(
     args: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     """Submit a registered script for async execution; returns immediately with request_id."""
-    client = get_http_client()
-    payload: dict[str, Any] = {}
-    if args is not None:
-        payload["args"] = args
+    client = get_async_daz_client()
     try:
-        response = await client.post(f"/scripts/{script_id}/async", json=payload)
-    except (httpx.ConnectError, httpx.ConnectTimeout, httpx.TimeoutException) as exc:
-        handle_network_error(exc)
-    if response.status_code == 404:
+        request_id = await client.execute_registered_async_submit(script_id, args)
+    except daz_exc.ServerResponseError as exc:
+        if exc.status_code != 404:
+            handle_dazpy_error(exc)
         await _register_scripts(client)
         try:
-            response = await client.post(f"/scripts/{script_id}/async", json=payload)
-        except (httpx.ConnectError, httpx.ConnectTimeout, httpx.TimeoutException) as exc:
-            handle_network_error(exc)
-    check_response(response)
-    return response.json()
+            request_id = await client.execute_registered_async_submit(script_id, args)
+        except daz_exc.DazError as retry_exc:
+            handle_dazpy_error(retry_exc)
+    except daz_exc.DazError as exc:
+        handle_dazpy_error(exc)
+    return {"request_id": request_id, "status": "queued"}
 
 
 async def _execute_render(params: dict[str, Any]) -> dict[str, Any]:
-    """Submit a render via POST /render."""
-    client = get_http_client()
+    """Submit a render through dazpy's typed protocol surface."""
     try:
-        response = await client.post("/render", json=params)
-    except (httpx.ConnectError, httpx.ConnectTimeout, httpx.TimeoutException) as exc:
-        handle_network_error(exc)
-    check_response(response)
-    return response.json()
+        return await get_async_daz_client().render_submit(
+            params["output_path"],
+            width=params.get("width", 0),
+            height=params.get("height", 0),
+            camera=params.get("camera", ""),
+            engine=params.get("engine", ""),
+            iray_samples=params.get("iray_samples", 0),
+        )
+    except daz_exc.DazError as exc:
+        handle_dazpy_error(exc)
 
 
 async def _execute_render_batch(body: dict[str, Any]) -> dict[str, Any]:
-    """Submit a render batch via POST /render/batch."""
-    client = get_http_client()
+    """Submit a render batch through dazpy's typed protocol surface."""
     try:
-        response = await client.post("/render/batch", json=body)
-    except (httpx.ConnectError, httpx.ConnectTimeout, httpx.TimeoutException) as exc:
-        handle_network_error(exc)
-    check_response(response)
-    return response.json()
+        return await get_async_daz_client().render_batch_submit(
+            body["variants"], body.get("base")
+        )
+    except daz_exc.DazError as exc:
+        handle_dazpy_error(exc)
 
 
 # ---------------------------------------------------------------------------
@@ -164,11 +129,10 @@ async def _execute_render_batch(body: dict[str, Any]) -> dict[str, Any]:
 @asynccontextmanager
 async def _lifespan(server: FastMCP):  # pylint: disable=unused-argument
     # `server` is required by FastMCP's lifespan callback signature.
-    headers = {"X-API-Token": DAZ_API_TOKEN} if DAZ_API_TOKEN else {}
-    async with httpx.AsyncClient(
-        base_url=BASE_URL, timeout=DAZ_TIMEOUT, headers=headers
+    async with AsyncDazClient(
+        host=DAZ_HOST, port=DAZ_PORT, token=DAZ_API_TOKEN, timeout=DAZ_TIMEOUT
     ) as client:
-        set_http_client(client)
+        set_async_daz_client(client)
         await _register_scripts(client)
         async with httpx.AsyncClient(
             base_url=CONTENT_BROWSER_URL, timeout=DAZ_TIMEOUT
@@ -176,7 +140,7 @@ async def _lifespan(server: FastMCP):  # pylint: disable=unused-argument
             set_content_browser_client(cb_client)
             yield
         set_content_browser_client(None)
-    set_http_client(None)
+    set_async_daz_client(None)
 
 
 mcp = FastMCP("vangard-daz-mcp", lifespan=_lifespan)

@@ -1,4 +1,4 @@
-"""Singleton accessors for the shared httpx clients and dazpy DazClient/DazScene."""
+"""Singleton accessors for dazpy clients and the separate content browser."""
 from __future__ import annotations
 
 import asyncio
@@ -7,6 +7,7 @@ from typing import Callable, TypeVar
 
 import httpx
 from dazpy import DazClient, DazScene
+from dazpy.aio import AsyncDazClient
 
 _T = TypeVar("_T")
 
@@ -18,7 +19,6 @@ DAZ_HOST: str = os.environ.get("DAZ_HOST", "localhost")
 DAZ_PORT: int = int(os.environ.get("DAZ_PORT", "18811"))
 DAZ_TIMEOUT: float = float(os.environ.get("DAZ_TIMEOUT", "30.0"))
 
-BASE_URL: str = f"http://{DAZ_HOST}:{DAZ_PORT}"
 CONTENT_BROWSER_URL: str = os.environ.get("DAZ_CONTENT_BROWSER_URL", "http://localhost:8080")
 
 TOKEN_FILE: str = os.path.join(os.path.expanduser("~"), ".daz3d", "dazscriptserver_token.txt")
@@ -35,17 +35,17 @@ def _load_token_from_file() -> str:
 DAZ_API_TOKEN: str = os.environ.get("DAZ_API_TOKEN") or _load_token_from_file()
 
 # ---------------------------------------------------------------------------
-# Shared httpx clients — set/cleared by the server lifespan
+# Shared protocol/content clients — set/cleared by the server lifespan
 # ---------------------------------------------------------------------------
 
-_http_client: httpx.AsyncClient | None = None
+_async_daz_client: AsyncDazClient | None = None
 _content_browser_client: httpx.AsyncClient | None = None
 
 
-def set_http_client(client: httpx.AsyncClient | None) -> None:
-    """Set (or clear) the shared DazScriptServer httpx client."""
-    global _http_client
-    _http_client = client
+def set_async_daz_client(client: AsyncDazClient | None) -> None:
+    """Set or clear the sole async Daz Script Server protocol client."""
+    global _async_daz_client
+    _async_daz_client = client
 
 
 def set_content_browser_client(client: httpx.AsyncClient | None) -> None:
@@ -54,11 +54,11 @@ def set_content_browser_client(client: httpx.AsyncClient | None) -> None:
     _content_browser_client = client
 
 
-def get_http_client() -> httpx.AsyncClient:
-    """Return the shared DazScriptServer httpx client, once the server lifespan has set it."""
-    if _http_client is None:
-        raise RuntimeError("HTTP client not initialised — server lifespan not running")
-    return _http_client
+def get_async_daz_client() -> AsyncDazClient:
+    """Return the shared async dazpy client once lifespan has initialized it."""
+    if _async_daz_client is None:
+        raise RuntimeError("AsyncDazClient not initialised — server lifespan not running")
+    return _async_daz_client
 
 
 def get_content_browser_client() -> httpx.AsyncClient:

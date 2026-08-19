@@ -7,9 +7,10 @@ import pytest_asyncio
 import respx
 import httpx
 import dazpy.exceptions as daz_exc
+from dazpy.aio import AsyncDazClient
 from fastmcp.exceptions import ToolError
 
-from vangard_daz_mcp._client import set_http_client, set_scene
+from vangard_daz_mcp._client import set_async_daz_client, set_scene
 from vangard_daz_mcp.tools.render import (
     daz_render,
     daz_render_async,
@@ -43,12 +44,12 @@ BASE_URL = "http://localhost:18811"
 # ---------------------------------------------------------------------------
 
 @pytest_asyncio.fixture(autouse=True)
-async def http_client():
-    """Provide a real AsyncClient (respx patches its transport per test)."""
-    async with httpx.AsyncClient(base_url=BASE_URL) as client:
-        set_http_client(client)
+async def daz_client():
+    """Provide the protocol client (respx patches its internal transport)."""
+    async with AsyncDazClient(host="localhost", port=18811, token="") as client:
+        set_async_daz_client(client)
         yield client
-    set_http_client(None)
+    set_async_daz_client(None)
 
 
 @pytest.fixture(autouse=True)
@@ -112,7 +113,7 @@ async def test_daz_status_connect_error(mock_daz):
 
 async def test_daz_status_unauthorized(mock_daz):
     mock_daz.get("/status").mock(return_value=httpx.Response(401))
-    with pytest.raises(ToolError, match="401"):
+    with pytest.raises(ToolError, match="Authentication failed"):
         await daz_status()
 
 
@@ -155,7 +156,7 @@ async def test_daz_execute_timeout(mock_daz):
 
 async def test_daz_execute_unauthorized(mock_daz):
     mock_daz.post("/execute").mock(return_value=httpx.Response(401))
-    with pytest.raises(ToolError, match="401"):
+    with pytest.raises(ToolError, match="Authentication failed"):
         await daz_execute(script="return 1;")
 
 
@@ -205,7 +206,7 @@ async def test_daz_execute_file_async_http_failure(mock_daz):
     mock_daz.post("/execute/async").mock(
         return_value=httpx.Response(400, json={"error": "File not found"})
     )
-    with pytest.raises(httpx.HTTPStatusError, match="400"):
+    with pytest.raises(ToolError, match="File not found"):
         await daz_execute_file_async(script_file="C:/scripts/missing.dsa")
 
 
@@ -664,7 +665,7 @@ async def test_daz_get_request_result_not_found(mock_daz):
     mock_daz.get("/requests/missing/result").mock(
         return_value=httpx.Response(404, json={"error": "Request not found"})
     )
-    with pytest.raises(httpx.HTTPStatusError, match="404"):
+    with pytest.raises(ToolError, match="Request not found"):
         await daz_get_request_result("missing")
 
 
@@ -709,7 +710,7 @@ async def test_daz_cancel_request_already_done(mock_daz):
     mock_daz.delete("/requests/script-done").mock(
         return_value=httpx.Response(409, json={"error": "Cannot cancel completed request"})
     )
-    with pytest.raises(httpx.HTTPStatusError, match="409"):
+    with pytest.raises(ToolError, match="Cannot cancel completed request"):
         await daz_cancel_request("script-done")
 
 

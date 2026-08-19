@@ -3642,7 +3642,7 @@ vangard-daz-mcp/
 ├── src/vangard_daz_mcp/
 │   ├── server.py              # Entry point: imports _mcp and tools package
 │   ├── _mcp.py                # Shared FastMCP instance, lifespan, execute helpers
-│   ├── _client.py             # httpx client singleton + env config
+│   ├── _client.py             # dazpy protocol + content-browser clients
 │   ├── _errors.py             # Error handling helpers
 │   ├── _registry.py           # Script pre-registration at startup
 │   ├── dazscript_docs.json    # DazScript documentation (daz_script_help)
@@ -3673,10 +3673,11 @@ vangard-daz-mcp/
 
 - **FastMCP 3.x server** with stdio transport (138 tools registered)
 - **Modular tool package**: 13 focused modules under `tools/`; `@mcp.tool()` decorators fire at import time via the shared `mcp` instance from `_mcp.py`, avoiding circular imports with `server.py`
-- **httpx.AsyncClient** for HTTP requests to DazScriptServer; managed in `_client.py` singleton
-- **dazpy SDK** (installed from PyPI as `dazpy>=2.8.0`): synchronous Python SDK; all dazpy calls wrapped in `asyncio.to_thread` via `run_dazpy()`
+- **One DazScriptServer protocol client**: `dazpy.aio.AsyncDazClient` owns endpoint URLs, wire payloads, timeout policy, request lifecycle, SSE streams, and typed errors
+- **dazpy domain SDK**: scene/object helpers that are currently synchronous remain wrapped in `asyncio.to_thread` via `run_dazpy()`; tools never construct DazScriptServer HTTP requests
+- **Separate content-browser client**: `httpx.AsyncClient` is retained only for the independent content-browser service
 - **Script registry** (`_registry.py`): high-level tool scripts pre-registered at startup, executed by ID; auto-re-registered on 404 when DAZ Studio restarts
-- **lifespan context** manages httpx client initialization and cleanup
+- **lifespan context** manages the dazpy protocol client and content-browser client
 
 ---
 
@@ -3685,8 +3686,8 @@ vangard-daz-mcp/
 - **Python:** 3.11+
 - **Dependencies:**
   - `fastmcp>=2.0` - MCP server framework
-  - `httpx>=0.27` - Async HTTP client
-  - `dazpy>=2.6.0` - Synchronous Python SDK for DazScriptServer (installed from PyPI)
+  - `httpx>=0.27` - Async client for the separate content-browser service
+  - `dazpy>=2.8.0` - Sync domain SDK and async DazScriptServer protocol client
 - **Dev Dependencies:**
   - `pytest>=8.0`
   - `pytest-asyncio>=0.24`
