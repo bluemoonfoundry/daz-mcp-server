@@ -190,12 +190,14 @@ async def test_daz_execute_file_async_returns_job_and_preserves_payload(mock_daz
     result = await daz_execute_file_async(
         script_file="C:/scripts/pose-probe.dsa",
         args={"mode": "probe"},
+        report_file="C:/runs/probe/job.jsonl",
     )
 
     assert result["request_id"] == "execute-file-123"
     assert result["status"] == "queued"
     assert route.calls.last.request.content == (
-        b'{"scriptFile":"C:/scripts/pose-probe.dsa","args":{"mode":"probe"}}'
+        b'{"scriptFile":"C:/scripts/pose-probe.dsa","args":{"mode":"probe"},'
+        b'"reportFile":"C:/runs/probe/job.jsonl"}'
     )
 
 

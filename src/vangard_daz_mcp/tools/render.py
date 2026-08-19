@@ -492,6 +492,13 @@ async def daz_get_request_status(request_id: str) -> dict[str, Any]:
             "status": "running",   # queued | running | completed | failed | cancelled
             "progress": 0.0,       # 0.0 while running (DAZ single-frame renders have no
                                    # mid-frame progress), 1.0 when complete
+            "observation": {       # populated when submit used report_file
+                "progress": {"value": 0.5, "phase": "render"},
+                "log_tail": [],
+                "log_total": 0,
+                "log_truncated": False,
+                "output_manifest": {"count": 0, "outputs": []},
+            },
             "elapsed_ms": 45000,   # present while running
             "queue_position": 2    # present while queued
         }

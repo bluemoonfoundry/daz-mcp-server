@@ -118,6 +118,7 @@ async def daz_execute_file(
 async def daz_execute_file_async(
     script_file: str,
     args: dict[str, Any] | None = None,
+    report_file: str | None = None,
 ) -> dict[str, Any]:
     """Submit a DazScript file as a background job and return immediately.
 
@@ -131,6 +132,10 @@ async def daz_execute_file_async(
         script_file: Absolute path to the .dsa/.ds file on the DAZ Studio machine.
         args: Optional JSON-serialisable object available through
             ``getArguments()[0]`` in the script.
+        report_file: Optional absolute path to a per-job JSONL event file. The
+            server truncates it on submission and exposes its structured
+            progress, bounded log tail, and output manifest through the normal
+            request status/result tools.
 
     Returns:
         The queued job record: request_id, status, and submitted_at.
@@ -138,6 +143,8 @@ async def daz_execute_file_async(
     payload: dict[str, Any] = {"scriptFile": script_file}
     if args is not None:
         payload["args"] = args
+    if report_file is not None:
+        payload["reportFile"] = report_file
     return await _execute_async_payload(payload)
 
 

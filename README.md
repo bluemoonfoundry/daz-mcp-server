@@ -2394,7 +2394,14 @@ Poll the status of an async request (non-blocking, lightweight).
 {
   "request_id": "render-a3f2b891",
   "status": "running",
-  "progress": 0.0,
+  "progress": 0.25,
+  "observation": {
+    "progress": {"value": 0.25, "phase": "render", "message": "Plate 1"},
+    "log_tail": [{"level": "info", "source": "script", "message": "Loaded scene"}],
+    "log_total": 1,
+    "log_truncated": false,
+    "output_manifest": {"count": 0, "outputs": []}
+  },
   "elapsed_ms": 3200,
   "queue_position": 0
 }
@@ -2420,7 +2427,14 @@ Fetch the final result of an async request.
   "request_id": "render-a3f2b891",
   "duration_ms": 45230,
   "completed_at": "2026-04-09T10:15:47",
-  "status": "completed"
+  "status": "completed",
+  "observation": {
+    "progress": {"value": 1, "phase": "done"},
+    "log_tail": [],
+    "log_total": 0,
+    "log_truncated": false,
+    "output_manifest": {"count": 1, "outputs": [{"path": "C:/renders/plate.png", "kind": "image"}]}
+  }
 }
 ```
 
@@ -3445,7 +3459,9 @@ immediately. The file is loaded by DAZ Studio when the job starts, preserving
 Use `daz_get_request_status`, `daz_get_request_result`, and
 `daz_cancel_request` to manage the job. Prefer this over `daz_execute_file` for
 pose sweeps, simulations, exports, and other work that can exceed the MCP HTTP
-timeout.
+timeout. Pass `report_file` to opt into structured live observation; the script
+writes JSONL progress/log/output events there, and status/result responses carry
+the resulting progress detail, newest 100 log entries, and output manifest.
 
 ---
 
