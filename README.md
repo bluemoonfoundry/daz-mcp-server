@@ -107,6 +107,24 @@ Configure the server via environment variables:
 | `DAZ_TIMEOUT` | `30.0` | Request timeout in seconds (increase for long renders) |
 | `DAZ_API_TOKEN` | *(from file)* | API token for authentication |
 | `DAZ_CONTENT_BROWSER_URL` | `http://localhost:8080` | Content browser API URL (if using a separate content service) |
+| `DAZ_MCP_PROFILE` | `compact` | Model-facing surface: `compact` (5 workflow tools) or `expert` (all 143 registered tools) |
+
+### Tool profiles
+
+The default `compact` profile is the normal model-facing API. It keeps tool
+selection predictable by exposing five task tools:
+
+- `daz_inspect_scene` — inspect the scene before acting
+- `daz_submit_job` — queue general file-backed DazScript work
+- `daz_observe_job` — poll, collect, or cancel a queued job
+- `daz_materialize_recipe` — queue a scene recipe through the same job boundary
+- `daz_fetch_artifact` — fetch an output declared by that job's manifest
+
+Static DazScript guidance is available as the `daz://help/{topic}` resource,
+so its large catalogue and examples do not consume the always-visible tool
+surface. Low-level primitives remain available for development and unusual
+scene surgery by setting `DAZ_MCP_PROFILE=expert` in the MCP server's `env`
+configuration and restarting the MCP client.
 
 ### Authentication
 
@@ -174,7 +192,10 @@ Config file location:
 
 Replace the path with the actual location where you cloned the repo. Use `--project` (not `--directory`) so `uv run` picks up the project's `.venv`.
 
-After saving the config, **restart Claude Desktop**. The DAZ Studio tools will appear in Claude's tool palette.
+After saving the config, **restart Claude Desktop**. The five compact DAZ
+workflow tools will appear in Claude's tool palette. Add
+`"DAZ_MCP_PROFILE": "expert"` to `env` only when the full low-level catalogue
+is needed.
 
 ---
 
@@ -3483,7 +3504,12 @@ If DAZ Studio restarts and clears the session registry, the server automatically
 - Script errors → Full error details with line numbers and captured output
 
 ### 🏗️ Modular Architecture (v0.4.0)
-The server was refactored from a single 15,000-line `server.py` into 13 focused tool modules under `tools/`. A shared `_mcp.py` holds the `FastMCP` instance and all execute helpers, avoiding circular imports. Import-time side effects register all `@mcp.tool()` decorators when `tools/__init__.py` is imported.
+The server was refactored from a single 15,000-line `server.py` into focused
+tool modules under `tools/`. A shared `_mcp.py` holds the `FastMCP` instance
+and all execute helpers, avoiding circular imports. Import-time side effects
+register the complete expert API; `_profile.py` then applies visibility at the
+MCP boundary. `tools/workflow.py` is the five-tool default facade and delegates
+to the same implementations as the detailed tools.
 
 ### 🎬 Cinematic Director Workflow
 22 high-level cinematic tools for professional scene creation:
@@ -3504,7 +3530,7 @@ The server was refactored from a single 15,000-line `server.py` into 13 focused 
 # In Claude Desktop, just ask:
 "Check if DAZ Studio is running"
 
-# Claude will use daz_status and report back
+# Claude will use daz_inspect_scene and report back
 ```
 
 ### Example 2: Load and Position Character
@@ -3640,14 +3666,16 @@ uv run pytest tests/test_server.py::test_daz_status_ok -v
 ```
 vangard-daz-mcp/
 ├── src/vangard_daz_mcp/
-│   ├── server.py              # Entry point: imports _mcp and tools package
+│   ├── server.py              # Entry point: registers tools, applies profile
 │   ├── _mcp.py                # Shared FastMCP instance, lifespan, execute helpers
+│   ├── _profile.py            # Compact-default / expert visibility boundary
 │   ├── _client.py             # dazpy protocol + content-browser clients
 │   ├── _errors.py             # Error handling helpers
 │   ├── _registry.py           # Script pre-registration at startup
 │   ├── dazscript_docs.json    # DazScript documentation (daz_script_help)
 │   └── tools/
-│       ├── __init__.py        # Imports all 13 modules (registers @mcp.tool decorators)
+│       ├── __init__.py        # Imports all modules (registers decorators)
+│       ├── workflow.py        # Five task tools in the compact default profile
 │       ├── spatial.py         # World position, bounding box, distance, layout (7 tools)
 │       ├── transform.py       # Node properties, batch ops, visibility, selection (7 tools)
 │       ├── scene.py           # Load/save, hierarchy, checkpoints (11 tools)
@@ -3671,8 +3699,9 @@ vangard-daz-mcp/
 
 ### Architecture
 
-- **FastMCP 3.x server** with stdio transport (138 tools registered)
-- **Modular tool package**: 13 focused modules under `tools/`; `@mcp.tool()` decorators fire at import time via the shared `mcp` instance from `_mcp.py`, avoiding circular imports with `server.py`
+- **FastMCP 3.x server** with stdio transport (143 tools registered; 5 visible by default)
+- **Profiled model boundary**: the compact facade is selected by default; `DAZ_MCP_PROFILE=expert` reveals every detailed tool without changing their implementation
+- **Modular tool package**: focused modules under `tools/`; decorators fire at import time via the shared `mcp` instance from `_mcp.py`, avoiding circular imports with `server.py`
 - **One DazScriptServer protocol client**: `dazpy.aio.AsyncDazClient` owns endpoint URLs, wire payloads, timeout policy, request lifecycle, SSE streams, and typed errors
 - **dazpy domain SDK**: scene/object helpers that are currently synchronous remain wrapped in `asyncio.to_thread` via `run_dazpy()`; tools never construct DazScriptServer HTTP requests
 - **Separate content-browser client**: `httpx.AsyncClient` is retained only for the independent content-browser service
@@ -3685,7 +3714,7 @@ vangard-daz-mcp/
 
 - **Python:** 3.11+
 - **Dependencies:**
-  - `fastmcp>=2.0` - MCP server framework
+  - `fastmcp>=3.0` - MCP server framework and component visibility profiles
   - `httpx>=0.27` - Async client for the separate content-browser service
   - `dazpy>=2.8.0` - Sync domain SDK and async DazScriptServer protocol client
 - **Dev Dependencies:**

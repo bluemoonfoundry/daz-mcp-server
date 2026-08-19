@@ -9,7 +9,7 @@ authors = [
     {name = "Blue Moon Foundry", email = "gshirpara@gmail.com"},
 ]
 dependencies = [
-    "fastmcp>=2.0",
+    "fastmcp>=3.0",
     "httpx>=0.27",
     "dazpy>=2.8.0",
 ]
