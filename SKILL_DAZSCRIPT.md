@@ -130,6 +130,45 @@ camera.getFocalPointScaleControl().setValue(1.0);     // focal point scale
 // BROKEN: cam.findProperty("F/Stop")          — use getFStopControl()
 ```
 
+### Materials — DzDefaultMaterial vs DzUberIrayMaterial
+Content merged into a scene as raw DSON (a hand-authored `.duf`, or a from-scratch scene-merge
+exporter's output) reliably instantiates as the legacy `DzDefaultMaterial` ("DAZ Studio Default
+(RSL)" in the UI), never `DzUberIrayMaterial`, no matter how complete the material's
+`studio_material_channels` data is — confirmed by direct isolation testing (a byte-for-byte copy
+of a real, working Iray Uber material's channel data, dropped into a self-contained merge, still
+comes back as `DzDefaultMaterial`). The legacy shader doesn't even read modern fields like
+`diffuse.channel.image_file`, so textures silently fail to display regardless of how correct the
+data is. Use `daz_convert_to_iray_uber(node_label)` to fix this — it goes through Daz's own
+shader-preset **application** codepath (`App.getContentMgr().openFile()` on a selected node, the
+same thing that runs when a user drags a Shader Preset from Smart Content onto a figure) instead
+of describing a shader in JSON, and reliably promotes every zone to genuine `DzUberIrayMaterial`.
+This resets every channel to shader defaults — follow up with `daz_set_material_property` per
+zone.
+
+### Colors — linear values need `setFloatColorValue`, not `setColorValue`
+```javascript
+// setColorValue(QColor) is 0-255 sRGB-int and Daz gamma-DECODES it on the way in.
+// Correct for a UI hex-picker value ("#RRGGBB", what daz_set_material_property expects),
+// WRONG if you already have a linear-space 0-1 float (e.g. from another DCC's shader graph):
+prop.setColorValue(new QColor(38, 26, 20));   // feeding linear 0.15 in as if it were sRGB 38/255
+prop.getFloatColorValue();                     // reads back ~0.015, NOT 0.15 — silently darkened
+
+// Linear-native setter — round-trips exactly:
+prop.setFloatColorValue(new DzFloatColor(0.15, 0.1, 0.08, 1.0));
+prop.getFloatColorValue();                     // reads back {red:0.15, green:0.1, blue:0.08, alpha:1}
+```
+
+### Texture maps — `setMap()` works on any mappable channel, color or numeric
+```javascript
+// Confirmed live on both classes — no per-channel-type table needed:
+prop.setMap("C:/path/to/texture.png");   // DzFloatColorProperty (e.g. Diffuse Color)
+prop.setMap("C:/path/to/rough.png");     // DzFloatProperty too (e.g. Glossy Roughness, Normal Map)
+prop.isMapped();                          // true after setMap()
+prop.getMapValue().getFilename();         // read back the path
+// BROKEN assumption: that setMap only exists on image-specific property classes — it doesn't
+// need one; probe with `typeof prop.setMap === 'function'` if unsure on a given class.
+```
+
 ### Probing unknown objects
 When a method name is uncertain, enumerate at runtime before writing the script:
 ```javascript

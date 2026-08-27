@@ -26,6 +26,10 @@ Use these for 5-10x speedup when changing 3+ items:
 - `daz_list_materials`, `daz_get_material`: Inspect surfaces on a node.
 - `daz_set_material_property`: Set a surface property (color, reflectivity, etc.).
 - `daz_apply_material_preset`, `daz_copy_material`: Apply presets or clone surfaces.
+- `daz_convert_to_iray_uber`: Fix content that lands as legacy `DzDefaultMaterial` instead of
+  `DzUberIrayMaterial` (common after merging raw/hand-authored `.duf` content) — see
+  SKILL_DAZSCRIPT.md's "Materials — DzDefaultMaterial vs DzUberIrayMaterial" for why this happens
+  and why the fix goes through shader-preset application rather than editing channel data.
 
 ## Scene Utilities
 - `daz_save_scene`, `daz_save_scene_copy`: Save current or copy scene.

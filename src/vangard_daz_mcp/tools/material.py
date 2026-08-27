@@ -196,6 +196,54 @@ async def daz_apply_material_preset(node_label: str, preset_path: str) -> dict[s
 
 
 @mcp.tool()
+async def daz_convert_to_iray_uber(node_label: str, preset_path: str | None = None) -> dict[str, Any]:
+    """Upgrade every material zone on a node from DzDefaultMaterial to DzUberIrayMaterial.
+
+    Content merged into a scene as raw DSON (a hand-authored .duf, or output from a
+    from-scratch scene-merge exporter) reliably instantiates materials as the legacy
+    ``DzDefaultMaterial`` ("DAZ Studio Default (RSL)" in Daz's UI) instead of the real
+    Iray Uber shader class, no matter how complete the material's channel data is.
+    That legacy shader does not read modern channel fields like ``image_file`` at all,
+    so textures silently fail to display regardless of how correct the underlying data is.
+
+    This tool fixes it by going through Daz's own shader-preset **application** codepath
+    instead — the same thing that runs when a user drags a Shader Preset from Smart
+    Content onto a figure (``App.getContentMgr().openFile()`` on the selected node).
+    That path builds a genuine native shader object rather than parsing one from JSON,
+    and reliably promotes every material zone on the node to ``DzUberIrayMaterial``.
+
+    **This resets every channel on every zone to shader defaults.** Follow up with
+    ``daz_get_material`` / ``daz_set_material_property`` per zone to restore actual
+    diffuse/PBR values and texture maps (color values you set afterward should already
+    be in Daz's expected space — see the color-property gotcha in SKILL_DAZSCRIPT.md if
+    you're feeding in already-linear values from another DCC rather than a UI hex color).
+
+    Args:
+        node_label: Display label of the node whose materials should be upgraded.
+        preset_path: Absolute path to a "preset_shader"-type .duf file. If omitted,
+            resolves Daz Studio's own stock "!Iray Uber Base" preset (ships with every
+            installation) via the content manager — no need to know where the user's
+            library lives.
+
+    Returns:
+        Dict with keys:
+        - success: true on success
+        - node: confirmed node label
+        - preset: the preset path that was applied
+        - before: list of {label, shader} for every zone before conversion
+        - after: list of {label, shader} for every zone after conversion
+
+    Examples:
+        daz_convert_to_iray_uber("Genesis 9")
+        daz_convert_to_iray_uber("MyImportedProp", "C:/Library/Shader Presets/Custom.duf")
+    """
+    return await _execute_by_id(
+        "vangard-convert-to-iray-uber",
+        {"nodeLabel": node_label, "presetPath": preset_path},
+    )
+
+
+@mcp.tool()
 async def daz_copy_material(
     source_node: str,
     source_material_name: str,

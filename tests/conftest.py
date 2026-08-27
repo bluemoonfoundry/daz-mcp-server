@@ -63,6 +63,8 @@ async def live_client():
     if not _daz_available():
         pytest.skip(f"DAZ Studio not reachable at {BASE_URL}")
 
+    # Mirrors _mcp.py's lifespan: pass the configured token so live tests do
+    # not receive 401 responses from an authenticated DazScriptServer.
     async with AsyncDazClient(
         host="localhost", port=18811, token=DAZ_API_TOKEN or None, timeout=30.0
     ) as client:

@@ -16,6 +16,8 @@ themselves with a clear message if none is found.
 
 from __future__ import annotations
 
+import gzip
+import json
 import re
 
 import pytest
@@ -36,10 +38,16 @@ from vangard_daz_mcp.tools.material import (
     daz_list_materials,
     daz_get_material,
     daz_set_material_property,
+    daz_convert_to_iray_uber,
 )
 from vangard_daz_mcp.tools.morph import daz_set_morph, daz_search_morphs
 from vangard_daz_mcp.tools.render import daz_set_render_output
-from vangard_daz_mcp.tools.scene import daz_scene_info, daz_save_scene, daz_get_selected_nodes
+from vangard_daz_mcp.tools.scene import (
+    daz_scene_info,
+    daz_save_scene,
+    daz_get_selected_nodes,
+    daz_load_file,
+)
 from vangard_daz_mcp.tools.transform import daz_delete_node, daz_set_property
 
 # pylint: disable=duplicate-code
@@ -81,6 +89,8 @@ async def live_client():
     if not _daz_available():
         pytest.skip(f"DAZ Studio not reachable at {BASE_URL}")
 
+    # Mirrors _mcp.py's lifespan: pass the configured token so live tests do
+    # not receive 401 responses from an authenticated DazScriptServer.
     async with AsyncDazClient(
         host="localhost", port=18811, token=DAZ_API_TOKEN or None, timeout=30.0
     ) as client:
@@ -301,6 +311,154 @@ class TestSetMaterialProperty:
     async def test_material_not_found_raises(self, live_client, figure_label):
         with pytest.raises(ToolError, match="Material not found"):
             await daz_set_material_property(figure_label, "__ghost_mat__", "Glossy Roughness", 0.5)
+
+
+def _minimal_default_material_duf() -> bytes:
+    """Build a minimal, self-contained .duf that reliably instantiates as
+    DzDefaultMaterial when scene-merged - the exact bug this tool fixes.
+
+    A bare single-quad prop with no material_library/extra data at all is
+    sufficient (confirmed live 2026-08-24): Daz's scene-graph parser never
+    promotes a raw-merged material past the legacy DzDefaultMaterial shader,
+    regardless of how complete (or, as here, how minimal) the material data
+    is. Gzip-compressed per the real .duf convention (see "Compression &
+    container" in SKILL_DSON_FORMAT.md), though Daz reads either form.
+    """
+    duf = {
+        "file_version": "0.6.0.0",
+        "asset_info": {
+            "id": "/Test/VangardTest/RegressionQuad.duf",
+            "type": "prop",
+            "contributor": {"author": "Vangard", "email": "", "website": ""},
+            "revision": "1.0",
+            "modified": "2026-08-24T00:00:00Z",
+        },
+        "geometry_library": [
+            {
+                "id": "RegressionQuadGeom",
+                "name": "geometry",
+                "type": "subdivision_surface",
+                "current_subdivision_level": 0,
+                "vertices": {
+                    "count": 4,
+                    "values": [[-10, 0, -10], [10, 0, -10], [10, 0, 10], [-10, 0, 10]],
+                },
+                "polygon_groups": {"count": 1, "values": ["Default"]},
+                "polygon_material_groups": {"count": 1, "values": ["Default"]},
+                "polylist": {"count": 1, "values": [[0, 0, 0, 1, 2, 3]]},
+            }
+        ],
+        "node_library": [
+            {
+                "id": "VangardRegressionQuad",
+                "name": "VangardRegressionQuad",
+                "type": "node",
+                "label": "Vangard Regression Quad",
+            }
+        ],
+        "scene": {
+            "nodes": [
+                {
+                    "id": "VangardRegressionQuad-1",
+                    "url": "#VangardRegressionQuad",
+                    "name": "VangardRegressionQuad",
+                    "label": "Vangard Regression Quad",
+                    "geometries": [
+                        {
+                            "id": "geometry",
+                            "url": "#RegressionQuadGeom",
+                            "name": "geometry",
+                            "label": "geometry",
+                        }
+                    ],
+                }
+            ]
+        },
+    }
+    return gzip.compress(json.dumps(duf).encode("utf-8"))
+
+
+class TestConvertToIrayUber:
+    """daz_convert_to_iray_uber - fixes content that lands as DzDefaultMaterial.
+
+    Applying the stock preset is idempotent (confirmed live): running it again
+    on an already-Iray-Uber figure just re-flips zones that are already the
+    target class, so most of these tests use whatever figure is already
+    loaded and only assert the post-condition. `test_actually_converts_from_
+    default_material` below is the exception: it forces a fresh node into a
+    real, confirmed DzDefaultMaterial starting state first (see
+    `_minimal_default_material_duf`) so the conversion is genuinely exercised
+    end to end, not just re-asserting an already-Iray-Uber figure's shader
+    class.
+    """
+
+    async def test_actually_converts_from_default_material(self, live_client, tmp_path):
+        """Regression test: prove the DzDefaultMaterial -> DzUberIrayMaterial
+        conversion actually happens, not just that the post-condition holds.
+
+        Live-testing this exposed a real bug beyond the original one this
+        tool fixes: selecting only the target NODE (the tool's prior
+        behavior) is not sufficient for Shader Preset application - it acts
+        on the selected SURFACE(S), not just the selected node.
+        App.getContentMgr().openFile() returned success with nothing actually
+        converted until every DzMaterial on the shape was also explicitly
+        selected. Fixed in _CONVERT_TO_IRAY_UBER_SCRIPT (and the identical
+        latent bug in _APPLY_MATERIAL_PRESET_SCRIPT).
+        """
+        duf_path = tmp_path / "regression_quad.duf"
+        duf_path.write_bytes(_minimal_default_material_duf())
+
+        await daz_load_file(str(duf_path).replace("\\", "/"))
+        node_label = "Vangard Regression Quad"
+        try:
+            before = await daz_list_materials(node_label)
+            assert before["materials"][0]["shader"] == "DzDefaultMaterial", (
+                "Test setup invariant broken: the minimal merged prop no longer "
+                "lands as DzDefaultMaterial - the reproduction this regression "
+                "test relies on may need revisiting."
+            )
+
+            result = await daz_convert_to_iray_uber(node_label)
+            assert result["success"] is True
+            assert all(z["shader"] == "DzDefaultMaterial" for z in result["before"])
+            assert all(z["shader"] == "DzUberIrayMaterial" for z in result["after"])
+
+            after = await daz_list_materials(node_label)
+            assert after["materials"][0]["shader"] == "DzUberIrayMaterial"
+        finally:
+            try:
+                await daz_delete_node(node_label)
+            except ToolError:
+                pass
+
+    async def test_zones_are_iray_uber_after(self, live_client, figure_label):
+        result = await daz_convert_to_iray_uber(figure_label)
+        assert result["success"] is True
+        assert result["node"] == figure_label
+        assert len(result["after"]) > 0
+        assert all(z["shader"] == "DzUberIrayMaterial" for z in result["after"])
+
+    async def test_before_and_after_have_matching_zone_labels(self, live_client, figure_label):
+        result = await daz_convert_to_iray_uber(figure_label)
+        before_labels = {z["label"] for z in result["before"]}
+        after_labels = {z["label"] for z in result["after"]}
+        assert before_labels == after_labels
+
+    async def test_defaults_to_stock_preset_when_omitted(self, live_client, figure_label):
+        result = await daz_convert_to_iray_uber(figure_label)
+        assert result["preset"]  # resolved to a real path via DzContentMgr.getAbsolutePath
+        assert result["preset"].lower().endswith(".duf")
+
+    async def test_explicit_preset_path(self, live_client, figure_label):
+        # Re-resolve the stock path via one call, then pass it explicitly on a second.
+        auto = await daz_convert_to_iray_uber(figure_label)
+        result = await daz_convert_to_iray_uber(figure_label, auto["preset"])
+        assert result["preset"] == auto["preset"]
+        assert all(z["shader"] == "DzUberIrayMaterial" for z in result["after"])
+
+    async def test_node_not_found_raises(self, live_client):
+        with pytest.raises(ToolError, match="Node not found"):
+            await daz_convert_to_iray_uber("__ghost_node__")
 
 
 # ===========================================================================

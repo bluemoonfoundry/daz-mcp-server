@@ -1,6 +1,6 @@
 # vangard-daz-mcp
 
-**Version 0.4.0** | MCP Server for DAZ Studio
+**Version 0.5.0** | MCP Server for DAZ Studio
 
 A [Model Context Protocol (MCP)](https://modelcontextprotocol.io) server that exposes DAZ Studio operations to Claude and other MCP clients. Built on [FastMCP](https://github.com/jlowin/fastmcp) and wraps the [DazScriptServer](https://github.com/bluemoonfoundry/daz-script-server) HTTP plugin.
 
@@ -107,7 +107,7 @@ Configure the server via environment variables:
 | `DAZ_TIMEOUT` | `30.0` | Request timeout in seconds (increase for long renders) |
 | `DAZ_API_TOKEN` | *(from file)* | API token for authentication |
 | `DAZ_CONTENT_BROWSER_URL` | `http://localhost:8080` | Content browser API URL (if using a separate content service) |
-| `DAZ_MCP_PROFILE` | `compact` | Model-facing surface: `compact` (5 workflow tools) or `expert` (all 143 registered tools) |
+| `DAZ_MCP_PROFILE` | `compact` | Model-facing surface: `compact` (5 workflow tools) or `expert` (all 144 registered tools) |
 
 ### Tool profiles
 
@@ -2919,6 +2919,23 @@ Copy a material from one node to another.
 
 ---
 
+#### `daz_convert_to_iray_uber`
+Upgrade every material zone on a node from the legacy `DzDefaultMaterial` shader to genuine
+`DzUberIrayMaterial`. Content merged into a scene as raw DSON (a hand-authored `.duf`, or output
+from a from-scratch scene-merge exporter) reliably lands as `DzDefaultMaterial` — which doesn't
+even read modern channel fields like `image_file` — no matter how complete its channel data is.
+This goes through Daz's own shader-preset **application** codepath instead (the same thing that
+runs when a user drags a Shader Preset from Smart Content onto a figure), which reliably promotes
+every zone. **Resets every channel to shader defaults** — follow with `daz_set_material_property`
+per zone to restore actual values/maps.
+
+**Arguments:**
+- `node_label` (string): Node whose materials should be upgraded
+- `preset_path` (string, optional): Absolute path to a `preset_shader`-type `.duf`. Defaults to
+  Daz Studio's own stock "!Iray Uber Base" preset, resolved automatically via the content manager.
+
+---
+
 ### 👗 Wardrobe & dForce Tools
 
 #### `daz_list_fitted_items`
@@ -3699,7 +3716,7 @@ vangard-daz-mcp/
 
 ### Architecture
 
-- **FastMCP 3.x server** with stdio transport (143 tools registered; 5 visible by default)
+- **FastMCP 3.x server** with stdio transport (144 tools registered; 5 visible by default)
 - **Profiled model boundary**: the compact facade is selected by default; `DAZ_MCP_PROFILE=expert` reveals every detailed tool without changing their implementation
 - **Modular tool package**: focused modules under `tools/`; decorators fire at import time via the shared `mcp` instance from `_mcp.py`, avoiding circular imports with `server.py`
 - **One DazScriptServer protocol client**: `dazpy.aio.AsyncDazClient` owns endpoint URLs, wire payloads, timeout policy, request lifecycle, SSE streams, and typed errors

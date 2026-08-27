@@ -6866,16 +6866,34 @@ _APPLY_MATERIAL_PRESET_SCRIPT = """\
     if (!node) node = Scene.findNode(nodeLabel);
     if (!node) throw new Error("Node not found: " + nodeLabel);
 
-    // Select only the target node so the preset applies to it
+    // Select only the target node so the preset applies to it. Node
+    // selection alone is NOT sufficient - Material/Shader Preset application
+    // acts on the currently-selected SURFACE(S), not just the selected node;
+    // without also selecting every material zone, openFile() below returns
+    // true (no error) but silently applies nothing (confirmed live while
+    // fixing the identical bug in _CONVERT_TO_IRAY_UBER_SCRIPT).
     Scene.selectAllNodes(false);
     node.select(true);
+    var objForSelect = typeof node.getObject === 'function' ? node.getObject() : null;
+    var shapeForSelect = objForSelect && typeof objForSelect.getCurrentShape === 'function' ? objForSelect.getCurrentShape() : null;
+    if (shapeForSelect) {
+        for (var s = 0; s < shapeForSelect.getNumMaterials(); s++) {
+            shapeForSelect.getMaterial(s).select(true);
+        }
+    }
 
     var ioSettings = new DzFileIOSettings();
     var ok = App.getContentMgr().openFile(presetPath, ioSettings, false);
     if (!ok) throw new Error("Failed to apply material preset. Check that the path exists and is a valid .duf material file: " + presetPath);
 
-    // Collect resulting material names for confirmation
-    var shape = typeof node.getObject === 'function' ? node.getObject() : null;
+    // Collect resulting material names for confirmation. Materials live on
+    // the shape, not the object directly - DzObject has no getNumMaterials()
+    // of its own (see SKILL_DAZSCRIPT.md "Materials - always go through
+    // getCurrentShape()"). Calling it on the bare object throws and was
+    // silently discarding a *successful* preset application, since the
+    // openFile() call above had already completed by this point.
+    var obj = typeof node.getObject === 'function' ? node.getObject() : null;
+    var shape = obj && typeof obj.getCurrentShape === 'function' ? obj.getCurrentShape() : null;
     var matNames = [];
     if (shape) {
         for (var i = 0; i < shape.getNumMaterials(); i++) {
@@ -6890,6 +6908,100 @@ _APPLY_MATERIAL_PRESET_SCRIPT = """\
         preset: presetPath,
         materials: matNames,
         material_count: matNames.length
+    };
+})()
+"""
+
+# WHY THIS EXISTS: content merged/imported into a scene as raw DSON (a
+# hand-authored .duf, or content run through a from-scratch scene-merge
+# pipeline) reliably instantiates as the legacy DzDefaultMaterial ("DAZ
+# Studio Default (RSL)" in the UI) instead of DzUberIrayMaterial, no matter
+# how complete its "studio_material_channels" data is - confirmed by direct
+# isolation testing (byte-for-byte real-asset channel data still comes back
+# as DzDefaultMaterial). Daz's scene-graph *parser* apparently never
+# promotes a material past DzDefaultMaterial from raw JSON alone.
+#
+# What does work: going through Daz's own preset-*application* codepath
+# instead of describing a shader in JSON - the same thing that runs when a
+# user drags a Shader Preset from Smart Content onto a figure
+# (App.getContentMgr().openFile() on a selected node). That path builds a
+# real native shader object rather than parsing one, and reliably flips
+# every material zone on the node from DzDefaultMaterial to genuine
+# DzUberIrayMaterial - confirmed live. It also resets every channel to
+# shader defaults, so callers should follow this with daz_get_material /
+# daz_set_material_property per zone to restore actual diffuse/PBR values
+# and texture maps.
+#
+# If presetPath is omitted, this resolves Daz Studio's own stock "!Iray
+# Uber Base" shader preset (ships with every installation, author "DAZ 3D",
+# ~650 bytes, just the "studio/material/uber_iray" marker with no channel
+# data - its only job is to flip the shader class) via
+# DzContentMgr.getAbsolutePath(), so callers don't need to know where the
+# user's content library lives.
+_CONVERT_TO_IRAY_UBER_SCRIPT = """\
+(function(){
+    var args = getArguments()[0] || {};
+    var nodeLabel = args.nodeLabel;
+    var presetPath = args.presetPath;
+
+    var node = Scene.findNodeByLabel(nodeLabel);
+    if (!node) node = Scene.findNode(nodeLabel);
+    if (!node) throw new Error("Node not found: " + nodeLabel);
+
+    if (!presetPath) {
+        presetPath = App.getContentMgr().getAbsolutePath(
+            "Shader Presets/Iray/DAZ Uber/!Iray Uber Base.duf", false, "");
+        if (!presetPath) {
+            throw new Error(
+                "No presetPath given and the stock 'Iray Uber Base' preset could not be " +
+                "located in any configured content directory. Pass an explicit presetPath."
+            );
+        }
+    }
+
+    function zoneList() {
+        var obj = node.getObject();
+        if (!obj) throw new Error("Node has no geometry: " + nodeLabel);
+        var shape = obj.getCurrentShape();
+        if (!shape) throw new Error("Node has no material shape: " + nodeLabel);
+        var zones = [];
+        for (var i = 0; i < shape.getNumMaterials(); i++) {
+            var m = shape.getMaterial(i);
+            zones.push({ label: m.getLabel(), shader: m.className() });
+        }
+        return zones;
+    }
+
+    var before = zoneList();
+
+    // Select only the target node so the preset applies to it alone. Node
+    // selection alone is NOT sufficient - Shader Preset application acts on
+    // the currently-selected SURFACE(S) (Surfaces-pane-level selection), not
+    // just the selected node. Without explicitly selecting each material
+    // zone too, openFile() below returns true (no error) but silently
+    // converts nothing - confirmed live: a node selected via node.select(true)
+    // alone stayed DzDefaultMaterial after a successful-looking openFile()
+    // call, and only started converting once every DzMaterial on the shape
+    // was also explicitly .select(true)'d.
+    Scene.selectAllNodes(false);
+    node.select(true);
+    var shapeForSelect = node.getObject().getCurrentShape();
+    for (var s = 0; s < shapeForSelect.getNumMaterials(); s++) {
+        shapeForSelect.getMaterial(s).select(true);
+    }
+
+    var ioSettings = new DzFileIOSettings();
+    var ok = App.getContentMgr().openFile(presetPath, ioSettings, false);
+    if (!ok) throw new Error("Failed to apply shader preset: " + presetPath);
+
+    var after = zoneList();
+
+    return {
+        success: true,
+        node: node.getLabel(),
+        preset: presetPath,
+        before: before,
+        after: after
     };
 })()
 """
@@ -7635,6 +7747,11 @@ _REGISTRY: dict[str, tuple[str, str]] = {
     "vangard-apply-material-preset": (
         "Apply a .duf material preset file to a named scene node",
         _APPLY_MATERIAL_PRESET_SCRIPT,
+    ),
+    "vangard-convert-to-iray-uber": (
+        "Upgrade every material zone on a node from DzDefaultMaterial to DzUberIrayMaterial "
+        "via Daz's own shader-preset-application codepath",
+        _CONVERT_TO_IRAY_UBER_SCRIPT,
     ),
     "vangard-copy-material": (
         "Copy all property values from one material slot to another within the scene",

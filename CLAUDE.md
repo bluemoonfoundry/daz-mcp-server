@@ -15,7 +15,7 @@
 ## Architecture Summary
 - **Version:** 0.4.0
 - **Bridge:** Connects to DazScriptServer (port 18811)
-- **Registry:** 137 tools registered across 13 tool modules.
+- **Registry:** 138 tools registered across 13 tool modules.
 - **Structure:** Modular — `_mcp.py` holds shared FastMCP instance; `tools/__init__.py` imports all 13 modules so `@mcp.tool()` decorators fire at import time.
 - **Phase 4.8:** Lighting Animation — `daz_animate_light`, `daz_create_light_sequence`
 - **Phase 4.9:** Shot Planning — `daz_plan_shot`, `daz_create_storyboard`
@@ -30,6 +30,8 @@
 - **Phase 6.4:** Material Preset — `daz_apply_material_preset`, `daz_copy_material`
 - **Phase 6.5:** Figure Diagnostics — `daz_get_figure_info`, `daz_set_subdivision`
 - **Phase 6.6:** Scene Export — `daz_export_fbx`, `daz_export_obj`
+- **Phase 6.7:** Shader-class fixup — `daz_convert_to_iray_uber` (fixes content that lands as
+  legacy `DzDefaultMaterial` instead of `DzUberIrayMaterial` after a raw/merged `.duf` import)
 
 ## Render API (DazScriptServer native endpoints)
 `daz_render_async`, `daz_render_with_camera_async`, `daz_batch_render_cameras_async` use
