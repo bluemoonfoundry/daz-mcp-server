@@ -20,12 +20,12 @@ import gzip
 import json
 import re
 
-import httpx
 import pytest
 import pytest_asyncio
+from dazpy.aio import AsyncDazClient
 from fastmcp.exceptions import ToolError
 
-from vangard_daz_mcp._client import DAZ_API_TOKEN, set_http_client
+from vangard_daz_mcp._client import DAZ_API_TOKEN, set_async_daz_client
 from vangard_daz_mcp._registry import _register_scripts
 from vangard_daz_mcp.tools.camera_light import (
     daz_list_lights,
@@ -81,7 +81,7 @@ def _daz_available() -> bool:
 
 @pytest_asyncio.fixture()
 async def live_client():
-    """Real AsyncClient wired into the server module.
+    """Real AsyncDazClient wired into the server module.
 
     Skips the test automatically if DAZ Studio is not reachable.
     Also registers all scripts on first use so new Phase-5 IDs are available.
@@ -89,12 +89,12 @@ async def live_client():
     if not _daz_available():
         pytest.skip(f"DAZ Studio not reachable at {BASE_URL}")
 
-    # Mirrors _mcp.py's _lifespan(): DazScriptServer 401s every request once a
-    # token file/env var is configured, and this fixture used to connect with
-    # no auth header at all.
-    headers = {"X-API-Token": DAZ_API_TOKEN} if DAZ_API_TOKEN else {}
-    async with httpx.AsyncClient(base_url=BASE_URL, timeout=30.0, headers=headers) as client:
-        set_http_client(client)
+    # Mirrors _mcp.py's lifespan: pass the configured token so live tests do
+    # not receive 401 responses from an authenticated DazScriptServer.
+    async with AsyncDazClient(
+        host="localhost", port=18811, token=DAZ_API_TOKEN or None, timeout=30.0
+    ) as client:
+        set_async_daz_client(client)
 
         # Register scripts once per process (cached flag).
         if not _cache.get("scripts_registered"):
@@ -103,7 +103,7 @@ async def live_client():
 
         yield client
 
-    set_http_client(None)
+    set_async_daz_client(None)
 
 
 # ---------------------------------------------------------------------------

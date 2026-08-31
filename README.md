@@ -107,6 +107,24 @@ Configure the server via environment variables:
 | `DAZ_TIMEOUT` | `30.0` | Request timeout in seconds (increase for long renders) |
 | `DAZ_API_TOKEN` | *(from file)* | API token for authentication |
 | `DAZ_CONTENT_BROWSER_URL` | `http://localhost:8080` | Content browser API URL (if using a separate content service) |
+| `DAZ_MCP_PROFILE` | `compact` | Model-facing surface: `compact` (5 workflow tools) or `expert` (all 144 registered tools) |
+
+### Tool profiles
+
+The default `compact` profile is the normal model-facing API. It keeps tool
+selection predictable by exposing five task tools:
+
+- `daz_inspect_scene` — inspect the scene before acting
+- `daz_submit_job` — queue general file-backed DazScript work
+- `daz_observe_job` — poll, collect, or cancel a queued job
+- `daz_materialize_recipe` — queue a scene recipe through the same job boundary
+- `daz_fetch_artifact` — fetch an output declared by that job's manifest
+
+Static DazScript guidance is available as the `daz://help/{topic}` resource,
+so its large catalogue and examples do not consume the always-visible tool
+surface. Low-level primitives remain available for development and unusual
+scene surgery by setting `DAZ_MCP_PROFILE=expert` in the MCP server's `env`
+configuration and restarting the MCP client.
 
 ### Authentication
 
@@ -174,7 +192,10 @@ Config file location:
 
 Replace the path with the actual location where you cloned the repo. Use `--project` (not `--directory`) so `uv run` picks up the project's `.venv`.
 
-After saving the config, **restart Claude Desktop**. The DAZ Studio tools will appear in Claude's tool palette.
+After saving the config, **restart Claude Desktop**. The five compact DAZ
+workflow tools will appear in Claude's tool palette. Add
+`"DAZ_MCP_PROFILE": "expert"` to `env` only when the full low-level catalogue
+is needed.
 
 ---
 
@@ -2394,7 +2415,14 @@ Poll the status of an async request (non-blocking, lightweight).
 {
   "request_id": "render-a3f2b891",
   "status": "running",
-  "progress": 0.0,
+  "progress": 0.25,
+  "observation": {
+    "progress": {"value": 0.25, "phase": "render", "message": "Plate 1"},
+    "log_tail": [{"level": "info", "source": "script", "message": "Loaded scene"}],
+    "log_total": 1,
+    "log_truncated": false,
+    "output_manifest": {"count": 0, "outputs": []}
+  },
   "elapsed_ms": 3200,
   "queue_position": 0
 }
@@ -2420,7 +2448,14 @@ Fetch the final result of an async request.
   "request_id": "render-a3f2b891",
   "duration_ms": 45230,
   "completed_at": "2026-04-09T10:15:47",
-  "status": "completed"
+  "status": "completed",
+  "observation": {
+    "progress": {"value": 1, "phase": "done"},
+    "log_tail": [],
+    "log_total": 0,
+    "log_truncated": false,
+    "output_manifest": {"count": 1, "outputs": [{"path": "C:/renders/plate.png", "kind": "image"}]}
+  }
 }
 ```
 
@@ -3454,6 +3489,18 @@ Execute a DazScript file from disk.
 
 **Use when:** Running complex scripts stored in files, especially scripts that use `include()` or `getScriptFileName()`.
 
+#### `daz_execute_file_async`
+Submit a DazScript file as a background job and return its `request_id`
+immediately. The file is loaded by DAZ Studio when the job starts, preserving
+`getScriptFileName()` and relative `include()` behavior.
+
+Use `daz_get_request_status`, `daz_get_request_result`, and
+`daz_cancel_request` to manage the job. Prefer this over `daz_execute_file` for
+pose sweeps, simulations, exports, and other work that can exceed the MCP HTTP
+timeout. Pass `report_file` to opt into structured live observation; the script
+writes JSONL progress/log/output events there, and status/result responses carry
+the resulting progress detail, newest 100 log entries, and output manifest.
+
 ---
 
 ## Features
@@ -3474,7 +3521,12 @@ If DAZ Studio restarts and clears the session registry, the server automatically
 - Script errors → Full error details with line numbers and captured output
 
 ### 🏗️ Modular Architecture (v0.4.0)
-The server was refactored from a single 15,000-line `server.py` into 13 focused tool modules under `tools/`. A shared `_mcp.py` holds the `FastMCP` instance and all execute helpers, avoiding circular imports. Import-time side effects register all `@mcp.tool()` decorators when `tools/__init__.py` is imported.
+The server was refactored from a single 15,000-line `server.py` into focused
+tool modules under `tools/`. A shared `_mcp.py` holds the `FastMCP` instance
+and all execute helpers, avoiding circular imports. Import-time side effects
+register the complete expert API; `_profile.py` then applies visibility at the
+MCP boundary. `tools/workflow.py` is the five-tool default facade and delegates
+to the same implementations as the detailed tools.
 
 ### 🎬 Cinematic Director Workflow
 22 high-level cinematic tools for professional scene creation:
@@ -3495,7 +3547,7 @@ The server was refactored from a single 15,000-line `server.py` into 13 focused 
 # In Claude Desktop, just ask:
 "Check if DAZ Studio is running"
 
-# Claude will use daz_status and report back
+# Claude will use daz_inspect_scene and report back
 ```
 
 ### Example 2: Load and Position Character
@@ -3631,14 +3683,16 @@ uv run pytest tests/test_server.py::test_daz_status_ok -v
 ```
 vangard-daz-mcp/
 ├── src/vangard_daz_mcp/
-│   ├── server.py              # Entry point: imports _mcp and tools package
+│   ├── server.py              # Entry point: registers tools, applies profile
 │   ├── _mcp.py                # Shared FastMCP instance, lifespan, execute helpers
-│   ├── _client.py             # httpx client singleton + env config
+│   ├── _profile.py            # Compact-default / expert visibility boundary
+│   ├── _client.py             # dazpy protocol + content-browser clients
 │   ├── _errors.py             # Error handling helpers
 │   ├── _registry.py           # Script pre-registration at startup
 │   ├── dazscript_docs.json    # DazScript documentation (daz_script_help)
 │   └── tools/
-│       ├── __init__.py        # Imports all 13 modules (registers @mcp.tool decorators)
+│       ├── __init__.py        # Imports all modules (registers decorators)
+│       ├── workflow.py        # Five task tools in the compact default profile
 │       ├── spatial.py         # World position, bounding box, distance, layout (7 tools)
 │       ├── transform.py       # Node properties, batch ops, visibility, selection (7 tools)
 │       ├── scene.py           # Load/save, hierarchy, checkpoints (11 tools)
@@ -3648,7 +3702,7 @@ vangard-daz-mcp/
 │       ├── render.py          # Sync/async render, batch, animation export (16 tools)
 │       ├── animation.py       # Keyframes, timeline, frame range (7 tools)
 │       ├── material.py        # Materials: list, get, set, presets, copy (5 tools)
-│       ├── utility.py         # Status, execute, docs, validate, macros (18 tools)
+│       ├── utility.py         # Status, execute, docs, validate, macros (19 tools)
 │       ├── content.py         # Content browser, search, compatibility (6 tools)
 │       ├── cinematic.py       # Shot sequences, camera paths, storyboard (22 tools)
 │       └── wardrobe.py        # Clothing, dForce, subdivision, export (10 tools)
@@ -3662,12 +3716,14 @@ vangard-daz-mcp/
 
 ### Architecture
 
-- **FastMCP 3.x server** with stdio transport (138 tools registered)
-- **Modular tool package**: 13 focused modules under `tools/`; `@mcp.tool()` decorators fire at import time via the shared `mcp` instance from `_mcp.py`, avoiding circular imports with `server.py`
-- **httpx.AsyncClient** for HTTP requests to DazScriptServer; managed in `_client.py` singleton
-- **dazpy SDK** (installed from PyPI as `dazpy>=2.6.0`): synchronous Python SDK; all dazpy calls wrapped in `asyncio.to_thread` via `run_dazpy()`
+- **FastMCP 3.x server** with stdio transport (144 tools registered; 5 visible by default)
+- **Profiled model boundary**: the compact facade is selected by default; `DAZ_MCP_PROFILE=expert` reveals every detailed tool without changing their implementation
+- **Modular tool package**: focused modules under `tools/`; decorators fire at import time via the shared `mcp` instance from `_mcp.py`, avoiding circular imports with `server.py`
+- **One DazScriptServer protocol client**: `dazpy.aio.AsyncDazClient` owns endpoint URLs, wire payloads, timeout policy, request lifecycle, SSE streams, and typed errors
+- **dazpy domain SDK**: scene/object helpers that are currently synchronous remain wrapped in `asyncio.to_thread` via `run_dazpy()`; tools never construct DazScriptServer HTTP requests
+- **Separate content-browser client**: `httpx.AsyncClient` is retained only for the independent content-browser service
 - **Script registry** (`_registry.py`): high-level tool scripts pre-registered at startup, executed by ID; auto-re-registered on 404 when DAZ Studio restarts
-- **lifespan context** manages httpx client initialization and cleanup
+- **lifespan context** manages the dazpy protocol client and content-browser client
 
 ---
 
@@ -3675,9 +3731,9 @@ vangard-daz-mcp/
 
 - **Python:** 3.11+
 - **Dependencies:**
-  - `fastmcp>=2.0` - MCP server framework
-  - `httpx>=0.27` - Async HTTP client
-  - `dazpy>=2.6.0` - Synchronous Python SDK for DazScriptServer (installed from PyPI)
+  - `fastmcp>=3.0` - MCP server framework and component visibility profiles
+  - `httpx>=0.27` - Async client for the separate content-browser service
+  - `dazpy>=2.8.0` - Sync domain SDK and async DazScriptServer protocol client
 - **Dev Dependencies:**
   - `pytest>=8.0`
   - `pytest-asyncio>=0.24`

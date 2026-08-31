@@ -10,12 +10,17 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any
 
-import httpx
+import dazpy.exceptions as daz_exc
 from fastmcp.exceptions import ToolError
 
-from .._mcp import mcp, _execute_by_id, _execute_payload, _execute_raw
-from .._client import get_http_client
-from .._errors import handle_network_error, check_response
+from .._mcp import (
+    mcp,
+    _execution_payload,
+    _execute_by_id,
+    _execute_raw,
+)
+from .._client import get_async_daz_client
+from .._errors import handle_dazpy_error
 
 # ---------------------------------------------------------------------------
 # Module-level state
@@ -43,13 +48,10 @@ _call_stats: dict[str, int] = {}
 @mcp.tool()
 async def daz_status() -> dict[str, Any]:
     """Check DAZ Studio connectivity. Returns server status and version."""
-    client = get_http_client()
     try:
-        response = await client.get("/status")
-        check_response(response)
-        return response.json()
-    except (httpx.ConnectError, httpx.ConnectTimeout, httpx.TimeoutException) as exc:
-        handle_network_error(exc)
+        return await get_async_daz_client().status()
+    except daz_exc.DazError as exc:
+        handle_dazpy_error(exc)
 
 
 @mcp.tool()
@@ -102,10 +104,46 @@ async def daz_execute_file(
     Returns:
         Object with keys: success, result, output (list of print() lines), error.
     """
-    payload: dict[str, Any] = {"scriptFile": script_file}
-    if args is not None:
-        payload["args"] = args
-    return await _execute_payload(payload)
+    try:
+        result = await get_async_daz_client().execute_file(script_file, args)
+    except daz_exc.DazError as exc:
+        handle_dazpy_error(exc)
+    return _execution_payload(result)
+
+
+@mcp.tool()
+async def daz_execute_file_async(
+    script_file: str,
+    args: dict[str, Any] | None = None,
+    report_file: str | None = None,
+) -> dict[str, Any]:
+    """Submit a DazScript file as a background job and return immediately.
+
+    Use this for long-running file-backed work such as pose sweeps, simulations,
+    exports, and batch renders. DAZ Studio loads the file when the queued job
+    starts, so ``getScriptFileName()`` and relative ``include()`` calls keep
+    working. Poll with ``daz_get_request_status``, fetch the final response with
+    ``daz_get_request_result``, or stop queued work with ``daz_cancel_request``.
+
+    Args:
+        script_file: Absolute path to the .dsa/.ds file on the DAZ Studio machine.
+        args: Optional JSON-serialisable object available through
+            ``getArguments()[0]`` in the script.
+        report_file: Optional absolute path to a per-job JSONL event file. The
+            server truncates it on submission and exposes its structured
+            progress, bounded log tail, and output manifest through the normal
+            request status/result tools.
+
+    Returns:
+        The queued job record: request_id, status, and submitted_at.
+    """
+    try:
+        request_id = await get_async_daz_client().execute_file_async_submit(
+            script_file, args, report_file=report_file
+        )
+    except daz_exc.DazError as exc:
+        handle_dazpy_error(exc)
+    return {"request_id": request_id, "status": "queued"}
 
 
 @mcp.tool()
@@ -460,7 +498,7 @@ async def daz_wait_for_scene_event(
     event_types: list[str],
     timeout_seconds: int = 30,
 ) -> dict[str, Any]:
-    """Wait for one of the specified scene events via the SSE stream at GET /scene/events.
+    """Wait for one of the specified scene events via the server's SSE stream.
 
     Opens a Server-Sent Events connection and returns as soon as any of the
     requested event types fires, or raises ToolError if the timeout is reached.
@@ -497,38 +535,24 @@ async def daz_wait_for_scene_event(
 
     event_types_set = set(event_types)
     categories = list({t.split(".")[0] for t in event_types})
-    params = {"filter": ",".join(sorted(categories))}
-
-    client = get_http_client()
+    client = get_async_daz_client()
 
     async def _listen() -> dict[str, Any] | None:
-        try:
-            async with client.stream(
-                "GET",
-                "/scene/events",
-                params=params,
-                timeout=float(timeout_seconds + 5),
-            ) as response:
-                check_response(response)
-                async for line in response.aiter_lines():
-                    if not line.startswith("data: "):
-                        continue
-                    try:
-                        event = json.loads(line[6:])
-                    except json.JSONDecodeError:
-                        continue
-                    if event.get("type") in event_types_set:
-                        return event
-        except (httpx.ConnectError, httpx.ConnectTimeout, httpx.TimeoutException) as exc:
-            handle_network_error(exc)
+        async for _, event in client.stream_scene_events(
+            sorted(categories), stream_timeout=float(timeout_seconds + 5)
+        ):
+            if event.get("type") in event_types_set:
+                return event
         return None
 
     try:
         result = await asyncio.wait_for(_listen(), timeout=float(timeout_seconds))
-    except asyncio.TimeoutError:
+    except asyncio.TimeoutError as exc:
         raise ToolError(
             f"Timeout: none of {event_types} fired within {timeout_seconds}s"
-        )
+        ) from exc
+    except daz_exc.DazError as exc:
+        handle_dazpy_error(exc)
 
     if result is None:
         raise ToolError(

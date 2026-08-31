@@ -18,8 +18,15 @@ on the live ``mcp`` instance.
 
 from ._mcp import mcp  # noqa: F401 — creates the FastMCP instance + lifespan
 from ._registry import _register_scripts  # noqa: F401 — used directly by tests
-from ._client import set_http_client, set_content_browser_client  # noqa: F401 — used directly by tests
+from ._client import (  # noqa: F401 — compatibility exports
+    set_async_daz_client,
+    set_content_browser_client,
+)
 from . import tools  # noqa: F401 — registers all @mcp.tool() functions  # pylint: disable=unused-import
+from ._profile import configure_profile
+
+
+ACTIVE_PROFILE = configure_profile(mcp)
 
 # Re-export every tool function so `from vangard_daz_mcp.server import daz_x`
 # keeps working regardless of which tools/<module>.py it actually lives in.

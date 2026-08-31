@@ -9,7 +9,7 @@ authors = [
     {name = "Blue Moon Foundry", email = "gshirpara@gmail.com"},
 ]
 dependencies = [
-    "fastmcp>=2.0",
+    "fastmcp>=3.0",
     "httpx>=0.27",
     "dazpy>=2.8.0",
 ]
@@ -51,7 +51,7 @@ dev = [
 # Rationale (daz-mcp-server-0t0): every tool function in tools/*.py that talks to
 # DAZ Studio catches `Exception` broadly on purpose and routes it into
 # handle_dazpy_error()'s typed-exception dispatch (see _errors.py) so callers get a
-# single well-formed ToolError regardless of which dazpy/httpx exception fired.
+# single well-formed ToolError regardless of which dazpy exception fired.
 # integration_test.py's runner does the same for its own reason: it must keep
 # testing the remaining tools after one throws, so it can report a full pass/fail
 # summary. Confirmed by sampling; not a defect in either case.

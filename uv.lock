@@ -374,14 +374,14 @@ wheels = [
 
 [[package]]
 name = "dazpy"
-version = "2.6.0"
+version = "2.9.0"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "requests" },
 ]
-sdist = { url = "https://files.pythonhosted.org/packages/d4/dd/b5038b76b6259036ebc08cd904af03fcb35a1239ac012c812ea87fdb935b/dazpy-2.6.0.tar.gz", hash = "sha256:ac66ad200d1d976b1e4028cb1eef154b5364487824cc69830c632277c72d7a24", size = 193554, upload-time = "2026-06-27T16:32:47.447Z" }
+sdist = { url = "https://files.pythonhosted.org/packages/5d/76/3c71612e4809bcf07c1eb1af22a8a0d408bdd7433b305dbba98b6c29e28c/dazpy-2.9.0.tar.gz", hash = "sha256:39e8c9d8482e8f1ba8051422a09abfaeb5535991ea9e584ec207a25610d0b266", size = 291055, upload-time = "2026-08-17T03:02:39.594Z" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/cd/f3/050a17ffedd9a6fec7378a16705eebc724bdbe4a27e0c8be77a816db4bd6/dazpy-2.6.0-py3-none-any.whl", hash = "sha256:5b7f0d18bd5c84f25c39201acf7e09b0d508cef178de78d6159b7d19cdd2bffe", size = 106373, upload-time = "2026-06-26T18:32:24.363Z" },
+    { url = "https://files.pythonhosted.org/packages/79/52/ff5161c0aaf5271cc132ef9c70692091831ce04925275dba71596f5cee45/dazpy-2.9.0-py3-none-any.whl", hash = "sha256:a0ce0a0d127ee5451fc96a0822345b841e635782b969ecde2ae4c83f294a1aa8", size = 160836, upload-time = "2026-08-17T03:02:37.821Z" },
 ]
 
 [[package]]
@@ -1375,8 +1375,8 @@ dev = [
 
 [package.metadata]
 requires-dist = [
-    { name = "dazpy", specifier = ">=2.6.0" },
-    { name = "fastmcp", specifier = ">=2.0" },
+    { name = "dazpy", specifier = ">=2.8.0" },
+    { name = "fastmcp", specifier = ">=3.0" },
     { name = "httpx", specifier = ">=0.27" },
 ]
 

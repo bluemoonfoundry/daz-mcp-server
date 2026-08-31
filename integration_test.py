@@ -20,7 +20,8 @@ import traceback
 from dataclasses import dataclass
 from typing import Any
 
-import httpx
+import dazpy.exceptions as daz_exc
+from dazpy.aio import AsyncDazClient
 
 from vangard_daz_mcp.tools.animation import (
     daz_get_animation_info,
@@ -73,7 +74,7 @@ from vangard_daz_mcp.tools.utility import (
     daz_validate_scene,
     daz_validate_script,
 )
-from vangard_daz_mcp._client import DAZ_API_TOKEN, DAZ_TIMEOUT, set_http_client
+from vangard_daz_mcp._client import DAZ_API_TOKEN, DAZ_TIMEOUT, set_async_daz_client
 from vangard_daz_mcp._registry import _REGISTRY, _register_scripts
 
 
@@ -153,20 +154,18 @@ async def _run(name: str, category: str, coro, *, skip_if: str = "") -> Any:
 # Pre-flight: verify DazScriptServer is reachable
 # ---------------------------------------------------------------------------
 
-async def preflight_check(base_url: str, token: str) -> dict | None:
-    """GET /status — must succeed before any tool tests run."""
+async def preflight_check(host: str, port: int, token: str) -> dict | None:
+    """Check server status through dazpy before any tool tests run."""
+    base_url = f"http://{host}:{port}"
     print("\n\033[1mPre-flight: DazScriptServer connectivity\033[0m")
-    headers = {"X-API-Token": token} if token else {}
     try:
-        async with httpx.AsyncClient(base_url=base_url, timeout=5.0, headers=headers) as c:
-            resp = await c.get("/status")
-            resp.raise_for_status()
-            data = resp.json()
+        async with AsyncDazClient(host=host, port=port, token=token, timeout=5.0) as client:
+            data = await client.status()
             print(f"  \033[32m✓\033[0m  DazScriptServer reachable at {base_url}")
             print(f"       version={data.get('version', '?')}  "
                   f"running={data.get('running', '?')}")
             return data
-    except httpx.ConnectError:
+    except daz_exc.ConnectionError:
         print(f"  \033[31m✗\033[0m  Cannot reach DazScriptServer at {base_url}")
         print("       Is DAZ Studio running with the DazScriptServer plugin active?")
         return None
@@ -179,12 +178,11 @@ async def preflight_check(base_url: str, token: str) -> dict | None:
 # Server initialisation (equivalent to lifespan startup)
 # ---------------------------------------------------------------------------
 
-async def init_server(base_url: str, token: str) -> httpx.AsyncClient:
-    """Create shared HTTP client and register all scripts."""
+async def init_server(host: str, port: int, token: str) -> AsyncDazClient:
+    """Create the shared protocol client and register all scripts."""
     print("\n\033[1mServer initialisation\033[0m")
-    headers = {"X-API-Token": token} if token else {}
-    client = httpx.AsyncClient(base_url=base_url, timeout=DAZ_TIMEOUT, headers=headers)
-    set_http_client(client)
+    client = AsyncDazClient(host=host, port=port, token=token, timeout=DAZ_TIMEOUT)
+    set_async_daz_client(client)
 
     t0 = time.perf_counter()
     try:
@@ -601,13 +599,13 @@ async def main(host: str, port: int, verbose: bool) -> int:
     print(f"Target: {base_url}")
 
     # 1. Pre-flight check
-    status = await preflight_check(base_url, token)
+    status = await preflight_check(host, port, token)
     if status is None:
         print("\n\033[31mAborting: DazScriptServer not reachable.\033[0m\n")
         return 2
 
     # 2. Initialise server module
-    client = await init_server(base_url, token)
+    client = await init_server(host, port, token)
 
     try:
         # 3. Get scene state once — used to drive conditional tests
@@ -637,7 +635,7 @@ async def main(host: str, port: int, verbose: bool) -> int:
         await test_async_render_tools()
 
     finally:
-        set_http_client(None)
+        set_async_daz_client(None)
         await client.aclose()
 
     return print_summary()
