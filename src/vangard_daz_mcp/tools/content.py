@@ -1,6 +1,7 @@
 """Content browser tools: category listing, browsing, metadata, search, and product loading."""
 from __future__ import annotations
 
+import asyncio
 import json as _json
 import os
 from pathlib import Path
@@ -9,8 +10,9 @@ from typing import Any
 import httpx
 from fastmcp.exceptions import ToolError
 
-from .._mcp import mcp, _execute_by_id
+from .._mcp import mcp, _execute_by_id, _execute_by_id_async
 from .._client import get_content_browser_client, CONTENT_BROWSER_URL
+from .. import _ui_automation
 
 
 # ---------------------------------------------------------------------------
@@ -372,3 +374,70 @@ async def daz_save_prop_asset(
         payload["compressOutput"] = compress_output
 
     return await _execute_by_id("vangard-save-prop-asset", payload)
+
+
+@mcp.tool()
+async def daz_save_wearable_preset(
+    figure_label: str,
+    output_path: str,
+    dialog_timeout: float = 30.0,
+) -> dict[str, Any]:
+    """Save a figure (with everything currently fitted to it) as a reusable
+    Wearable(s) Preset — the fit-to-figure asset type, as opposed to
+    ``daz_save_prop_asset``'s plain geometry-only Support Asset.
+
+    Headless-*ish* equivalent of **File > Save As > Wearable(s) Preset**.
+    "Headless-ish" because the underlying ``DzWearablesAssetFilter`` script
+    API (``doSave()``) was found to reproducibly fail with an unexplained
+    generic error code under every configuration tried (see
+    ``docs/daz-mcp-bridge-bugs.md`` Bug 22 Teil 2 for the full investigation)
+    — but the real GUI action works, so this tool drives *that* action's two
+    native dialogs directly via Windows UI Automation (``pywinauto``)
+    instead. No DAZ Studio window needs to be focused or in the foreground
+    for this — everything is done via the accessibility tree and posted
+    window messages.
+
+    **Windows-only, and only works when this MCP server process runs on the
+    same machine as DAZ Studio** — there is no remote-UI-automation path.
+
+    Args:
+        figure_label: Display label of the figure to save (e.g.
+            ``"Genesis 8 Female"``). Must already have at least one item
+            fit or parented to it — DAZ Studio itself refuses to save a
+            Wearable(s) Preset otherwise ("A figure in the scene with other
+            objects fit or parented to it must be selected...").
+        output_path: Absolute path for the ``.duf`` file. Its parent
+            directory is created automatically if missing (the native save
+            dialog does **not** create missing subfolders on its own and
+            errors instead).
+        dialog_timeout: Seconds to wait for each native dialog to appear/
+            close before giving up (default 30s). Increase if DAZ Studio is
+            slow to respond (e.g. a very heavy scene).
+
+    Returns:
+        Dict with success and outputPath.
+
+    Examples:
+        daz_save_wearable_preset(
+            "Genesis 8 Female",
+            "C:/Users/me/Documents/DAZ 3D/Studio/My Library/Presets/Wearables/My Hair.duf",
+        )
+
+    Notes:
+        - Bundles **every** item currently fit/parented to the figure, not
+          just one you care about — the dialog's own node-selection
+          checklist has no confirmed programmatic toggle mechanism (its
+          items are custom-painted, not standard checkable controls; see
+          Bug 22 Teil 2). If the figure is wearing other things you don't
+          want included, unfit them first (``daz_unfit_item``), save, then
+          re-fit them.
+        - Produces a real thumbnail (``<output>.duf.png``/``.tip.png``)
+          automatically — unlike ``daz_save_prop_asset``, which does not.
+        - Live-verified end to end (2026-09-09) against a real figure with
+          a fitted test prop, then fully reverted — no lasting scene changes.
+    """
+    _ui_automation._require_pywinauto()  # pylint: disable=protected-access
+    await _execute_by_id_async("vangard-trigger-wearable-save", {"figureLabel": figure_label})
+    return await asyncio.to_thread(
+        _ui_automation.drive_wearable_preset_save, output_path, dialog_timeout
+    )

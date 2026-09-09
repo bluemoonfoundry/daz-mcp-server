@@ -8461,6 +8461,27 @@ _LIST_STRAND_HAIR_NODES_SCRIPT = """\
 })()
 """
 
+# Phase 6.12: Wearable Preset save trigger (Bug-Katalog #22 Teil 2)
+# Selects the target figure and fires DzWearablesAssetFilterAction. This
+# BLOCKS on two native dialogs (a file-save dialog, then a Qt options
+# dialog) — must be submitted via the async endpoint. The Python-side
+# tool (daz_save_wearable_preset, _ui_automation.py) drives those dialogs
+# via Windows UI Automation once this has fired; DzWearablesAssetFilter's
+# own doSave() script API reproducibly fails with an unexplained generic
+# error and is not used here (see docs/daz-mcp-bridge-bugs.md #22 Teil 2).
+_TRIGGER_WEARABLE_SAVE_SCRIPT = "(function(){\n" + _RESOLVE_NODE_JS + """
+    var args = getArguments()[0] || {};
+    var fig = resolveNode(args.figureLabel);
+    Scene.selectAllNodes(false);
+    fig.select(true);
+    var mgr = MainWindow.getActionMgr();
+    var act = mgr.findAction("DzWearablesAssetFilterAction");
+    if (!act) throw new Error("DzWearablesAssetFilterAction not found in DzActionMgr");
+    act.trigger();
+    return { success: true, figure: fig.getLabel() };
+})()
+"""
+
 # Registry entries: script_id → (description, script_text)
 # Registered with DazScriptServer on startup so high-level tools call by ID.
 _REGISTRY: dict[str, tuple[str, str]] = {
@@ -8985,6 +9006,12 @@ _REGISTRY: dict[str, tuple[str, str]] = {
         "List every DzStrandHairNode in the scene with its target figure and "
         "whether it has generated geometry yet",
         _LIST_STRAND_HAIR_NODES_SCRIPT,
+    ),
+    "vangard-trigger-wearable-save": (
+        "Select a figure and fire DzWearablesAssetFilterAction (File > Save As > "
+        "Wearable(s) Preset) — blocks on native dialogs, submit via async endpoint only; "
+        "daz_save_wearable_preset drives the resulting dialogs via UI Automation",
+        _TRIGGER_WEARABLE_SAVE_SCRIPT,
     ),
 }
 

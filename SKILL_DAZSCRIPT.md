@@ -274,10 +274,42 @@ settings.setSettingsValue("NodeNames", nodeNames);          // write back onto t
 // MaterialNames works the same way, keyed by material zone name.
 ```
 
-UNSOLVED: even with `NodeNames`/`MaterialNames` populated this way (confirmed correct via
-`.toString()` → `<Settings><Setting Key="..." Type="String">1</Setting></Settings>`),
-`doSave()` still reproducibly fails with the same generic `errCode 98`, and — unlike
-`DzNodeSupportAssetFilter` — the log does not record a specific reason for this filter.
-Ruled out live: ad-hoc vs. content-asset-backed node, node with vs. without a parent,
-`NodeNames` keyed by name/label/elementID. Root cause not yet found — see Bug-Katalog #22
-Teil 2 before attempting this again (avoid repeating already-disproven hypotheses).
+STILL BROKEN, WORKED AROUND: even with `NodeNames`/`MaterialNames` populated this way
+(confirmed correct via `.toString()` → `<Settings><Setting Key="..." Type="String">1</Setting></Settings>`),
+`doSave()` reproducibly fails with the same generic `errCode 98` under every configuration
+tried (asset-backed vs. ad-hoc node, with/without a parent, keyed by name/label/elementID,
+even a real figure with a real fitted item) — and unlike `DzNodeSupportAssetFilter`, the log
+never records a specific reason. Do not spend more time on this script API; it is not a
+`NodeNames`/settings problem. See Bug-Katalog #22 Teil 2 for the full list of disproven
+hypotheses.
+
+**What actually works instead: drive the real GUI action's native dialogs via Windows UI
+Automation** (`pywinauto`, Windows-only — see `daz_save_wearable_preset` /
+`_ui_automation.py`). Trigger `MainWindow.getActionMgr().findAction("DzWearablesAssetFilterAction")
+.trigger()` (figure pre-selected, must already have ≥1 item fit/parented to it or DAZ shows a
+"Selection Error" dialog instead of the save dialog), then automate the two resulting windows:
+
+```python
+# 1. Native "Filtered Save" file dialog (class "#32770"). Its filename field's
+#    window_text()/WM_GETTEXT ALWAYS show only the static label ("Dateiname:") —
+#    checking success that way is a trap. Use UIA ValuePattern instead:
+edit = win.child_window(auto_id="1001", control_type="Edit")
+edit.set_edit_text(str(output_path))
+assert edit.get_value() == str(output_path)   # get_value(), never window_text()
+
+# Its Save button: neither UIA .invoke() nor a raw win32gui BM_CLICK on the button's
+# own HWND triggers the action (both return without error, dialog stays open). What
+# works — WM_COMMAND/BN_CLICKED sent to the DIALOG window, not the button:
+win32gui.SendMessage(dialog_hwnd, win32con.WM_COMMAND, win32api.MAKELONG(1, 0), 0)
+
+# 2. The resulting Qt6 "Wearable(s) Preset Save Options" dialog (auto_id prefix
+#    "App.WearablesAssetFilterDialog") behaves normally — .invoke() on
+#    "...BasicDlgButtonGrpBox.BasicDlgAcceptDialogBtn" works fine, no workaround needed.
+# Its node-inclusion checklist (TreeItems under "...AssetFilterNodeAssetSelectionView")
+# has no confirmed toggle mechanism (no TogglePattern, is_selected() always 0 — likely
+# custom-painted checkboxes) — left at its default (bundles everything currently
+# fitted to the figure).
+
+# DAZ finishes writing the file a moment AFTER the dialog visually closes — poll
+# path.exists() briefly rather than checking once immediately after Accept.
+```
