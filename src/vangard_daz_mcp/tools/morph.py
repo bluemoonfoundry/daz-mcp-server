@@ -49,9 +49,17 @@ def _gaze_angles(head_pos: dict, target_pos: dict) -> tuple[float, float]:
 
 
 def _active_camera_position(client: Any) -> dict | None:
-    """Fetch the active viewport camera's world-space position, or None if none is active."""
+    """Fetch the active viewport camera's world-space position, or None if none is active.
+
+    Scene.getActiveCamera() does not exist on this DAZ Studio SDK version
+    (confirmed live: "TypeError: ... is not a function"). The proven API
+    (used elsewhere in this codebase, e.g. dazpy's DazViewport) goes through
+    the viewport manager instead.
+    """
     script = """(function() {
-        var cam = Scene.getActiveCamera();
+        var viewport = MainWindow.getViewportMgr().getActiveViewport();
+        if (!viewport) return null;
+        var cam = viewport.get3DViewport().getCamera();
         if (!cam) return null;
         var p = cam.getWSPos();
         return {x: p.x, y: p.y, z: p.z};
@@ -61,67 +69,96 @@ def _active_camera_position(client: Any) -> dict | None:
 
 # ---------------------------------------------------------------------------
 # Body-language posture definitions (bone -> property -> value, pre-intensity)
+#
+# "bone" is a tuple of generation-agnostic candidates (Genesis 9 name first,
+# Genesis 3/8 fallback) resolved via _find_bone_any, matching the pattern
+# figure.py uses for _LOOK_AT_LEVELS. Genesis 3/8's "lShldr"/"rShldr" (no
+# suffix) never actually existed as bone names on any generation -- the
+# real G3/G8 name is "lShldrBend"/"rShldrBend" -- so this also fixes a
+# pre-existing bug inherited from the original hand-rolled DazScript.
 # ---------------------------------------------------------------------------
+
+_CHEST_BONE = ("spine3", "chestUpper")
+_ABDOMEN_BONE = ("spine1", "abdomenLower")
+_NECK_BONE = ("neck1", "neckLower")
+_L_SHOULDER_BONE = ("l_upperarm", "lShldrBend")
+_R_SHOULDER_BONE = ("r_upperarm", "rShldrBend")
 
 _POSTURE_DEFINITIONS: dict[str, list[dict]] = {
     "confident": [
-        {"bone": "chestUpper", "property": "XRotate", "value": 5.0},
-        {"bone": "lShldr", "property": "ZRotate", "value": -5.0},
-        {"bone": "rShldr", "property": "ZRotate", "value": 5.0},
+        {"bone": _CHEST_BONE, "property": "XRotate", "value": 5.0},
+        {"bone": _L_SHOULDER_BONE, "property": "ZRotate", "value": -5.0},
+        {"bone": _R_SHOULDER_BONE, "property": "ZRotate", "value": 5.0},
     ],
     "defensive": [
-        {"bone": "chestUpper", "property": "XRotate", "value": -8.0},
-        {"bone": "abdomenLower", "property": "XRotate", "value": -3.0},
-        {"bone": "lShldr", "property": "ZRotate", "value": 10.0},
-        {"bone": "rShldr", "property": "ZRotate", "value": -10.0},
+        {"bone": _CHEST_BONE, "property": "XRotate", "value": -8.0},
+        {"bone": _ABDOMEN_BONE, "property": "XRotate", "value": -3.0},
+        {"bone": _L_SHOULDER_BONE, "property": "ZRotate", "value": 10.0},
+        {"bone": _R_SHOULDER_BONE, "property": "ZRotate", "value": -10.0},
     ],
     "relaxed": [
-        {"bone": "chestUpper", "property": "XRotate", "value": -3.0},
-        {"bone": "lShldr", "property": "ZRotate", "value": 4.0},
-        {"bone": "rShldr", "property": "ZRotate", "value": -4.0},
-        {"bone": "neckLower", "property": "XRotate", "value": 2.0},
+        {"bone": _CHEST_BONE, "property": "XRotate", "value": -3.0},
+        {"bone": _L_SHOULDER_BONE, "property": "ZRotate", "value": 4.0},
+        {"bone": _R_SHOULDER_BONE, "property": "ZRotate", "value": -4.0},
+        {"bone": _NECK_BONE, "property": "XRotate", "value": 2.0},
     ],
     "tense": [
-        {"bone": "chestUpper", "property": "XRotate", "value": 4.0},
-        {"bone": "lShldr", "property": "ZRotate", "value": -12.0},
-        {"bone": "rShldr", "property": "ZRotate", "value": 12.0},
-        {"bone": "neckLower", "property": "XRotate", "value": -3.0},
+        {"bone": _CHEST_BONE, "property": "XRotate", "value": 4.0},
+        {"bone": _L_SHOULDER_BONE, "property": "ZRotate", "value": -12.0},
+        {"bone": _R_SHOULDER_BONE, "property": "ZRotate", "value": 12.0},
+        {"bone": _NECK_BONE, "property": "XRotate", "value": -3.0},
     ],
 }
 
 
 # ---------------------------------------------------------------------------
 # Emotion definitions
-# Emotion → list of {names: [...], value: float} (first match per list wins)
-# Multiple candidate names handle morph naming differences across figure generations.
+#
+# "composite" is a single-dial candidate list tried first: Genesis 9's
+# built-in FACS rig ships pre-sculpted, single-property emotion presets
+# (facs_ctrl_Happy, facs_ctrl_Sad, ...) that already correctly blend mouth,
+# eyes, brows, and cheeks -- confirmed live against a Genesis 9 figure's own
+# property list. These produce a far more convincing expression than
+# hand-composing one from separate mouth/eye morphs, and generalize across
+# any Genesis 9 figure regardless of vendor, since facs_ctrl_* is part of
+# the base rig rather than a purchased character's own morph vocabulary.
+#
+# "morphs" (list of {names: [...], value: float}, first match per list
+# wins) is the fallback used only when no composite candidate is found --
+# older Genesis 3/8 figures and other rigs without the FACS system. Kept as
+# a hand-composed multi-morph blend for those cases.
 # ---------------------------------------------------------------------------
 
 _EMOTION_DEFINITIONS: dict[str, dict] = {
     "happy": {
+        "composite": {"names": ["facs_ctrl_Happy"], "value": 0.8},
         "morphs": [
             {"names": ["PHMSmile", "Smile", "CTRLSmile", "MouthSmile", "SmileSimple"], "value": 0.85},
             {"names": ["PHMEyesSquint", "EyesSquint", "EyeSquintL", "SquintEyes"], "value": 0.25},
         ],
-        "body": [{"bone": "chestUpper", "property": "XRotate", "value": 3.0}],
+        "body": [{"bone": _CHEST_BONE, "property": "XRotate", "value": 3.0}],
     },
     "sad": {
+        "composite": {"names": ["facs_ctrl_Sad"], "value": 0.8},
         "morphs": [
             {"names": ["PHMFrown", "Frown", "MouthFrown", "CTRLFrown", "FrownSimple"], "value": 0.75},
             {"names": ["PHMBrowInnerDown", "BrowDownL", "BrowDown", "CTRLBrowDown", "BrowInnerDown"], "value": 0.6},
             {"names": ["PHMEyesSquint", "EyesSquint", "EyeSquintL"], "value": 0.3},
         ],
-        "body": [{"bone": "chestUpper", "property": "XRotate", "value": -6.0}],
+        "body": [{"bone": _CHEST_BONE, "property": "XRotate", "value": -6.0}],
     },
     "angry": {
+        "composite": {"names": ["facs_ctrl_Angry"], "value": 0.8},
         "morphs": [
             {"names": ["PHMFrown", "Frown", "MouthFrown", "CTRLFrown"], "value": 0.5},
             {"names": ["PHMBrowDown", "BrowDown", "BrowDownLeft", "CTRLBrowDown", "BrowDownR"], "value": 0.85},
             {"names": ["PHMNoseWrinkle", "NoseWrinkle", "NoseSneerL", "NoseSneer"], "value": 0.4},
             {"names": ["PHMEyesTighten", "EyesTighten", "EyeSquintL", "CheekSquintL"], "value": 0.4},
         ],
-        "body": [{"bone": "chestUpper", "property": "XRotate", "value": -3.0}],
+        "body": [{"bone": _CHEST_BONE, "property": "XRotate", "value": -3.0}],
     },
     "surprised": {
+        "composite": {"names": ["facs_ctrl_Surprised"], "value": 0.8},
         "morphs": [
             {"names": ["PHMBrowUp", "BrowUp", "BrowInnerUpL", "CTRLBrowUp", "BrowsUp"], "value": 0.85},
             {"names": ["PHMEyesWide", "EyesWide", "EyeOpenL", "EyeWideL"], "value": 0.75},
@@ -130,14 +167,16 @@ _EMOTION_DEFINITIONS: dict[str, dict] = {
         "body": [],
     },
     "fearful": {
+        "composite": {"names": ["facs_ctrl_Afraid"], "value": 0.8},
         "morphs": [
             {"names": ["PHMBrowUp", "BrowUp", "BrowInnerUpL", "CTRLBrowUp"], "value": 0.7},
             {"names": ["PHMEyesWide", "EyesWide", "EyeOpenL", "EyeWideL"], "value": 0.6},
             {"names": ["PHMMouthOpen", "MouthOpen", "CTRLMouthOpen", "JawOpen"], "value": 0.3},
         ],
-        "body": [{"bone": "chestUpper", "property": "XRotate", "value": -4.0}],
+        "body": [{"bone": _CHEST_BONE, "property": "XRotate", "value": -4.0}],
     },
     "disgusted": {
+        "composite": {"names": ["facs_ctrl_Disgust"], "value": 0.8},
         "morphs": [
             {"names": ["PHMNoseWrinkle", "NoseWrinkle", "NoseSneerL", "NoseSneer"], "value": 0.75},
             {"names": ["PHMFrown", "Frown", "MouthFrown", "CTRLFrown"], "value": 0.4},
@@ -146,46 +185,53 @@ _EMOTION_DEFINITIONS: dict[str, dict] = {
         "body": [],
     },
     "neutral": {
+        "composite": None,
         "morphs": [],
         "body": [],
     },
     "excited": {
+        "composite": {"names": ["facs_ctrl_Excitement"], "value": 0.8},
         "morphs": [
             {"names": ["PHMSmile", "Smile", "CTRLSmile", "MouthSmile"], "value": 1.0},
             {"names": ["PHMBrowUp", "BrowUp", "CTRLBrowUp", "BrowsUp"], "value": 0.5},
             {"names": ["PHMEyesWide", "EyesWide", "EyeOpenL"], "value": 0.4},
             {"names": ["PHMMouthOpen", "MouthOpen", "CTRLMouthOpen", "JawOpen"], "value": 0.4},
         ],
-        "body": [{"bone": "chestUpper", "property": "XRotate", "value": 5.0}],
+        "body": [{"bone": _CHEST_BONE, "property": "XRotate", "value": 5.0}],
     },
     "bored": {
+        "composite": {"names": ["facs_ctrl_Bored"], "value": 0.8},
         "morphs": [
             {"names": ["PHMEyesClosed", "EyesClosed", "EyeClosedL", "CTRLEyesClosed"], "value": 0.4},
             {"names": ["PHMFrown", "Frown", "MouthFrown"], "value": 0.2},
         ],
-        "body": [{"bone": "chestUpper", "property": "XRotate", "value": -4.0}],
+        "body": [{"bone": _CHEST_BONE, "property": "XRotate", "value": -4.0}],
     },
     "confident": {
+        "composite": {"names": ["facs_ctrl_Confident"], "value": 0.7},
         "morphs": [
             {"names": ["PHMSmile", "Smile", "MouthSmile", "CTRLSmile"], "value": 0.3},
         ],
-        "body": [{"bone": "chestUpper", "property": "XRotate", "value": 4.0}],
+        "body": [{"bone": _CHEST_BONE, "property": "XRotate", "value": 4.0}],
     },
     "shy": {
+        "composite": None,
         "morphs": [
             {"names": ["PHMSmile", "Smile", "MouthSmile"], "value": 0.2},
             {"names": ["PHMEyesSquint", "EyesSquint", "EyeSquintL"], "value": 0.15},
         ],
-        "body": [{"bone": "chestUpper", "property": "XRotate", "value": -5.0}],
+        "body": [{"bone": _CHEST_BONE, "property": "XRotate", "value": -5.0}],
     },
     "loving": {
+        "composite": {"names": ["facs_ctrl_Flirting"], "value": 0.6},
         "morphs": [
             {"names": ["PHMSmile", "Smile", "MouthSmile", "CTRLSmile"], "value": 0.6},
             {"names": ["PHMEyesSquint", "EyesSquint", "EyeSquintL"], "value": 0.35},
         ],
-        "body": [{"bone": "chestUpper", "property": "XRotate", "value": 2.0}],
+        "body": [{"bone": _CHEST_BONE, "property": "XRotate", "value": 2.0}],
     },
     "contemptuous": {
+        "composite": {"names": ["facs_ctrl_Contempt"], "value": 0.8},
         "morphs": [
             {"names": ["PHMSmileR", "SmileR", "MouthSmileR", "MouthSmile_R"], "value": 0.5},
             {"names": ["PHMFrownL", "FrownL", "MouthFrownL", "MouthFrown_L"], "value": 0.3},
@@ -477,31 +523,49 @@ async def daz_set_emotion(
 
         applied: list[dict] = []
         not_found: list[str] = []
-        for entry in definition["morphs"]:
-            target_value = entry["value"] * intensity
-            found = False
-            for name in entry["names"]:
+
+        composite = definition.get("composite")
+        composite_applied = False
+        if composite is not None:
+            composite_value = composite["value"] * intensity
+            for name in composite["names"]:
                 prop = skeleton.find_property(name)
                 if prop is not None:
-                    prop.value = target_value
+                    prop.value = composite_value
                     applied.append({"morph": name, "value": prop.value})
-                    found = True
+                    composite_applied = True
                     break
-            if not found:
-                not_found.append(entry["names"][0] if entry["names"] else "unknown")
+
+        # A single FACS composite dial already blends the correct facial
+        # regions correctly (e.g. facs_ctrl_Happy drives both mouth and
+        # eyes). Only fall back to the hand-composed multi-morph blend when
+        # no composite dial is available on this figure, to avoid stacking
+        # both and over-driving the expression.
+        if not composite_applied:
+            for entry in definition["morphs"]:
+                target_value = entry["value"] * intensity
+                found = False
+                for name in entry["names"]:
+                    prop = skeleton.find_property(name)
+                    if prop is not None:
+                        prop.value = target_value
+                        applied.append({"morph": name, "value": prop.value})
+                        found = True
+                        break
+                if not found:
+                    not_found.append(entry["names"][0] if entry["names"] else "unknown")
 
         body_applied: list[dict] = []
         for adj in definition["body"]:
-            try:
-                bone = skeleton.find_bone(adj["bone"])
-            except NodeNotFoundError:
+            bone = _find_bone_any(skeleton, adj["bone"])
+            if bone is None:
                 continue
             prop = bone.find_property(adj["property"])
             if prop is None:
                 continue
             value = adj["value"] * intensity
             prop.value = value
-            body_applied.append({"bone": adj["bone"], "property": adj["property"], "value": value})
+            body_applied.append({"bone": bone.name, "property": adj["property"], "value": value})
 
         return {
             "character": character_label,
@@ -511,6 +575,54 @@ async def daz_set_emotion(
             "body_adjustments": body_applied,
             "not_found": not_found,
         }
+
+    try:
+        return await run_dazpy(_run)
+    except Exception as e:
+        handle_dazpy_error(e)
+
+
+@mcp.tool()
+async def daz_blend_morphs(
+    node_label: str,
+    morphs: dict[str, float],
+) -> dict[str, Any]:
+    """Set multiple morphs on a node in a single call, for hand-composed expression blends.
+
+    Complements daz_set_emotion's fixed presets: use this when you need finer control
+    over which morphs contribute to an expression/pose than a preset allows (e.g. an
+    LLM composing a custom expression from daz_search_morphs results).
+
+    Args:
+        node_label: Display label of the figure or prop.
+        morphs: Mapping of morph name (label or internal name) to target value.
+                Each is resolved independently via label-then-internal-name lookup.
+
+    Returns:
+        Dict with node, applied (list of {morph, value} actually set), and
+        not_found (names that couldn't be resolved on this node).
+
+    Examples:
+        daz_blend_morphs("Genesis 9", {"Mouth Smile": 0.7, "Eyes Squint": 0.2, "Cheeks Raise": 0.3})
+    """
+    def _run() -> dict[str, Any]:
+        from dazpy import DazMorph
+        scene = get_scene()
+        node = scene.find_node_by_label(node_label)
+
+        applied: list[dict] = []
+        not_found: list[str] = []
+        for name, value in morphs.items():
+            modifier = node.find_modifier_by_label(name)
+            if modifier is None:
+                modifier = node.find_modifier(name)
+            if modifier is None or not isinstance(modifier, DazMorph):
+                not_found.append(name)
+                continue
+            modifier.value = float(value)
+            applied.append({"morph": name, "value": float(value)})
+
+        return {"node": node_label, "applied": applied, "not_found": not_found}
 
     try:
         return await run_dazpy(_run)
@@ -559,18 +671,17 @@ async def daz_set_body_language(
         applied: list[dict] = []
         not_found: list[str] = []
         for adj in _POSTURE_DEFINITIONS[posture]:
-            try:
-                bone = skeleton.find_bone(adj["bone"])
-            except NodeNotFoundError:
-                not_found.append(adj["bone"])
+            bone = _find_bone_any(skeleton, adj["bone"])
+            if bone is None:
+                not_found.append(adj["bone"][0])
                 continue
             prop = bone.find_property(adj["property"])
             if prop is None:
-                not_found.append(f"{adj['bone']}.{adj['property']}")
+                not_found.append(f"{bone.name}.{adj['property']}")
                 continue
             value = adj["value"] * intensity
             prop.value = value
-            applied.append({"bone": adj["bone"], "property": adj["property"], "value": value})
+            applied.append({"bone": bone.name, "property": adj["property"], "value": value})
 
         return {
             "success": True,

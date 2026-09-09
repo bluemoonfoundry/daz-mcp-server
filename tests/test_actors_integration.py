@@ -5,6 +5,8 @@ Tools covered
 - daz_list_morphs
 - daz_search_morphs
 - daz_set_emotion
+- daz_set_body_language
+- daz_direct_gaze
 - daz_look_at_point
 - daz_look_at_character
 - daz_reach_toward
@@ -24,8 +26,10 @@ from vangard_daz_mcp.tools.figure import (
     daz_reach_toward,
 )
 from vangard_daz_mcp.tools.morph import (
+    daz_direct_gaze,
     daz_list_morphs,
     daz_search_morphs,
+    daz_set_body_language,
     daz_set_emotion,
 )
 from vangard_daz_mcp.tools.scene import daz_restore_scene_state, daz_save_scene_state
@@ -185,6 +189,87 @@ class TestSetEmotion:
     async def test_node_not_found_raises(self, live_client):
         with pytest.raises(ToolError):
             await daz_set_emotion("NonExistentNode_XYZ_999", "happy")
+
+
+# ---------------------------------------------------------------------------
+# daz_set_body_language
+# ---------------------------------------------------------------------------
+
+@pytest.mark.usefixtures("clean_pose")
+class TestSetBodyLanguage:
+    @pytest.mark.parametrize("posture", ["confident", "defensive", "relaxed", "tense"])
+    async def test_standard_postures(self, live_client, figure_label, posture):
+        result = await daz_set_body_language(figure_label, posture, intensity=0.8)
+        assert isinstance(result, dict)
+        assert result["success"] is True
+        assert result.get("applied"), (
+            f"No bones were adjusted for posture {posture!r} — bone names may not "
+            f"match this figure's generation. Result: {result}"
+        )
+
+    async def test_intensity_scales_value(self, live_client, figure_label):
+        full = await daz_set_body_language(figure_label, "confident", intensity=1.0)
+        half = await daz_set_body_language(figure_label, "confident", intensity=0.5)
+        full_values = {a["bone"]: a["value"] for a in full["applied"]}
+        half_values = {a["bone"]: a["value"] for a in half["applied"]}
+        assert full_values, "No bones were adjusted — cannot verify intensity scaling"
+        for bone, value in half_values.items():
+            assert value == pytest.approx(full_values[bone] * 0.5)
+
+    async def test_unknown_posture_raises(self, live_client, figure_label):
+        with pytest.raises(ToolError):
+            await daz_set_body_language(figure_label, "nonexistent_posture_xyz")
+
+    async def test_invalid_intensity_raises(self, live_client, figure_label):
+        with pytest.raises(ToolError):
+            await daz_set_body_language(figure_label, "confident", intensity=1.5)
+
+    async def test_node_not_found_raises(self, live_client):
+        with pytest.raises(ToolError):
+            await daz_set_body_language("NonExistentNode_XYZ_999", "confident")
+
+
+# ---------------------------------------------------------------------------
+# daz_direct_gaze
+# ---------------------------------------------------------------------------
+
+@pytest.mark.usefixtures("clean_pose")
+class TestDirectGaze:
+    @pytest.mark.parametrize("direction", ["up", "down", "left", "right", "away", "camera"])
+    async def test_standard_directions(self, live_client, figure_label, direction):
+        result = await daz_direct_gaze(figure_label, direction)
+        assert isinstance(result, dict)
+        assert result["success"] is True
+        assert result.get("applied"), f"No bones rotated for direction {direction!r}. Result: {result}"
+
+    async def test_character_direction(self, live_client, figure_label):
+        # Self-target rather than a second figure or a scene-specific named
+        # asset (e.g. a particular camera) -- always resolvable regardless
+        # of what else is loaded, and daz_direct_gaze's "character" mode
+        # accepts any node label, including the figure's own.
+        result = await daz_direct_gaze(figure_label, "character", target_label=figure_label)
+        assert result["success"] is True
+        assert result.get("applied"), f"No bones rotated for character direction. Result: {result}"
+
+    async def test_character_direction_requires_target(self, live_client, figure_label):
+        with pytest.raises(ToolError, match="target_label"):
+            await daz_direct_gaze(figure_label, "character")
+
+    async def test_target_not_found_returns_unsuccessful(self, live_client, figure_label):
+        # Unlike a missing figure_label (raises ToolError), a missing gaze
+        # target is reported in the result rather than raised.
+        result = await daz_direct_gaze(
+            figure_label, "character", target_label="NonExistentTarget_XYZ_999"
+        )
+        assert result["success"] is False
+
+    async def test_unknown_direction_raises(self, live_client, figure_label):
+        with pytest.raises(ToolError):
+            await daz_direct_gaze(figure_label, "nonexistent_direction_xyz")
+
+    async def test_node_not_found_raises(self, live_client):
+        with pytest.raises(ToolError):
+            await daz_direct_gaze("NonExistentNode_XYZ_999", "left")
 
 
 # ---------------------------------------------------------------------------
