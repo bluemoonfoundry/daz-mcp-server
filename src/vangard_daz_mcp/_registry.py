@@ -6401,6 +6401,15 @@ _CREATE_LIGHT_SCRIPT = """\
     }
     light.setLabel(args.label || (t + "_light"));
     Scene.addNode(light);
+    // See _CREATE_CAMERA_SCRIPT for why this is needed: a script-created node's
+    // internal name is empty until set explicitly, and daz_list_lights (via
+    // dazpy) resolves nodes by that name.
+    var baseName = String(args.label || (t + "_light")).replace(/[^A-Za-z0-9_]/g, "_") || "Light";
+    var candidateName = baseName, nameSuffix = 1;
+    while (Scene.findNode(candidateName)) {
+        candidateName = baseName + "_" + (++nameSuffix);
+    }
+    light.setName(candidateName);
     var xp = light.findProperty("XTranslate");
     var yp = light.findProperty("YTranslate");
     var zp = light.findProperty("ZTranslate");
@@ -6467,6 +6476,18 @@ _CREATE_CAMERA_SCRIPT = """\
     var cam = new DzBasicCamera();
     cam.setLabel(args.label || "Camera");
     Scene.addNode(cam);
+    // DAZ Studio leaves the internal name ("" via getName()) unset for a node
+    // created via script + Scene.addNode() (confirmed live), unlike a UI-created
+    // one. dazpy's node lookup by name (used by daz_list_cameras) needs a
+    // non-empty, unique name to resolve this camera afterward -- setName() does
+    // NOT auto-uniquify on collision (confirmed live: Scene.findNode() then just
+    // returns whichever node got the name first), so dedupe manually.
+    var baseName = String(args.label || "Camera").replace(/[^A-Za-z0-9_]/g, "_") || "Camera";
+    var candidateName = baseName, nameSuffix = 1;
+    while (Scene.findNode(candidateName)) {
+        candidateName = baseName + "_" + (++nameSuffix);
+    }
+    cam.setName(candidateName);
     var xp = cam.findProperty("XTranslate");
     var yp = cam.findProperty("YTranslate");
     var zp = cam.findProperty("ZTranslate");

@@ -7,8 +7,6 @@ from typing import Any
 from fastmcp.exceptions import ToolError
 
 from .._mcp import mcp, _execute_by_id, _execute
-from .._client import get_scene, run_dazpy
-from .._errors import handle_dazpy_error
 
 
 # ---------------------------------------------------------------------------
@@ -435,48 +433,18 @@ async def daz_list_lights() -> dict[str, Any]:
     Returns:
         Dict with:
         - light_count: number of lights
-        - lights: list of {name, label, intensity, shadow_type}
+        - lights: list of {index, label, name, type, position, flux, enabled}
 
     Examples:
         daz_list_lights()
         # → {"light_count": 3, "lights": [{"label": "Key Light", ...}]}
 
     Notes:
-        - ``intensity`` is in DAZ Studio's internal units (roughly equivalent to
-          Watts for Iray).
-        - ``shadow_type`` is one of "None", "Raytraced", "Deep Shadow Map", etc.
+        - ``type`` is the DazScript class name (e.g. "DzSpotLight", "DzDistantLight").
+        - ``flux`` is in DAZ Studio's internal units (roughly equivalent to
+          Watts for Iray); ``null`` if the light has no Flux property.
     """
-    def _run() -> dict[str, Any]:
-        scene = get_scene()
-        lights = scene.lights()
-        result = []
-        for light in lights:
-            name = light._identifier.value  # pylint: disable=protected-access
-            # ._identifier.value is dazpy's documented way to read a node's
-            # internal name (see daz-script-server's own README examples).
-            info: dict[str, Any] = {"name": name}
-            # label makes one HTTP call per light
-            try:
-                info["label"] = light.label or name
-            except Exception:
-                info["label"] = name
-            # intensity via get_property
-            try:
-                info["intensity"] = light.intensity
-            except Exception:
-                info["intensity"] = None
-            # shadow_type via get_property
-            try:
-                info["shadow_type"] = light.shadow_type
-            except Exception:
-                info["shadow_type"] = None
-            result.append(info)
-        return {"light_count": len(result), "lights": result}
-
-    try:
-        return await run_dazpy(_run)
-    except Exception as e:
-        handle_dazpy_error(e)
+    return await _execute_by_id("vangard-list-lights")
 
 
 @mcp.tool()
@@ -536,7 +504,7 @@ async def daz_create_light(
 
 
 # ---------------------------------------------------------------------------
-# Camera listing / creation (dazpy-migrated + registered script)
+# Camera listing / creation
 # ---------------------------------------------------------------------------
 
 @mcp.tool()
@@ -550,34 +518,13 @@ async def daz_list_cameras() -> dict[str, Any]:
     Returns:
         Dict with:
         - camera_count: number of cameras
-        - cameras: list of {name, label, focal_length}
+        - cameras: list of {index, label, name, type, position, focal_length}
 
     Examples:
         daz_list_cameras()
         # → {"camera_count": 2, "cameras": [{"label": "Camera 1", ...}]}
     """
-    def _run() -> dict[str, Any]:
-        scene = get_scene()
-        cameras = scene.cameras()
-        result = []
-        for camera in cameras:
-            name = camera._identifier.value  # pylint: disable=protected-access
-            info: dict[str, Any] = {"name": name}
-            try:
-                info["label"] = camera.label or name
-            except Exception:
-                info["label"] = name
-            try:
-                info["focal_length"] = camera.focal_length
-            except Exception:
-                info["focal_length"] = None
-            result.append(info)
-        return {"camera_count": len(result), "cameras": result}
-
-    try:
-        return await run_dazpy(_run)
-    except Exception as e:
-        handle_dazpy_error(e)
+    return await _execute_by_id("vangard-list-cameras")
 
 
 @mcp.tool()
