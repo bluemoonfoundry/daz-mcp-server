@@ -46,6 +46,10 @@ Bug-Katalog: `C:\Users\Black-Byte\Development\pinkcharakter\docs\daz-mcp-bridge-
   morph-target import: load mode, mirroring, overwrite mode, reverse deformations,
   subdivision mapping, attenuation maps, ERC control-property linking; harvested from
   fork ebf444a)
+- **Phase 6.12:** Wearable Preset export — `daz_save_wearable_preset` (fit-to-figure
+  asset export via Windows UI Automation, working around a reproducibly broken
+  `DzWearablesAssetFilter.doSave()` script API; Windows-only, requires `pywinauto`;
+  Bug-Katalog #22 Teil 2; harvested from fork 6a0f9c1)
 
 ## Render API (DazScriptServer native endpoints)
 `daz_render_async`, `daz_render_with_camera_async`, `daz_batch_render_cameras_async` use

@@ -26,6 +26,10 @@ Use these for 5-10x speedup when changing 3+ items:
   File > Save As > Support Asset > Prop Asset. `output_path` must resolve inside a
   configured content directory (see SKILL_DAZSCRIPT.md's "Content-Library asset export"
   section for the BaseDataPath/errCode 98 gotcha).
+- `daz_save_wearable_preset`: Save a figure plus everything fit/parented to it as a
+  Wearable(s) Preset — headless-*ish* equivalent of File > Save As > Wearable(s) Preset,
+  driven via Windows UI Automation since the script API reproducibly fails (Windows-only,
+  requires `pywinauto`; see SKILL_DAZSCRIPT.md's "Wearable Preset" section).
 
 ## Materials
 - `daz_list_materials`, `daz_get_material`: Inspect surfaces on a node.
