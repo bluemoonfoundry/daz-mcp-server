@@ -19,6 +19,9 @@ jobs:
         python -m pip install --upgrade pip
         pip install -e .
         pip install pylint pytest pytest-asyncio respx
+    - name: Running tests
+      # Integration tests need a live DAZ Studio and are excluded here.
+      run: pytest tests/ -m 'not integration' -v
     - name: Analysing the code with pylint
       run: |
         # tests/ gets extra disables: redefined-outer-name/unused-argument for

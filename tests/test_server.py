@@ -25,7 +25,7 @@ from vangard_daz_mcp.tools.render import (
     daz_wait_for_request,
 )
 from vangard_daz_mcp.tools.scene import daz_scene_info, daz_load_file, daz_save_scene_copy
-from vangard_daz_mcp.tools.transform import daz_get_node, daz_set_property
+from vangard_daz_mcp.tools.transform import daz_batch_select, daz_get_node, daz_set_property
 from vangard_daz_mcp.tools.utility import (
     daz_status,
     daz_execute,
@@ -1063,3 +1063,27 @@ async def test_daz_wait_for_scene_event_filter_param_derived_from_categories(moc
     assert "render" in filter_val
     assert "scene" in filter_val
     assert "render.finished" not in filter_val
+
+
+# ---------------------------------------------------------------------------
+# daz_batch_select — add_to_selection (daz-mcp-server-kc6 / -i2l)
+# ---------------------------------------------------------------------------
+
+async def test_daz_batch_select_replaces_selection_by_default(mock_scene):
+    result = await daz_batch_select(["Sword", "Shield"])
+    mock_scene.select_all.assert_called_once_with(False)
+    assert result["selected"] == ["Sword", "Shield"]
+    assert result["count"] == 2
+
+
+async def test_daz_batch_select_add_keeps_existing_selection(mock_scene):
+    result = await daz_batch_select(["Sword"], add_to_selection=True)
+    mock_scene.select_all.assert_not_called()
+    assert result["selected"] == ["Sword"]
+
+
+async def test_daz_batch_select_skips_missing_nodes(mock_scene):
+    mock_scene.find_node_by_label.side_effect = [Exception("nope"), MagicMock()]
+    result = await daz_batch_select(["Missing", "Sword"])
+    assert result["selected"] == ["Sword"]
+    assert result["total"] == 2

@@ -381,6 +381,8 @@ async def daz_batch_select(
     """
     def _run() -> dict[str, Any]:
         scene = get_scene()
+        if not add_to_selection:
+            scene.select_all(False)
         selected: list[str] = []
         for label in node_labels:
             try:
