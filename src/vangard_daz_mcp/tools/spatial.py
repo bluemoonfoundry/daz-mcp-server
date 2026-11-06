@@ -5,7 +5,7 @@ import math
 from typing import Any
 
 from .._mcp import mcp
-from .._client import get_scene, run_dazpy
+from .._client import get_daz_client, get_scene, run_dazpy
 from .._errors import handle_dazpy_error
 
 
@@ -329,6 +329,44 @@ async def daz_check_overlap(
         handle_dazpy_error(e)
 
 
+_VALID_NODE_TYPES = ("figures", "cameras", "lights", "props")
+
+# DzLight inherits DzCamera, so lights must be tested first.
+_NODE_TYPES_SCRIPT = """(function(){
+    var result = [];
+    for (var i = 0; i < Scene.getNumNodes(); i++) {
+        var n = Scene.getNode(i);
+        var t = "props";
+        if (n.inherits("DzLight")) t = "lights";
+        else if (n.inherits("DzCamera")) t = "cameras";
+        else if (n.inherits("DzSkeleton")) t = "figures";
+        result.push({name: n.getName(), label: n.getLabel(), type: t});
+    }
+    return result;
+})()"""
+
+
+def _validate_include_types(include_types: list[str] | None) -> None:
+    invalid = sorted(set(include_types or []) - set(_VALID_NODE_TYPES))
+    if invalid:
+        raise ValueError(
+            f"Invalid include_types: {invalid}. Valid: {list(_VALID_NODE_TYPES)}"
+        )
+
+
+def _node_types() -> dict[tuple[str, str], str]:
+    """Map (internal name, label) -> "figures" | "cameras" | "lights" | "props".
+
+    Keyed on both because nodes created without an internal name all share "".
+    """
+    items = get_daz_client().execute(_NODE_TYPES_SCRIPT).value or []
+    return {(i["name"], i["label"]): i["type"] for i in items}
+
+
+def _type_of(types: dict[tuple[str, str], str], t: dict[str, Any]) -> str:
+    return types.get((t.get("name", ""), t.get("label", "")), "props")
+
+
 @mcp.tool()
 async def daz_get_scene_layout(
     include_types: list[str] | None = None,
@@ -351,14 +389,20 @@ async def daz_get_scene_layout(
         daz_get_scene_layout(["lights"])                    # just lights with flux values
     """
     def _run() -> dict[str, Any]:
+        _validate_include_types(include_types)
         scene = get_scene()
         transforms = scene.all_node_transforms()
+        types = _node_types()
         nodes = []
         for t in transforms:
+            node_type = _type_of(types, t)
+            if include_types and node_type not in include_types:
+                continue
             pos_raw = t.get("position", [0.0, 0.0, 0.0])
             rot_raw = t.get("rotation", [0.0, 0.0, 0.0])
             entry: dict[str, Any] = {
                 "label": t.get("label", t.get("name", "")),
+                "type": node_type,
                 "position": {"x": pos_raw[0], "y": pos_raw[1], "z": pos_raw[2]},
                 "rotation": {"x": rot_raw[0], "y": rot_raw[1], "z": rot_raw[2]},
                 "visible": t.get("visible", True),
@@ -398,17 +442,23 @@ async def daz_find_nearby_nodes(
         daz_find_nearby_nodes("Chair", radius=80, include_types=["figures"])  # people near chair
     """
     def _run() -> dict[str, Any]:
+        _validate_include_types(include_types)
         scene = get_scene()
         center_node = scene.find_node_by_label(node_label)
         center_pos = center_node.position  # {"x", "y", "z"}
 
         transforms = scene.all_node_transforms()
+        types = _node_types()
         nearby: list[dict[str, Any]] = []
 
         for t in transforms:
             label = t.get("label", t.get("name", ""))
             if label == node_label:
                 continue  # skip the centre node itself
+
+            node_type = _type_of(types, t)
+            if include_types and node_type not in include_types:
+                continue
 
             pos_raw = t.get("position", [0.0, 0.0, 0.0])
             dx = pos_raw[0] - center_pos["x"]
@@ -427,6 +477,7 @@ async def daz_find_nearby_nodes(
 
             nearby.append({
                 "label": label,
+                "type": node_type,
                 "distance": dist,
                 "direction": direction,
             })
