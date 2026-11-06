@@ -17,3 +17,6 @@ dist/
 
 # Beads / Dolt files (added by bd init)
 .beads/proxieddb/
+
+# Local secrets (DAZ script server API key)
+.env
