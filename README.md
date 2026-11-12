@@ -3733,7 +3733,7 @@ vangard-daz-mcp/
 - **Dependencies:**
   - `fastmcp>=3.0` - MCP server framework and component visibility profiles
   - `httpx>=0.27` - Async client for the separate content-browser service
-  - `dazpy>=2.8.0` - Sync domain SDK and async DazScriptServer protocol client
+  - `dazpy>=2.10.1` - Sync domain SDK and async DazScriptServer protocol client
 - **Dev Dependencies:**
   - `pytest>=8.0`
   - `pytest-asyncio>=0.24`

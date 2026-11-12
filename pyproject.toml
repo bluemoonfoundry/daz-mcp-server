@@ -11,7 +11,7 @@ authors = [
 dependencies = [
     "fastmcp>=3.0",
     "httpx>=0.27",
-    "dazpy>=2.8.0",
+    "dazpy>=2.10.1",
 ]
 
 [project.urls]

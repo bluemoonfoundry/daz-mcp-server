@@ -98,11 +98,11 @@ def _fail(error, output=None):
 
 async def test_daz_status_ok(mock_daz):
     mock_daz.get("/status").mock(
-        return_value=httpx.Response(200, json={"running": True, "version": "1.0.0.0"})
+        return_value=httpx.Response(200, json={"running": True, "version": "2.10.1"})
     )
     result = await daz_status()
     assert result["running"] is True
-    assert result["version"] == "1.0.0.0"
+    assert result["version"] == "2.10.1"
 
 
 async def test_daz_status_connect_error(mock_daz):
