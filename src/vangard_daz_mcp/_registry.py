@@ -31,6 +31,50 @@ async def _register_scripts(client: AsyncDazClient) -> None:
 #   MainWindow – the main window
 # ---------------------------------------------------------------------------
 
+_RESOLVE_NODE_JS = """\
+    function resolveNode(id) {
+        if (id === undefined || id === null || String(id) === "") {
+            throw new Error("Node id is required");
+        }
+        var s = String(id);
+        if (/^[0-9]+$/.test(s) && typeof Scene.findNodeByElementID === "function") {
+            var byId = Scene.findNodeByElementID(parseInt(s, 10));
+            if (!byId) throw new Error("Node not found: elementID " + s);
+            return byId;
+        }
+        var slash = s.lastIndexOf("/");
+        if (slash > 0) {
+            var parent = resolveNode(s.substring(0, slash));
+            var childPart = s.substring(slash + 1);
+            var child = null;
+            if (typeof parent.findNodeChildByLabel === "function") {
+                child = parent.findNodeChildByLabel(childPart, true);
+            }
+            if (!child && typeof parent.findNodeChild === "function") {
+                child = parent.findNodeChild(childPart, true);
+            }
+            if (!child) throw new Error("Node not found: " + s);
+            return child;
+        }
+        var matches = [];
+        var i, n, p, bits;
+        for (i = 0; i < Scene.getNumNodes(); i++) {
+            n = Scene.getNode(i);
+            if (!n) continue;
+            if (n.getLabel() === s || n.getName() === s) matches.push(n);
+        }
+        if (matches.length === 1) return matches[0];
+        if (matches.length === 0) throw new Error("Node not found: " + s);
+        bits = [];
+        for (i = 0; i < matches.length && i < 12; i++) {
+            n = matches[i];
+            p = n.getNodeParent ? n.getNodeParent() : null;
+            bits.push(n.getLabel() + " name=" + n.getName() + " elementID=" + n.elementID + " parent=" + (p ? p.getLabel() : ""));
+        }
+        throw new Error("Ambiguous node '" + s + "' (" + matches.length + " matches). Use elementID or Parent/Label. " + bits.join(" | "));
+    }
+"""
+
 # Returns: {sceneFile, selectedNode, figures:[{name,label,type}], cameras:[...],
 #           lights:[...], totalNodes}
 # Uses skeleton list (characters + clothing) rather than all nodes (potentially thousands).
@@ -68,44 +112,84 @@ _SCENE_INFO_SCRIPT = """\
 })()
 """
 
-# args: {nodeLabel}
-# Returns: {name, label, type, properties:{label:value}}
-# Searches by label first, then internal name.
-_GET_NODE_SCRIPT = """\
-(function(){
+# args: {nodeLabel} — label, internal name, elementID, or Parent/Label
+# Returns: {name, label, type, elementID, parent, properties:{label:value}}
+_GET_NODE_SCRIPT = "(function(){\n" + _RESOLVE_NODE_JS + """
     var args = getArguments()[0] || {};
-    var n = Scene.findNodeByLabel(args.nodeLabel);
-    if (!n) n = Scene.findNode(args.nodeLabel);
-    if (!n) throw new Error("Node not found: " + args.nodeLabel);
+    var n = resolveNode(args.nodeLabel);
     var props = {};
-    for (var p = 0; p < n.getNumProperties(); p++) {
-        var pr = n.getProperty(p);
-        if (pr.inherits("DzNumericProperty")) props[pr.getLabel()] = pr.getValue();
+    var seen = {};
+    function addNumeric(pr) {
+        if (!pr || !pr.inherits("DzNumericProperty")) return;
+        var key = pr.getName();
+        if (seen[key]) return;
+        seen[key] = true;
+        props[pr.getLabel()] = pr.getValue();
     }
-    return { name: n.getName(), label: n.getLabel(), type: n.className(), properties: props };
+    var p;
+    for (p = 0; p < n.getNumProperties(); p++) addNumeric(n.getProperty(p));
+    var obj = (typeof n.getObject === "function") ? n.getObject() : null;
+    if (obj && typeof obj.getNumModifiers === "function") {
+        for (p = 0; p < obj.getNumModifiers(); p++) {
+            var m = obj.getModifier(p);
+            if (!m) continue;
+            if (typeof m.getValueChannel === "function") addNumeric(m.getValueChannel());
+            if (typeof m.getNumProperties === "function") {
+                for (var j = 0; j < m.getNumProperties(); j++) addNumeric(m.getProperty(j));
+            }
+        }
+    }
+    var parent = n.getNodeParent ? n.getNodeParent() : null;
+    return {
+        name: n.getName(),
+        label: n.getLabel(),
+        type: n.className(),
+        elementID: n.elementID,
+        parent: parent ? parent.getLabel() : null,
+        properties: props
+    };
 })()
 """
 
 # args: {nodeLabel, propertyName, value}
 # Returns: {node, property, value}
 # Matches propertyName against both display label and internal name.
-_SET_PROPERTY_SCRIPT = """\
-(function(){
+_SET_PROPERTY_SCRIPT = "(function(){\n" + _RESOLVE_NODE_JS + """
     var args = getArguments()[0] || {};
-    var n = Scene.findNodeByLabel(args.nodeLabel);
-    if (!n) n = Scene.findNode(args.nodeLabel);
-    if (!n) throw new Error("Node not found: " + args.nodeLabel);
-    var prop = null;
-    for (var p = 0; p < n.getNumProperties(); p++) {
-        var pr = n.getProperty(p);
-        if (pr.getLabel() === args.propertyName || pr.getName() === args.propertyName) {
-            prop = pr; break;
-        }
+    var n = resolveNode(args.nodeLabel);
+    function matchName(item, name) {
+        return item.getLabel() === name || item.getName() === name;
     }
+    function findProp(node, name) {
+        var i, pr, obj, m, ch, j;
+        for (i = 0; i < node.getNumProperties(); i++) {
+            pr = node.getProperty(i);
+            if (matchName(pr, name)) return pr;
+        }
+        obj = (typeof node.getObject === "function") ? node.getObject() : null;
+        if (!obj || typeof obj.getNumModifiers !== "function") return null;
+        for (i = 0; i < obj.getNumModifiers(); i++) {
+            m = obj.getModifier(i);
+            if (!m) continue;
+            if (matchName(m, name) && typeof m.getValueChannel === "function") {
+                ch = m.getValueChannel();
+                if (ch) return ch;
+            }
+            if (typeof m.getNumProperties === "function") {
+                for (j = 0; j < m.getNumProperties(); j++) {
+                    pr = m.getProperty(j);
+                    if (matchName(pr, name)) return pr;
+                }
+            }
+        }
+        return null;
+    }
+    var prop = findProp(n, args.propertyName);
     if (!prop) throw new Error("Property not found: " + args.propertyName + " on " + args.nodeLabel);
     if (!prop.inherits("DzNumericProperty")) throw new Error("Property is not numeric: " + args.propertyName);
+    if (typeof prop.lock === "function" && prop.isLocked && prop.isLocked()) prop.lock(false);
     prop.setValue(args.value);
-    return { node: n.getLabel(), property: prop.getLabel(), value: prop.getValue() };
+    return { node: n.getLabel(), elementID: n.elementID, property: prop.getLabel(), value: prop.getValue() };
 })()
 """
 
@@ -117,12 +201,30 @@ _RENDER_SCRIPT = """\
     var args = getArguments()[0] || {};
     var renderMgr = App.getRenderMgr();
     var opts = renderMgr.getRenderOptions();
-    if (args.outputPath) {
-        opts.renderImgToId = 0;
-        opts.renderImgFilename = args.outputPath;
+    var path = args.outputPath || opts.renderImgFilename;
+    if (!path) {
+        throw new Error("Render output path is not set. Pass output_path or call daz_set_render_output first — otherwise Studio opens a filename dialog.");
     }
-    renderMgr.doRender();
-    return { success: true };
+    opts.renderImgToId = opts.DirectToFile;
+    opts.renderImgFilename = path;
+    try {
+        var helper = renderMgr.getOptionHelper();
+        if (helper) {
+            var slash = Math.max(String(path).lastIndexOf("/"), String(path).lastIndexOf("\\\\"));
+            var dir = slash >= 0 ? String(path).substring(0, slash) : "";
+            var name = slash >= 0 ? String(path).substring(slash + 1) : String(path);
+            var np = helper.findProperty("Image Name");
+            var pp = helper.findProperty("Image Path");
+            if (np && typeof np.setValue === "function") np.setValue(name);
+            if (pp && typeof pp.setValue === "function") pp.setValue(dir);
+        }
+    } catch (e) {}
+    opts.applyChanges();
+    if (Number(opts.renderImgToId) !== Number(opts.DirectToFile) || !opts.renderImgFilename) {
+        throw new Error("Render-to-file did not persist (renderImgToId=" + opts.renderImgToId + ", file=" + opts.renderImgFilename + ")");
+    }
+    renderMgr.doRender(opts);
+    return { success: true, outputPath: opts.renderImgFilename };
 })()
 """
 
@@ -142,12 +244,9 @@ _LOAD_FILE_SCRIPT = """\
 # includeZero: if true, return all morphs; if false, only return morphs with non-zero values
 # Returns: {morphs: [{label, name, value, path}], count}
 # Lists all numeric properties (morphs) on a node
-_LIST_MORPHS_SCRIPT = """\
-(function(){
+_LIST_MORPHS_SCRIPT = "(function(){\n" + _RESOLVE_NODE_JS + """
     var args = getArguments()[0] || {};
-    var node = Scene.findNodeByLabel(args.nodeLabel);
-    if (!node) node = Scene.findNode(args.nodeLabel);
-    if (!node) throw new Error("Node not found: " + args.nodeLabel);
+    var node = resolveNode(args.nodeLabel);
 
     var includeZero = args.includeZero !== undefined ? args.includeZero : false;
     var morphs = [];
@@ -187,12 +286,9 @@ _LIST_MORPHS_SCRIPT = """\
 # includeZero: if true, return all matching morphs; if false, only non-zero values
 # Returns: {morphs: [{label, name, value, path}], count, pattern}
 # Searches for morphs matching a pattern
-_SEARCH_MORPHS_SCRIPT = """\
-(function(){
+_SEARCH_MORPHS_SCRIPT = "(function(){\n" + _RESOLVE_NODE_JS + """
     var args = getArguments()[0] || {};
-    var node = Scene.findNodeByLabel(args.nodeLabel);
-    if (!node) node = Scene.findNode(args.nodeLabel);
-    if (!node) throw new Error("Node not found: " + args.nodeLabel);
+    var node = resolveNode(args.nodeLabel);
 
     var pattern = args.pattern ? args.pattern.toLowerCase() : "";
     var includeZero = args.includeZero !== undefined ? args.includeZero : false;
@@ -239,12 +335,9 @@ _SEARCH_MORPHS_SCRIPT = """\
 # maxDepth: maximum recursion depth (default 10, 0 = unlimited)
 # Returns: {node, children: [{node, children}], totalDescendants}
 # Gets complete hierarchy tree for a node
-_GET_NODE_HIERARCHY_SCRIPT = """\
-(function(){
+_GET_NODE_HIERARCHY_SCRIPT = "(function(){\n" + _RESOLVE_NODE_JS + """
     var args = getArguments()[0] || {};
-    var node = Scene.findNodeByLabel(args.nodeLabel);
-    if (!node) node = Scene.findNode(args.nodeLabel);
-    if (!node) throw new Error("Node not found: " + args.nodeLabel);
+    var node = resolveNode(args.nodeLabel);
 
     var maxDepth = args.maxDepth !== undefined ? args.maxDepth : 10;
     var totalDescendants = 0;
@@ -257,7 +350,8 @@ _GET_NODE_HIERARCHY_SCRIPT = """\
         var nodeInfo = {
             label: n.getLabel(),
             name: n.getName(),
-            type: n.className()
+            type: n.className(),
+            elementID: n.elementID
         };
 
         var children = [];
@@ -289,12 +383,9 @@ _GET_NODE_HIERARCHY_SCRIPT = """\
 # args: {nodeLabel}
 # Returns: {node, children: [{label, name, type}], count}
 # Lists direct children of a node
-_LIST_CHILDREN_SCRIPT = """\
-(function(){
+_LIST_CHILDREN_SCRIPT = "(function(){\n" + _RESOLVE_NODE_JS + """
     var args = getArguments()[0] || {};
-    var node = Scene.findNodeByLabel(args.nodeLabel);
-    if (!node) node = Scene.findNode(args.nodeLabel);
-    if (!node) throw new Error("Node not found: " + args.nodeLabel);
+    var node = resolveNode(args.nodeLabel);
 
     var children = [];
     for (var i = 0; i < node.getNumNodeChildren(); i++) {
@@ -302,7 +393,8 @@ _LIST_CHILDREN_SCRIPT = """\
         children.push({
             label: child.getLabel(),
             name: child.getName(),
-            type: child.className()
+            type: child.className(),
+            elementID: child.elementID
         });
     }
 
@@ -317,12 +409,9 @@ _LIST_CHILDREN_SCRIPT = """\
 # args: {nodeLabel}
 # Returns: {node, parent: {label, name, type} | null}
 # Gets parent node of a node
-_GET_PARENT_SCRIPT = """\
-(function(){
+_GET_PARENT_SCRIPT = "(function(){\n" + _RESOLVE_NODE_JS + """
     var args = getArguments()[0] || {};
-    var node = Scene.findNodeByLabel(args.nodeLabel);
-    if (!node) node = Scene.findNode(args.nodeLabel);
-    if (!node) throw new Error("Node not found: " + args.nodeLabel);
+    var node = resolveNode(args.nodeLabel);
 
     var parent = node.getNodeParent();
 
@@ -331,7 +420,8 @@ _GET_PARENT_SCRIPT = """\
         parent: parent ? {
             label: parent.getLabel(),
             name: parent.getName(),
-            type: parent.className()
+            type: parent.className(),
+            elementID: parent.elementID
         } : null
     };
 })()
@@ -341,16 +431,10 @@ _GET_PARENT_SCRIPT = """\
 # maintainWorldTransform: if true, adjust local transform to maintain world position
 # Returns: {success, node, newParent, previousParent}
 # Sets parent of a node
-_SET_PARENT_SCRIPT = """\
-(function(){
+_SET_PARENT_SCRIPT = "(function(){\n" + _RESOLVE_NODE_JS + """
     var args = getArguments()[0] || {};
-    var node = Scene.findNodeByLabel(args.nodeLabel);
-    if (!node) node = Scene.findNode(args.nodeLabel);
-    if (!node) throw new Error("Node not found: " + args.nodeLabel);
-
-    var newParent = Scene.findNodeByLabel(args.parentLabel);
-    if (!newParent) newParent = Scene.findNode(args.parentLabel);
-    if (!newParent) throw new Error("Parent node not found: " + args.parentLabel);
+    var node = resolveNode(args.nodeLabel);
+    var newParent = resolveNode(args.parentLabel);
 
     var maintainWorldTransform = args.maintainWorldTransform !== undefined ? args.maintainWorldTransform : true;
 
@@ -1244,18 +1328,33 @@ _RENDER_WITH_CAMERA_SCRIPT = """\
     // Set render camera
     opts.camera = cam;
 
-    // Set output if provided
-    if (args.outputPath) {
-        opts.renderImgToId = 0;
-        opts.renderImgFilename = args.outputPath;
+    var path = args.outputPath || opts.renderImgFilename;
+    if (!path) {
+        throw new Error("Render output path is not set. Pass output_path or call daz_set_render_output first — otherwise Studio opens a filename dialog.");
     }
+    opts.renderImgToId = opts.DirectToFile;
+    opts.renderImgFilename = path;
+    try {
+        var helper = renderMgr.getOptionHelper();
+        if (helper) {
+            var slash = Math.max(String(path).lastIndexOf("/"), String(path).lastIndexOf("\\\\"));
+            var dir = slash >= 0 ? String(path).substring(0, slash) : "";
+            var name = slash >= 0 ? String(path).substring(slash + 1) : String(path);
+            var np = helper.findProperty("Image Name");
+            var pp = helper.findProperty("Image Path");
+            if (np && typeof np.setValue === "function") np.setValue(name);
+            if (pp && typeof pp.setValue === "function") pp.setValue(dir);
+        }
+    } catch (e) {}
+    opts.applyChanges();
+    if (Number(opts.renderImgToId) !== Number(opts.DirectToFile) || !opts.renderImgFilename) {
+        throw new Error("Render-to-file did not persist (renderImgToId=" + opts.renderImgToId + ", file=" + opts.renderImgFilename + ")");
+    }
+    renderMgr.doRender(opts);
 
-    // Render
-    renderMgr.doRender();
-
-    // Restore previous camera
     if (previousCam) {
         opts.camera = previousCam;
+        opts.applyChanges();
     }
 
     return {
@@ -1282,13 +1381,38 @@ _GET_RENDER_SETTINGS_SCRIPT = """\
     var directToFile = Number(opts.DirectToFile);
     var rendersToFile = Number(opts.renderImgToId) === directToFile;
 
+    var sz = opts.imageSize;
+    var renderType = Number(opts.renderType);
+    var engine = "other";
+    var renderTypeName = null;
+    if (renderType === Number(opts.ScreenShot)) {
+        engine = "viewport";
+        renderTypeName = "ScreenShot";
+    } else if (renderType === Number(opts.HardwareAssisted)) {
+        engine = "multi_pass_opengl";
+        renderTypeName = "HardwareAssisted";
+    } else if (renderType === Number(opts.Software)) {
+        engine = "iray";
+        renderTypeName = "Software";
+    }
+    var active = renderMgr.getActiveRenderer();
     var result = {
         renderToFile: rendersToFile,
         outputPath: rendersToFile ? opts.renderImgFilename : null,
         aspectRatio: opts.aspect,
         aspectWidth: opts.aspectWidth,
-        aspectHeight: opts.aspectHeight
+        aspectHeight: opts.aspectHeight,
+        width: sz ? sz.width : null,
+        height: sz ? sz.height : null,
+        engine: engine,
+        renderType: renderType,
+        renderTypeName: renderTypeName,
+        activeRenderer: active ? active.getName() : null,
+        activeRendererClass: active ? active.className() : null
     };
+    if (engine === "viewport") {
+        result.warning = "Engine Viewport opens a filename dialog unless DirectToFile + output path are set.";
+    }
 
     // Get current render camera
     if (opts.camera) {
@@ -1331,13 +1455,11 @@ _BATCH_RENDER_CAMERAS_SCRIPT = """\
             }
             outputPath += baseFilename + "_" + camLabel.replace(/[^a-zA-Z0-9]/g, "_") + ".png";
 
-            // Set camera and output
             opts.camera = cam;
-            opts.renderImgToId = 0;
+            opts.renderImgToId = opts.DirectToFile;
             opts.renderImgFilename = outputPath;
-
-            // Render
-            renderMgr.doRender();
+            opts.applyChanges();
+            renderMgr.doRender(opts);
 
             rendered.push({
                 camera: cam.getLabel(),
@@ -1346,9 +1468,9 @@ _BATCH_RENDER_CAMERAS_SCRIPT = """\
         }
     }
 
-    // Restore previous camera
     if (previousCam) {
         opts.camera = previousCam;
+        opts.applyChanges();
     }
 
     return {
@@ -1383,14 +1505,15 @@ _RENDER_ANIMATION_SCRIPT = """\
         }
     }
 
+    opts.renderImgToId = opts.DirectToFile;
+    opts.applyChanges();
+
     var rendered = [];
     var previousFrame = Scene.getFrame();
 
     for (var frame = startFrame; frame <= endFrame; frame++) {
-        // Set frame
         Scene.setFrame(frame);
 
-        // Build output path with zero-padding
         var frameStr = String(frame);
         while (frameStr.length < 4) frameStr = "0" + frameStr;
 
@@ -1401,12 +1524,9 @@ _RENDER_ANIMATION_SCRIPT = """\
         }
         outputPath += filenamePattern + "_" + frameStr + ".png";
 
-        // Set output
-        opts.renderImgToId = 0;
         opts.renderImgFilename = outputPath;
-
-        // Render
-        renderMgr.doRender();
+        opts.applyChanges();
+        renderMgr.doRender(opts);
 
         rendered.push({
             frame: frame,
@@ -1417,9 +1537,9 @@ _RENDER_ANIMATION_SCRIPT = """\
     // Restore previous frame
     Scene.setFrame(previousFrame);
 
-    // Restore previous camera
     if (previousCam) {
         opts.camera = previousCam;
+        opts.applyChanges();
     }
 
     return {
@@ -6053,17 +6173,53 @@ _GET_MATERIAL_SCRIPT = """\
         }
     }
     if (!mat) throw new Error("Material not found: " + args.materialName);
-    function toHex(n) { return ("0" + Math.round(n).toString(16)).slice(-2); }
+    function toHex(n) {
+        var v = Math.round(n);
+        if (v < 0) v = 0;
+        if (v > 255) v = 255;
+        return ("0" + v.toString(16)).slice(-2);
+    }
+    function colorChannel(col, name) {
+        if (!col) return 0;
+        var v = col[name];
+        if (typeof v === "function") v = v.call(col);
+        return v;
+    }
+    function colorToHex(col) {
+        if (!col) return null;
+        var r = colorChannel(col, "red");
+        var g = colorChannel(col, "green");
+        var b = colorChannel(col, "blue");
+        if (r <= 1 && g <= 1 && b <= 1) {
+            r *= 255; g *= 255; b *= 255;
+        }
+        return "#" + toHex(r) + toHex(g) + toHex(b);
+    }
+    function readColorProp(prop) {
+        try {
+            if (typeof prop.getFloatColorValue === "function") {
+                var fc = prop.getFloatColorValue();
+                if (fc && typeof fc.getColor === "function") {
+                    var qc = fc.getColor();
+                    if (qc) return colorToHex(qc);
+                }
+                if (fc) return colorToHex(fc);
+            }
+        } catch (e1) {}
+        try {
+            if (typeof prop.getColorValue === "function") {
+                return colorToHex(prop.getColorValue());
+            }
+        } catch (e2) {}
+        return null;
+    }
     var props = [];
     for (var p = 0; p < mat.getNumProperties(); p++) {
         var prop = mat.getProperty(p);
         var entry = { name: prop.getName(), label: prop.getLabel(), type: "unknown", value: null };
-        if (prop.inherits("DzColorProperty")) {
+        if (prop.inherits("DzColorProperty") || prop.inherits("DzFloatColorProperty")) {
             entry.type = "color";
-            try {
-                var col = prop.getColorValue();
-                entry.value = "#" + toHex(col.red()) + toHex(col.green()) + toHex(col.blue());
-            } catch(e) { entry.value = null; }
+            entry.value = readColorProp(prop);
         } else if (prop.inherits("DzNumericProperty")) {
             entry.type = "numeric";
             entry.value = prop.getValue();
@@ -6134,33 +6290,45 @@ _SET_MATERIAL_PROPERTY_SCRIPT = """\
 # Phase 5: Direct morph setting
 # ---------------------------------------------------------------------------
 
-_SET_MORPH_SCRIPT = """\
-(function(){
+_SET_MORPH_SCRIPT = "(function(){\n" + _RESOLVE_NODE_JS + """
     var args = getArguments()[0] || {};
-    var node = Scene.findNodeByLabel(args.nodeLabel);
-    if (!node) node = Scene.findNode(args.nodeLabel);
-    if (!node) throw new Error("Node not found: " + args.nodeLabel);
+    var node = resolveNode(args.nodeLabel);
     var search = (args.morphName || "").toLowerCase();
+    var channels = [];
+    function addChannel(p) {
+        if (p && p.inherits("DzNumericProperty")) channels.push(p);
+    }
+    var i, p, obj, m, j;
+    for (i = 0; i < node.getNumProperties(); i++) addChannel(node.getProperty(i));
+    obj = (typeof node.getObject === "function") ? node.getObject() : null;
+    if (obj && typeof obj.getNumModifiers === "function") {
+        for (i = 0; i < obj.getNumModifiers(); i++) {
+            m = obj.getModifier(i);
+            if (!m) continue;
+            if (typeof m.getValueChannel === "function") addChannel(m.getValueChannel());
+            if (typeof m.getNumProperties === "function") {
+                for (j = 0; j < m.getNumProperties(); j++) addChannel(m.getProperty(j));
+            }
+        }
+    }
     var prop = null;
-    // Exact label or name match first
-    for (var i = 0; i < node.getNumProperties(); i++) {
-        var p = node.getProperty(i);
-        if (!p.inherits("DzNumericProperty")) continue;
+    for (i = 0; i < channels.length; i++) {
+        p = channels[i];
         if (p.getLabel().toLowerCase() === search || p.getName().toLowerCase() === search) {
             prop = p; break;
         }
     }
-    // Substring fallback
     if (!prop) {
-        for (var i = 0; i < node.getNumProperties(); i++) {
-            var p = node.getProperty(i);
-            if (!p.inherits("DzNumericProperty")) continue;
-            if (p.getLabel().toLowerCase().indexOf(search) !== -1) {
+        for (i = 0; i < channels.length; i++) {
+            p = channels[i];
+            if (p.getLabel().toLowerCase().indexOf(search) !== -1 ||
+                p.getName().toLowerCase().indexOf(search) !== -1) {
                 prop = p; break;
             }
         }
     }
     if (!prop) throw new Error("Morph not found: " + args.morphName);
+    if (typeof prop.lock === "function" && prop.isLocked && prop.isLocked()) prop.lock(false);
     prop.setValue(args.value);
     return {
         node: node.getLabel(),
@@ -6175,12 +6343,9 @@ _SET_MORPH_SCRIPT = """\
 # Phase 5: Node lifecycle
 # ---------------------------------------------------------------------------
 
-_DELETE_NODE_SCRIPT = """\
-(function(){
+_DELETE_NODE_SCRIPT = "(function(){\n" + _RESOLVE_NODE_JS + """
     var args = getArguments()[0] || {};
-    var node = Scene.findNodeByLabel(args.nodeLabel);
-    if (!node) node = Scene.findNode(args.nodeLabel);
-    if (!node) throw new Error("Node not found: " + args.nodeLabel);
+    var node = resolveNode(args.nodeLabel);
     var label = node.getLabel();
     var childCount = node.getNumNodeChildren();
     Scene.removeNode(node);
@@ -6233,6 +6398,15 @@ _CREATE_LIGHT_SCRIPT = """\
     }
     light.setLabel(args.label || (t + "_light"));
     Scene.addNode(light);
+    // See _CREATE_CAMERA_SCRIPT for why this is needed: a script-created node's
+    // internal name is empty until set explicitly, and daz_list_lights (via
+    // dazpy) resolves nodes by that name.
+    var baseName = String(args.label || (t + "_light")).replace(/[^A-Za-z0-9_]/g, "_") || "Light";
+    var candidateName = baseName, nameSuffix = 1;
+    while (Scene.findNode(candidateName)) {
+        candidateName = baseName + "_" + (++nameSuffix);
+    }
+    light.setName(candidateName);
     var xp = light.findProperty("XTranslate");
     var yp = light.findProperty("YTranslate");
     var zp = light.findProperty("ZTranslate");
@@ -6299,6 +6473,18 @@ _CREATE_CAMERA_SCRIPT = """\
     var cam = new DzBasicCamera();
     cam.setLabel(args.label || "Camera");
     Scene.addNode(cam);
+    // DAZ Studio leaves the internal name ("" via getName()) unset for a node
+    // created via script + Scene.addNode() (confirmed live), unlike a UI-created
+    // one. dazpy's node lookup by name (used by daz_list_cameras) needs a
+    // non-empty, unique name to resolve this camera afterward -- setName() does
+    // NOT auto-uniquify on collision (confirmed live: Scene.findNode() then just
+    // returns whichever node got the name first), so dedupe manually.
+    var baseName = String(args.label || "Camera").replace(/[^A-Za-z0-9_]/g, "_") || "Camera";
+    var candidateName = baseName, nameSuffix = 1;
+    while (Scene.findNode(candidateName)) {
+        candidateName = baseName + "_" + (++nameSuffix);
+    }
+    cam.setName(candidateName);
     var xp = cam.findProperty("XTranslate");
     var yp = cam.findProperty("YTranslate");
     var zp = cam.findProperty("ZTranslate");
@@ -6391,25 +6577,91 @@ _SET_RENDER_OUTPUT_SCRIPT = """\
     var changed = {};
     if (args.outputPath) {
         opts.renderImgFilename = args.outputPath;
-        opts.renderImgToId = 0;  // 0 = render to file
+        opts.renderImgToId = opts.DirectToFile;
         changed.output_path = args.outputPath;
     }
-    if (args.width !== undefined && args.width !== null) {
-        opts.aspectWidth = args.width;
-        changed.width = args.width;
+    if ((args.width !== undefined && args.width !== null) ||
+        (args.height !== undefined && args.height !== null)) {
+        var sz = opts.imageSize;
+        var w = (args.width !== undefined && args.width !== null) ? args.width : sz.width;
+        var h = (args.height !== undefined && args.height !== null) ? args.height : sz.height;
+        opts.imageSize = new QSize(w, h);
+        if (args.width !== undefined && args.width !== null) changed.width = args.width;
+        if (args.height !== undefined && args.height !== null) changed.height = args.height;
     }
-    if (args.height !== undefined && args.height !== null) {
-        opts.aspectHeight = args.height;
-        changed.height = args.height;
-    }
+    opts.applyChanges();
+    var cur = opts.imageSize;
     return {
         changed: changed,
         current: {
             output_path: opts.renderImgFilename || null,
-            width: opts.aspectWidth || null,
-            height: opts.aspectHeight || null
+            width: cur ? cur.width : null,
+            height: cur ? cur.height : null
         }
     };
+})()
+"""
+
+# args: {engine}
+# Returns: {success, engine, renderType, renderTypeName, activeRenderer,
+#           activeRendererClass, warning?}
+# DS6 Engine dropdown is DzRenderOptions.renderType, not getActiveRenderer().
+_SET_RENDER_ENGINE_SCRIPT = """\
+(function(){
+    var args = getArguments()[0] || {};
+    var requested = String(args.engine || "").toLowerCase().replace(/-/g, "_").replace(/ /g, "_");
+    if (requested === "opengl" || requested === "hardware" || requested === "hardware_assisted") {
+        requested = "multi_pass_opengl";
+    }
+    if (requested === "nvidia_iray" || requested === "nvidia_iray_mdl" || requested === "software") {
+        requested = "iray";
+    }
+    if (requested !== "iray" && requested !== "multi_pass_opengl" && requested !== "viewport") {
+        throw new Error("Unknown render engine: " + args.engine + ". Use iray, multi_pass_opengl, or viewport.");
+    }
+
+    var mgr = App.getRenderMgr();
+    var opts = mgr.getRenderOptions();
+    if (requested === "viewport") {
+        opts.renderType = opts.ScreenShot;
+    } else if (requested === "multi_pass_opengl") {
+        opts.renderType = opts.HardwareAssisted;
+    } else {
+        var iray = mgr.findRenderer("DzIrayRenderer");
+        if (!iray) throw new Error("DzIrayRenderer is not registered");
+        mgr.setActiveRenderer(iray);
+        opts.renderType = opts.Software;
+    }
+    opts.applyChanges();
+    try {
+        var pane = MainWindow.getPaneMgr().findPane("DzRenderSettingsPane");
+        if (pane && pane.refresh) pane.refresh();
+    } catch (e) {}
+
+    var renderType = Number(opts.renderType);
+    var engine = requested;
+    var renderTypeName = renderType === Number(opts.ScreenShot) ? "ScreenShot"
+        : renderType === Number(opts.HardwareAssisted) ? "HardwareAssisted"
+        : renderType === Number(opts.Software) ? "Software" : null;
+    var expected = requested === "viewport" ? Number(opts.ScreenShot)
+        : requested === "multi_pass_opengl" ? Number(opts.HardwareAssisted)
+        : Number(opts.Software);
+    if (renderType !== expected) {
+        throw new Error("Render engine readback mismatch: wanted " + requested + " got renderType " + renderType);
+    }
+    var active = mgr.getActiveRenderer();
+    var result = {
+        success: true,
+        engine: engine,
+        renderType: renderType,
+        renderTypeName: renderTypeName,
+        activeRenderer: active ? active.getName() : null,
+        activeRendererClass: active ? active.className() : null
+    };
+    if (engine === "viewport") {
+        result.warning = "Engine Viewport opens a filename dialog unless DirectToFile + output path are set.";
+    }
+    return result;
 })()
 """
 
@@ -6582,13 +6834,16 @@ _UNFIT_ITEM_SCRIPT = """\
 
 _RUN_DFORCE_SIMULATION_SCRIPT = """\
 (function(){
+    // NOTE (Bug 21): DzSimulationMgr.simulate()'s DzTimeRange argument does
+    // NOT control how much is actually simulated -- verified live: calling
+    // with a 0-frame range and a 30-frame range produced bit-identical
+    // results, and pre-setting Scene.setAnimRange() to a 1-frame window
+    // first made no difference either. The actual duration is governed by
+    // DAZ Studio's own Simulation Settings > Duration panel, which has no
+    // known scripting entry point. Do not reintroduce start/end frame
+    // parameters here without a verified way to make them do something.
     var args = getArguments()[0] || {};
     var nodeLabel = args.nodeLabel;
-    var timeStep = Scene.getTimeStep();
-    var startFrame = args.startFrame !== undefined ? parseInt(args.startFrame) : 0;
-    var endFrame = args.endFrame !== undefined
-        ? parseInt(args.endFrame)
-        : Math.round(Scene.getAnimRange().end / timeStep);
 
     if (nodeLabel) {
         var node = Scene.findNodeByLabel(nodeLabel);
@@ -6602,8 +6857,8 @@ _RUN_DFORCE_SIMULATION_SCRIPT = """\
     if (!simMgr) throw new Error("DzSimulationMgr not available via App.getSimulationMgr()");
 
     if (typeof simMgr.simulate === 'function') {
-        var range = new DzTimeRange(startFrame * timeStep, endFrame * timeStep);
-        simMgr.simulate(range);
+        var animRange = Scene.getAnimRange();
+        simMgr.simulate(new DzTimeRange(animRange.start, animRange.end));
     } else {
         var methods = [];
         for (var k in simMgr) { if (typeof simMgr[k] === 'function') methods.push(k); }
@@ -6612,9 +6867,7 @@ _RUN_DFORCE_SIMULATION_SCRIPT = """\
 
     return {
         success: true,
-        node: nodeLabel || "all simulatable nodes",
-        start_frame: startFrame,
-        end_frame: endFrame
+        node: nodeLabel || "all simulatable nodes"
     };
 })()
 """
@@ -6670,50 +6923,39 @@ _SET_DFORCE_PROPERTY_SCRIPT = """\
     if (!node) node = Scene.findNode(nodeLabel);
     if (!node) throw new Error("Node not found: " + nodeLabel);
 
-    var modifier = null;
-
-    // Search node-level modifiers first
-    if (typeof node.getNumModifiers === 'function') {
-        for (var i = 0; i < node.getNumModifiers(); i++) {
-            var mod = node.getModifier(i);
-            if (mod) {
-                var cn = mod.className ? mod.className() : "";
-                if (cn.toLowerCase().indexOf("dforce") !== -1 || cn.toLowerCase().indexOf("dynamics") !== -1) {
-                    modifier = mod;
-                    break;
-                }
-            }
+    function isDforceMod(mod) {
+        if (!mod) return false;
+        var cn = (mod.className ? mod.className() : "").toLowerCase();
+        if (cn.indexOf("dforce") !== -1 || cn.indexOf("dynamics") !== -1) return true;
+        if (typeof mod.findProperty === "function") {
+            if (mod.findProperty("Freeze Simulation") || mod.findProperty("Dynamics Strength")) return true;
         }
+        return false;
     }
-
-    // Fall back to shape-level modifiers
-    if (!modifier && typeof node.getObject === 'function') {
-        var obj = node.getObject();
-        if (obj) {
-            var shape = obj.getCurrentShape ? obj.getCurrentShape() : null;
-            if (shape && typeof shape.getNumModifiers === 'function') {
-                for (var j = 0; j < shape.getNumModifiers(); j++) {
-                    var mod2 = shape.getModifier(j);
-                    if (mod2) {
-                        var cn2 = mod2.className ? mod2.className() : "";
-                        if (cn2.toLowerCase().indexOf("dforce") !== -1 || cn2.toLowerCase().indexOf("dynamics") !== -1) {
-                            modifier = mod2;
-                            break;
-                        }
-                    }
-                }
-            }
+    function searchMods(host) {
+        if (!host || typeof host.getNumModifiers !== "function") return null;
+        for (var i = 0; i < host.getNumModifiers(); i++) {
+            var mod = host.getModifier(i);
+            if (isDforceMod(mod)) return mod;
         }
+        return null;
     }
+    var obj = (typeof node.getObject === "function") ? node.getObject() : null;
+    var shape = obj && obj.getCurrentShape ? obj.getCurrentShape() : null;
+    var modifier = searchMods(node) || searchMods(obj) || searchMods(shape);
 
     if (!modifier) {
         var nodeModNames = [];
-        if (typeof node.getNumModifiers === 'function') {
-            for (var nm = 0; nm < node.getNumModifiers(); nm++) {
-                var m = node.getModifier(nm);
-                if (m) nodeModNames.push(m.className ? m.className() : "unknown");
+        function collectMods(host, prefix) {
+            if (!host || typeof host.getNumModifiers !== "function") return;
+            for (var nm = 0; nm < host.getNumModifiers(); nm++) {
+                var m = host.getModifier(nm);
+                nodeModNames.push(prefix + (m && m.className ? m.className() : "unknown"));
             }
         }
+        collectMods(node, "node:");
+        collectMods(obj, "obj:");
+        collectMods(shape, "shape:");
         throw new Error("No dForce modifier found on '" + nodeLabel + "'. Node modifiers: [" + nodeModNames.join(", ") + "]");
     }
 
@@ -6754,6 +6996,322 @@ _SET_DFORCE_PROPERTY_SCRIPT = """\
         property: prop.getName(),
         old_value: oldValue,
         new_value: value
+    };
+})()
+"""
+
+_RUN_TRANSFER_UTILITY_SCRIPT = """\
+(function(){
+    var args = getArguments()[0] || {};
+    var sourceLabel = args.sourceLabel;
+    var targetLabel = args.targetLabel;
+
+    var source = Scene.findNodeByLabel(sourceLabel);
+    if (!source) source = Scene.findNode(sourceLabel);
+    if (!source) throw new Error("Source node not found: " + sourceLabel);
+
+    var target = Scene.findNodeByLabel(targetLabel);
+    if (!target) target = Scene.findNode(targetLabel);
+    if (!target) throw new Error("Target node not found: " + targetLabel);
+
+    var tu = new DzTransferUtility();
+    tu.setSilentImporters(true);
+    tu.setSource(source);
+    tu.setTarget(target);
+    tu.setTransferBinding(!!args.transferBinding);
+    tu.setTransferMorphs(!!args.transferMorphs);
+    tu.setTransferUVs(!!args.transferUVs);
+    tu.setTransferMaterialGroups(!!args.transferMaterialGroups);
+    tu.setTransferFaceGroups(!!args.transferFaceGroups);
+    tu.setFitToFigure(!!args.fitToFigure);
+    tu.setParentToFigure(!!args.parentToFigure);
+    tu.setMergeHierarchies(!!args.mergeHierarchies);
+
+    var ok = tu.doTransfer();
+    if (!ok) {
+        throw new Error("DzTransferUtility.doTransfer() returned false (source: '" +
+            sourceLabel + "', target: '" + targetLabel + "')");
+    }
+
+    return {
+        success: true,
+        source: source.getLabel(),
+        target: target.getLabel()
+    };
+})()
+"""
+
+_RESOLVE_DFORCE_PROVIDER_JS = """
+    function resolveDforceProvider(nodeLabel, materialName) {
+        var node = Scene.findNodeByLabel(nodeLabel);
+        if (!node) node = Scene.findNode(nodeLabel);
+        if (!node) throw new Error("Node not found: " + nodeLabel);
+        var obj = node.getObject();
+        if (!obj) throw new Error("Node has no geometry: " + nodeLabel);
+        var shape = obj.getCurrentShape();
+        if (!shape) throw new Error("Node has no shape: " + nodeLabel);
+        if (typeof shape.findSimulationSettingsProvider !== "function") {
+            throw new Error("findSimulationSettingsProvider not available on this shape/DS version");
+        }
+        var matName = materialName;
+        if (!matName) {
+            if (shape.getNumMaterials() === 0) throw new Error("Node has no materials: " + nodeLabel);
+            matName = shape.getMaterial(0).getName();
+        }
+        var provider = shape.findSimulationSettingsProvider(matName);
+        if (!provider) {
+            var names = [];
+            if (typeof shape.getSimulationProviderNames === "function") {
+                var pn = shape.getSimulationProviderNames();
+                for (var i = 0; i < pn.length; i++) names.push(pn[i]);
+            }
+            throw new Error("No dForce simulation settings for material '" + matName +
+                "' on '" + nodeLabel + "' (dForce modifier may be missing). Available: " + names.join(", "));
+        }
+        return { node: node, materialName: matName, provider: provider };
+    }
+"""
+
+_GET_DFORCE_SURFACE_PROPERTIES_SCRIPT = "(function(){\n" + _RESOLVE_DFORCE_PROVIDER_JS + """
+    var args = getArguments()[0] || {};
+    var resolved = resolveDforceProvider(args.nodeLabel, args.materialName);
+    var provider = resolved.provider;
+
+    var props = [];
+    for (var p = 0; p < provider.getNumProperties(); p++) {
+        var prop = provider.getProperty(p);
+        var entry = { name: prop.getName(), label: prop.getLabel(), type: "unknown", value: null };
+        if (prop.inherits("DzNumericProperty")) {
+            entry.type = "numeric";
+            entry.value = prop.getValue();
+        }
+        props.push(entry);
+    }
+
+    return {
+        node: resolved.node.getLabel(),
+        material: resolved.materialName,
+        property_count: props.length,
+        properties: props
+    };
+})()
+"""
+
+_SET_DFORCE_SURFACE_PROPERTY_SCRIPT = "(function(){\n" + _RESOLVE_DFORCE_PROVIDER_JS + """
+    var args = getArguments()[0] || {};
+    var resolved = resolveDforceProvider(args.nodeLabel, args.materialName);
+    var provider = resolved.provider;
+
+    var prop = provider.findProperty(args.propertyName);
+    if (!prop) {
+        var available = [];
+        for (var p = 0; p < provider.getNumProperties(); p++) {
+            available.push(provider.getProperty(p).getName());
+        }
+        throw new Error("Property '" + args.propertyName + "' not found on dForce surface '" +
+            resolved.materialName + "'. Available: " + available.join(", "));
+    }
+    if (!prop.inherits("DzNumericProperty")) {
+        throw new Error("Property '" + args.propertyName + "' is not a settable numeric property");
+    }
+
+    var oldValue = prop.getValue();
+    prop.setValue(parseFloat(args.value));
+
+    return {
+        success: true,
+        node: resolved.node.getLabel(),
+        material: resolved.materialName,
+        property: prop.getName(),
+        old_value: oldValue,
+        new_value: prop.getValue()
+    };
+})()
+"""
+
+_ADD_DFORCE_DYNAMIC_SURFACE_SCRIPT = """\
+(function(){
+    var args = getArguments()[0] || {};
+    var nodeLabel = args.nodeLabel;
+
+    var node = Scene.findNodeByLabel(nodeLabel);
+    if (!node) node = Scene.findNode(nodeLabel);
+    if (!node) throw new Error("Node not found: " + nodeLabel);
+
+    function hasDforceModifier(host) {
+        if (!host || typeof host.getNumModifiers !== 'function') return false;
+        for (var i = 0; i < host.getNumModifiers(); i++) {
+            var mod = host.getModifier(i);
+            if (mod.className && mod.className() === "DzDForceModifier") return true;
+        }
+        return false;
+    }
+
+    var obj = (typeof node.getObject === "function") ? node.getObject() : null;
+    if (hasDforceModifier(node) || hasDforceModifier(obj)) {
+        return {
+            success: true,
+            node: node.getLabel(),
+            already_present: true,
+            modifier: "DzDForceModifier"
+        };
+    }
+
+    var mgr = MainWindow.getActionMgr();
+    var act = mgr.findAction("DzAddDForceModifierDynamicSurfaceAction");
+    if (!act) throw new Error("Action 'DzAddDForceModifierDynamicSurfaceAction' not found in DzActionMgr");
+
+    Scene.selectAllNodes(false);
+    node.select(true);
+    act.trigger();
+
+    obj = (typeof node.getObject === "function") ? node.getObject() : null;
+    if (!hasDforceModifier(node) && !hasDforceModifier(obj)) {
+        throw new Error("Action triggered but no DzDForceModifier found on '" + nodeLabel + "' afterward");
+    }
+
+    return {
+        success: true,
+        node: node.getLabel(),
+        already_present: false,
+        modifier: "DzDForceModifier"
+    };
+})()
+"""
+
+_SET_DFORCE_INFLUENCE_WEIGHTS_SCRIPT = """\
+(function(){
+    var args = getArguments()[0] || {};
+    var nodeLabel = args.nodeLabel;
+    var defaultWeight = args.defaultWeight !== undefined ? parseFloat(args.defaultWeight) : 1.0;
+    var overrides = args.vertexWeights || {};
+
+    var node = Scene.findNodeByLabel(nodeLabel);
+    if (!node) node = Scene.findNode(nodeLabel);
+    if (!node) throw new Error("Node not found: " + nodeLabel);
+
+    function isDforceMod(mod) {
+        if (!mod) return false;
+        var cn = (mod.className ? mod.className() : "").toLowerCase();
+        if (cn.indexOf("dforce") !== -1 || cn.indexOf("dynamics") !== -1) return true;
+        if (typeof mod.findProperty === "function") {
+            if (mod.findProperty("Freeze Simulation") || mod.findProperty("Dynamics Strength")) return true;
+        }
+        return false;
+    }
+    function searchMods(host) {
+        if (!host || typeof host.getNumModifiers !== "function") return null;
+        for (var i = 0; i < host.getNumModifiers(); i++) {
+            var mod = host.getModifier(i);
+            if (isDforceMod(mod)) return mod;
+        }
+        return null;
+    }
+    var obj = (typeof node.getObject === "function") ? node.getObject() : null;
+    var shape = obj && obj.getCurrentShape ? obj.getCurrentShape() : null;
+    var modifier = searchMods(node) || searchMods(obj) || searchMods(shape);
+    if (!modifier) {
+        throw new Error("No dForce modifier found on '" + nodeLabel + "'. Add one first with daz_add_dforce_dynamic_surface.");
+    }
+
+    // The dForce simulation vertex count (modifier.getTargetVertexCount()) is NOT
+    // the same as the node's rendered/subdivided vertex count (getCachedGeom() —
+    // confirmed live to differ, e.g. 3401 vs 13456 on the same node). Weight maps
+    // must be sized to the simulation resolution, or setInfluenceWeights() silently
+    // replaces any existing (correctly-sized) map with a wrong-sized one.
+    var numVerts = modifier.getTargetVertexCount();
+    if (!numVerts) {
+        var existing = modifier.getInfluenceWeights();
+        numVerts = existing ? existing.getNumWeights() : 0;
+    }
+    if (!numVerts) {
+        throw new Error(
+            "Could not determine dForce simulation vertex count for '" + nodeLabel +
+            "' (modifier.getTargetVertexCount() returned 0 and no existing influence " +
+            "weights to infer it from). Run a dForce simulation on this node at least " +
+            "once first, then retry."
+        );
+    }
+
+    var wm = new DzWeightMap();
+    wm.setNumWeights(numVerts);
+    for (var i = 0; i < numVerts; i++) {
+        wm.setFloatWeight(i, defaultWeight);
+    }
+
+    var overriddenCount = 0;
+    for (var key in overrides) {
+        var idx = parseInt(key, 10);
+        if (isNaN(idx) || idx < 0 || idx >= numVerts) continue;
+        wm.setFloatWeight(idx, parseFloat(overrides[key]));
+        overriddenCount++;
+    }
+
+    modifier.setInfluenceWeights(wm);
+
+    return {
+        success: true,
+        node: node.getLabel(),
+        vertex_count: numVerts,
+        default_weight: defaultWeight,
+        overridden_count: overriddenCount
+    };
+})()
+"""
+
+_GET_DFORCE_INFLUENCE_WEIGHTS_SCRIPT = """\
+(function(){
+    var args = getArguments()[0] || {};
+    var nodeLabel = args.nodeLabel;
+
+    var node = Scene.findNodeByLabel(nodeLabel);
+    if (!node) node = Scene.findNode(nodeLabel);
+    if (!node) throw new Error("Node not found: " + nodeLabel);
+
+    function isDforceMod(mod) {
+        if (!mod) return false;
+        var cn = (mod.className ? mod.className() : "").toLowerCase();
+        if (cn.indexOf("dforce") !== -1 || cn.indexOf("dynamics") !== -1) return true;
+        if (typeof mod.findProperty === "function") {
+            if (mod.findProperty("Freeze Simulation") || mod.findProperty("Dynamics Strength")) return true;
+        }
+        return false;
+    }
+    function searchMods(host) {
+        if (!host || typeof host.getNumModifiers !== "function") return null;
+        for (var i = 0; i < host.getNumModifiers(); i++) {
+            var mod = host.getModifier(i);
+            if (isDforceMod(mod)) return mod;
+        }
+        return null;
+    }
+    var obj = (typeof node.getObject === "function") ? node.getObject() : null;
+    var shape = obj && obj.getCurrentShape ? obj.getCurrentShape() : null;
+    var modifier = searchMods(node) || searchMods(obj) || searchMods(shape);
+    if (!modifier) {
+        throw new Error("No dForce modifier found on '" + nodeLabel + "'. Add one first with daz_add_dforce_dynamic_surface.");
+    }
+
+    var wm = modifier.getInfluenceWeights();
+    if (!wm) {
+        return {
+            success: true,
+            node: node.getLabel(),
+            has_influence_weights: false,
+            weights: []
+        };
+    }
+
+    var n = wm.getNumWeights();
+    var weights = [];
+    for (var i = 0; i < n; i++) weights.push(wm.getFloatWeight(i));
+
+    return {
+        success: true,
+        node: node.getLabel(),
+        has_influence_weights: true,
+        vertex_count: n,
+        weights: weights
     };
 })()
 """
@@ -6880,6 +7438,26 @@ _APPLY_MATERIAL_PRESET_SCRIPT = """\
         for (var s = 0; s < shapeForSelect.getNumMaterials(); s++) {
             shapeForSelect.getMaterial(s).select(true);
         }
+    }
+
+    var mapPaths = args.mapPaths || [];
+    var allowMissing = args.allowMissing === true;
+    var missing = [];
+    var mi, rel, absPath, info;
+    for (mi = 0; mi < mapPaths.length; mi++) {
+        rel = mapPaths[mi];
+        if (!rel) continue;
+        info = new DzFileInfo(rel);
+        if (info && typeof info.exists === "function" && info.exists()) continue;
+        absPath = App.getContentMgr().getAbsolutePath(rel, true, "");
+        if (absPath) {
+            info = new DzFileInfo(absPath);
+            if (info && typeof info.exists === "function" && info.exists()) continue;
+        }
+        missing.push(rel);
+    }
+    if (missing.length && !allowMissing) {
+        throw new Error("Missing texture files (refusing openFile to avoid Missing Files dialog): " + missing.join(", "));
     }
 
     var ioSettings = new DzFileIOSettings();
@@ -7019,8 +7597,9 @@ _COPY_MATERIAL_SCRIPT = """\
     if (!srcNode) srcNode = Scene.findNode(srcNodeLabel);
     if (!srcNode) throw new Error("Source node not found: " + srcNodeLabel);
 
-    var srcShape = typeof srcNode.getObject === 'function' ? srcNode.getObject() : null;
-    if (!srcShape) throw new Error("Source node has no geometry: " + srcNodeLabel);
+    var srcObj = typeof srcNode.getObject === 'function' ? srcNode.getObject() : null;
+    var srcShape = srcObj && typeof srcObj.getCurrentShape === 'function' ? srcObj.getCurrentShape() : null;
+    if (!srcShape) throw new Error("Source node has no material shape: " + srcNodeLabel);
 
     var srcMat = null;
     for (var i = 0; i < srcShape.getNumMaterials(); i++) {
@@ -7044,8 +7623,9 @@ _COPY_MATERIAL_SCRIPT = """\
     if (!dstNode) dstNode = Scene.findNode(dstNodeLabel);
     if (!dstNode) throw new Error("Dest node not found: " + dstNodeLabel);
 
-    var dstShape = typeof dstNode.getObject === 'function' ? dstNode.getObject() : null;
-    if (!dstShape) throw new Error("Dest node has no geometry: " + dstNodeLabel);
+    var dstObj = typeof dstNode.getObject === 'function' ? dstNode.getObject() : null;
+    var dstShape = dstObj && typeof dstObj.getCurrentShape === 'function' ? dstObj.getCurrentShape() : null;
+    if (!dstShape) throw new Error("Dest node has no material shape: " + dstNodeLabel);
 
     var dstMat = null;
     for (var j = 0; j < dstShape.getNumMaterials(); j++) {
@@ -7285,30 +7865,56 @@ _EXPORT_SCENE_SCRIPT = """\
     var exportMgr = App.getExportMgr();
     if (!exportMgr) throw new Error("DzExportMgr not available in this version of DAZ Studio.");
 
-    // Build IO settings
-    var settings = new DzFileIOSettings();
-    settings.setBoolValue("SelectedOnly", true);
-    settings.setBoolValue("Morphs", includeMorphs);
-    settings.setBoolValue("Pose", applyCurrentPose);
-    settings.setFloatValue("Scale", scaleFactor);
-
-    // Attempt export; doExport returns true on success
-    var ok = exportMgr.doExport(outputPath, format, settings);
-
-    if (!ok) {
-        // List available exporters for a helpful error message
-        var available = [];
-        var numExp = typeof exportMgr.getNumExporters === 'function' ? exportMgr.getNumExporters() : 0;
+    var exporter = typeof exportMgr.findExporter === "function" ? exportMgr.findExporter(outputPath) : null;
+    if (!exporter) {
+        var numExp = typeof exportMgr.getNumExporters === "function" ? exportMgr.getNumExporters() : 0;
         for (var k = 0; k < numExp; k++) {
-            var exp = exportMgr.getExporter(k);
-            if (exp && typeof exp.getDescription === 'function') {
-                available.push(exp.getDescription());
+            var cand = exportMgr.getExporter(k);
+            if (!cand) continue;
+            var desc = typeof cand.getDescription === "function" ? cand.getDescription() : "";
+            var cn = cand.className ? cand.className() : "";
+            if (desc === format ||
+                (format === "Filmbox" && cn === "DzFbxExporter") ||
+                (format === "Wavefront Object" && cn === "DzObjExporter")) {
+                exporter = cand;
+                break;
+            }
+        }
+    }
+    if (!exporter || typeof exporter.writeFile !== "function") {
+        var available = [];
+        var numExp2 = typeof exportMgr.getNumExporters === "function" ? exportMgr.getNumExporters() : 0;
+        for (var k2 = 0; k2 < numExp2; k2++) {
+            var exp2 = exportMgr.getExporter(k2);
+            if (exp2 && typeof exp2.getDescription === "function") {
+                available.push(exp2.getDescription());
             }
         }
         var hint = available.length > 0
             ? " Available exporters: " + available.join(", ") + "."
             : " No exporters found — the required DAZ Studio exporter plugin may not be installed.";
-        throw new Error("Export to '" + format + "' failed." + hint);
+        throw new Error("Exporter for '" + format + "' not found." + hint);
+    }
+
+    var settings = new DzFileIOSettings();
+    if (typeof exporter.getDefaultOptions === "function") exporter.getDefaultOptions(settings);
+    settings.setIntValue("RunSilent", 1);
+    settings.setFloatValue("Scale", scaleFactor);
+    settings.setBoolValue("SelectedOnly", true);
+    settings.setBoolValue("SelectedRootsOnly", nodeLabels.length > 0);
+    settings.setBoolValue("IncludeSelectedOnly", true);
+    settings.setBoolValue("Morphs", includeMorphs);
+    settings.setBoolValue("IncludeMorphs", includeMorphs);
+    settings.setBoolValue("Pose", applyCurrentPose);
+    settings.setBoolValue("IncludeAnimations", applyCurrentPose);
+    settings.setBoolValue("IncludeFigures", true);
+    settings.setBoolValue("IncludeProps", true);
+
+    var err = exporter.writeFile(outputPath, settings);
+    var errCode = (err && typeof err.valueOf === "function") ? err.valueOf() : err;
+    if (errCode) {
+        var errMsg = (typeof getErrorMessage === "function") ? getErrorMessage(errCode) : ("" + errCode);
+        throw new Error("Export to '" + format + "' failed (" + errCode + "): " + errMsg);
     }
 
     return {
@@ -7321,6 +7927,555 @@ _EXPORT_SCENE_SCRIPT = """\
         apply_current_pose: applyCurrentPose,
         scale_factor: scaleFactor
     };
+})()
+"""
+
+_IMPORT_OBJ_SCRIPT = """\
+(function(){
+    var args = getArguments()[0] || {};
+    var filePath = args.filePath;
+    var scaleFactor = args.scaleFactor !== undefined ? parseFloat(args.scaleFactor) : 1.0;
+    if (!filePath) throw new Error("filePath is required");
+
+    var importMgr = App.getImportMgr();
+    if (!importMgr) throw new Error("DzImportMgr not available in this version of DAZ Studio.");
+    var importer = typeof importMgr.findImporter === "function" ? importMgr.findImporter(filePath) : null;
+    if (!importer && typeof importMgr.findImporterByClassName === "function") {
+        importer = importMgr.findImporterByClassName("DzObjImporter");
+    }
+    if (!importer || typeof importer.readFile !== "function") {
+        throw new Error("OBJ importer not available for: " + filePath);
+    }
+
+    var settings = new DzFileIOSettings();
+    if (typeof importer.getDefaultOptions === "function") importer.getDefaultOptions(settings);
+    settings.setFloatValue("Scale", scaleFactor);
+    settings.setIntValue("RunSilent", 1);
+
+    var err = importer.readFile(filePath, settings);
+    var errCode = (err && typeof err.valueOf === "function") ? err.valueOf() : err;
+    if (errCode) {
+        var errMsg = (typeof getErrorMessage === "function") ? getErrorMessage(errCode) : ("" + errCode);
+        throw new Error("OBJ import failed (" + errCode + "): " + errMsg);
+    }
+
+    return {
+        success: true,
+        file: filePath,
+        scale: scaleFactor,
+        silent: true
+    };
+})()
+"""
+
+_FIND_NODES_SCRIPT = """\
+(function(){
+    var args = getArguments()[0] || {};
+    var query = args.query === undefined || args.query === null ? "" : String(args.query);
+    if (!query) throw new Error("query is required");
+    var matches = [];
+    for (var i = 0; i < Scene.getNumNodes(); i++) {
+        var n = Scene.getNode(i);
+        if (!n) continue;
+        if (n.getLabel() === query || n.getName() === query) {
+            var p = n.getNodeParent ? n.getNodeParent() : null;
+            matches.push({
+                label: n.getLabel(),
+                name: n.getName(),
+                type: n.className(),
+                elementID: n.elementID,
+                parent: p ? p.getLabel() : null
+            });
+        }
+    }
+    return { query: query, count: matches.length, matches: matches };
+})()
+"""
+
+_FIND_ACTIONS_SCRIPT = """\
+(function(){
+    var args = getArguments()[0] || {};
+    var query = args.query === undefined || args.query === null ? "" : String(args.query);
+    if (!query) throw new Error("query is required");
+    var maxResults = parseInt(args.maxResults, 10);
+    if (isNaN(maxResults) || maxResults < 1) maxResults = 30;
+    if (maxResults > 100) maxResults = 100;
+    var q = query.toLowerCase();
+
+    var mgr = MainWindow.getActionMgr();
+    if (!mgr) throw new Error("MainWindow.getActionMgr() returned null");
+
+    var matches = [];
+    var n = mgr.getNumActions();
+    var i, a, cn, txt, desc, menu, group, hay;
+    for (i = 0; i < n; i++) {
+        a = mgr.getAction(i);
+        if (!a) continue;
+        cn = a.className();
+        txt = "";
+        desc = "";
+        menu = "";
+        group = "";
+        try { txt = String(a.simpleText || ""); } catch (e1) {}
+        try { desc = String(a.description || ""); } catch (e2) {}
+        try { menu = String(a.defaultMenu || ""); } catch (e3) {}
+        try { group = String(a.actionGroup || ""); } catch (e4) {}
+        hay = (cn + " " + txt + " " + desc + " " + menu + " " + group).toLowerCase();
+        if (hay.indexOf(q) === -1) continue;
+        matches.push({
+            className: cn,
+            simpleText: txt,
+            description: desc,
+            defaultMenu: menu,
+            actionGroup: group
+        });
+        if (matches.length >= maxResults) break;
+    }
+    return {
+        query: query,
+        count: matches.length,
+        scanned: n,
+        truncated: matches.length >= maxResults,
+        matches: matches
+    };
+})()
+"""
+
+_ERC_FREEZE_SCRIPT = "(function(){\n" + _RESOLVE_NODE_JS + """
+    var args = getArguments()[0] || {};
+    if (typeof DzERCFreeze !== "function") {
+        throw new Error("DzERCFreeze is not available (enable the Property Hierarchy plugin)");
+    }
+    var controllerNode = resolveNode(args.controllerNode);
+    function matchName(item, name) {
+        return item.getLabel() === name || item.getName() === name;
+    }
+    function findProp(node, name) {
+        var i, pr, obj, m, ch, j;
+        for (i = 0; i < node.getNumProperties(); i++) {
+            pr = node.getProperty(i);
+            if (matchName(pr, name)) return pr;
+        }
+        obj = (typeof node.getObject === "function") ? node.getObject() : null;
+        if (!obj || typeof obj.getNumModifiers !== "function") return null;
+        for (i = 0; i < obj.getNumModifiers(); i++) {
+            m = obj.getModifier(i);
+            if (!m) continue;
+            if (matchName(m, name) && typeof m.getValueChannel === "function") {
+                ch = m.getValueChannel();
+                if (ch) return ch;
+            }
+            if (typeof m.getNumProperties === "function") {
+                for (j = 0; j < m.getNumProperties(); j++) {
+                    pr = m.getProperty(j);
+                    if (matchName(pr, name)) return pr;
+                }
+            }
+        }
+        return null;
+    }
+    var controllerProp = findProp(controllerNode, args.controllerProperty);
+    if (!controllerProp) {
+        throw new Error("Controller property not found: " + args.controllerProperty + " on " + args.controllerNode);
+    }
+    if (!controllerProp.inherits("DzNumericProperty")) {
+        throw new Error("Controller property is not numeric: " + args.controllerProperty);
+    }
+
+    var freeze = new DzERCFreeze();
+    freeze.setControllerNode(controllerNode);
+    freeze.setControllerProperty(controllerProp);
+    if (args.restoreFigure !== undefined) freeze.setRestoreFigure(!!args.restoreFigure);
+    if (args.restoreRigging !== undefined) freeze.setRestoreRigging(!!args.restoreRigging);
+    if (args.applyController !== undefined) freeze.setApplyController(!!args.applyController);
+    if (args.keyed !== undefined) freeze.setKeyed(!!args.keyed);
+
+    var freezeLabels = args.freezeNodes;
+    var added = [];
+    var k, fn, okAdd;
+    if (freezeLabels && freezeLabels.length) {
+        for (k = 0; k < freezeLabels.length; k++) {
+            fn = resolveNode(freezeLabels[k]);
+            okAdd = freeze.addPropertiesToFreeze(fn);
+            added.push({ node: fn.getLabel(), added: !!okAdd });
+        }
+    } else {
+        okAdd = freeze.addPropertiesToFreeze(controllerNode);
+        added.push({ node: controllerNode.getLabel(), added: !!okAdd });
+    }
+
+    var frozen = freeze.getPropertiesToFreeze();
+    var frozenCount = (frozen && typeof frozen.length !== "undefined") ? frozen.length : 0;
+    if (frozenCount === 0) {
+        throw new Error("No properties to freeze (values at default?). Change morphs/transforms first.");
+    }
+
+    var ok = freeze.doFreeze();
+    if (!ok) throw new Error("DzERCFreeze.doFreeze() returned false");
+    return {
+        success: true,
+        controllerNode: controllerNode.getLabel(),
+        controllerProperty: controllerProp.getLabel(),
+        freezeNodes: added,
+        propertiesFrozen: frozenCount
+    };
+})()
+"""
+
+# Content-Library Prop/Figure Support Asset export
+_SAVE_PROP_ASSET_SCRIPT = "(function(){\n" + _RESOLVE_NODE_JS + """
+    var args = getArguments()[0] || {};
+    if (typeof DzNodeSupportAssetFilter !== "function") {
+        throw new Error("DzNodeSupportAssetFilter is not available in this DAZ Studio version.");
+    }
+    if (!args.outputPath) throw new Error("outputPath is required");
+    var node = resolveNode(args.nodeLabel);
+
+    // Normalize slashes for prefix comparison against configured content directories.
+    function norm(p) { return String(p).replace(/\\\\/g, "/").toLowerCase(); }
+    var outNorm = norm(args.outputPath);
+
+    var contentMgr = App.getContentMgr();
+    var baseDataPath = null;
+    var n = contentMgr.getNumContentDirectories();
+    var dirs = [];
+    for (var i = 0; i < n; i++) {
+        var dir = contentMgr.getContentDirectoryPath(i);
+        dirs.push(dir);
+        var dirNorm = norm(dir);
+        if (outNorm.indexOf(dirNorm) === 0) { baseDataPath = dir; }
+    }
+    if (!baseDataPath) {
+        throw new Error(
+            "outputPath must be inside a configured DAZ content directory. outputPath=" +
+            args.outputPath + " ; configured directories: " + dirs.join(", ")
+        );
+    }
+
+    var filter = new DzNodeSupportAssetFilter();
+    filter.setNode(node);
+
+    var settings = new DzFileIOSettings();
+    filter.getDefaultOptions(settings);
+    settings.setStringValue("RunSilent", "yes");
+    settings.setStringValue("BaseDataPath", baseDataPath);
+    settings.setStringValue("VendorName", args.vendorName || "Author");
+    settings.setStringValue("ProductName", args.productName || "Product");
+    settings.setStringValue("ItemName", args.itemName || node.getLabel());
+    if (args.category) settings.setStringValue("Category", args.category);
+    if (args.compatibilityBase) settings.setStringValue("CompatibilityBase", args.compatibilityBase);
+    if (args.compatibleWith) settings.setStringValue("CompatibleWith", args.compatibleWith);
+    if (args.smartParent !== undefined) settings.setStringValue("SmartParentProp", args.smartParent ? "yes" : "no");
+    if (args.writeGeometry !== undefined) settings.setStringValue("WriteGeometryDef", args.writeGeometry ? "yes" : "no");
+    if (args.writeParameters !== undefined) settings.setStringValue("WriteParameterDefs", args.writeParameters ? "yes" : "no");
+    if (args.writeUvs !== undefined) settings.setStringValue("WriteUVDefs", args.writeUvs ? "yes" : "no");
+    if (args.forceUniqueIds !== undefined) settings.setStringValue("ForceUniqueIDs", args.forceUniqueIds ? "yes" : "no");
+    if (args.compressOutput !== undefined) settings.setStringValue("CompressOutput", args.compressOutput ? "yes" : "no");
+
+    var err = filter.doSave(settings, args.outputPath, "");
+    var errCode = (err && typeof err.valueOf === "function") ? err.valueOf() : err;
+    if (errCode) {
+        throw new Error("DzNodeSupportAssetFilter.doSave failed (error code " + errCode + ") for node " + node.getLabel());
+    }
+
+    return {
+        success: true,
+        node: node.getLabel(),
+        outputPath: args.outputPath,
+        baseDataPath: baseDataPath,
+        vendorName: args.vendorName || "Author",
+        productName: args.productName || "Product",
+        itemName: args.itemName || node.getLabel()
+    };
+})()
+"""
+
+# Phase 6.12: Morph Loader Pro
+_LOAD_MORPH_PRO_SCRIPT = "(function(){\n" + _RESOLVE_NODE_JS + """
+    var args = getArguments()[0] || {};
+    if (typeof DzMorphLoader !== "function") {
+        throw new Error("DzMorphLoader is not available (enable the Morph Loader Pro plugin)");
+    }
+    if (!args.objPath) throw new Error("objPath is required");
+    var node = resolveNode(args.nodeLabel);
+
+    var LOAD_MODES = {
+        EntireFigure: 0, SelectedNodes: 1, PrimaryNode: 2,
+        SingleSkinFigure: 3, SingleSkinFigureFromGraft: 4
+    };
+    var MIRROR_TYPES = {
+        DoNotMirror: 0, XSwap: 1, XPosToNeg: 2, XNegToPos: 3,
+        YSwap: 4, YPosToNeg: 5, YNegToPos: 6, ZSwap: 7, ZPosToNeg: 8, ZNegToPos: 9
+    };
+    var OVERWRITE_MODES = { MakeUnique: 0, DeltasAndERCLinks: 1, DeltasOnly: 2 };
+    var SUBD_MAPPINGS = { Catmark: 0, FacetOrder: 1, ZBrushCage: 2, MudboxCage: 3 };
+    var ERC_TYPES = {
+        ERCDeltaAdd: 0, ERCDivideInto: 1, ERCDivideBy: 2,
+        ERCMultiply: 3, ERCSubtract: 4, ERCAdd: 5, ERCKeyed: 6
+    };
+
+    function lookupEnum(table, name, label) {
+        if (table[name] === undefined) {
+            var valid = [];
+            for (var k in table) valid.push(k);
+            throw new Error("Unknown " + label + ": " + name + ". Valid: " + valid.join(", "));
+        }
+        return table[name];
+    }
+
+    function matchName(item, name) {
+        return item.getLabel() === name || item.getName() === name;
+    }
+
+    function findProp(searchNode, name) {
+        var i, pr, obj, m, ch, j;
+        for (i = 0; i < searchNode.getNumProperties(); i++) {
+            pr = searchNode.getProperty(i);
+            if (matchName(pr, name)) return pr;
+        }
+        obj = (typeof searchNode.getObject === "function") ? searchNode.getObject() : null;
+        if (!obj || typeof obj.getNumModifiers !== "function") return null;
+        for (i = 0; i < obj.getNumModifiers(); i++) {
+            m = obj.getModifier(i);
+            if (!m) continue;
+            if (matchName(m, name) && typeof m.getValueChannel === "function") {
+                ch = m.getValueChannel();
+                if (ch) return ch;
+            }
+            if (typeof m.getNumProperties === "function") {
+                for (j = 0; j < m.getNumProperties(); j++) {
+                    pr = m.getProperty(j);
+                    if (matchName(pr, name)) return pr;
+                }
+            }
+        }
+        return null;
+    }
+
+    var loader = new DzMorphLoader();
+    loader.setFilename(args.objPath);
+    if (args.morphName) loader.setMorphName(String(args.morphName));
+
+    var loadModeVal = lookupEnum(LOAD_MODES, args.loadMode || "EntireFigure", "loadMode");
+    var okMode = loader.setLoadMode(loadModeVal, node);
+    if (!okMode) {
+        throw new Error("setLoadMode failed for mode " + args.loadMode + " on node " + node.getLabel());
+    }
+
+    loader.setOverwriteExisting(lookupEnum(OVERWRITE_MODES, args.overwriteMode || "MakeUnique", "overwriteMode"));
+    loader.setMorphMirroring(lookupEnum(MIRROR_TYPES, args.mirroring || "DoNotMirror", "mirroring"));
+
+    if (args.preserveExistingDeltas !== undefined) loader.setPreserveExistingDeltas(!!args.preserveExistingDeltas);
+    if (args.cleanUpOrphans !== undefined) loader.setCleanUpOrphans(!!args.cleanUpOrphans);
+    if (args.deltaTolerance !== undefined && args.deltaTolerance !== null) {
+        loader.setDeltaTolerance(parseFloat(args.deltaTolerance));
+    }
+
+    if (args.subdivision !== undefined) loader.setMorphSubdivision(!!args.subdivision);
+    if (args.subdivisionMapping) {
+        loader.setSubdivisionMapping(lookupEnum(SUBD_MAPPINGS, args.subdivisionMapping, "subdivisionMapping"));
+    }
+    if (args.subdivisionMinResolution !== undefined && args.subdivisionMinResolution !== null) {
+        loader.setSubdivisionMinResolution(parseInt(args.subdivisionMinResolution, 10));
+    }
+    if (args.subdivisionMaxResolution !== undefined && args.subdivisionMaxResolution !== null) {
+        loader.setSubdivisionMaxResolution(parseInt(args.subdivisionMaxResolution, 10));
+    }
+    if (args.subdivisionBuiltResolution !== undefined && args.subdivisionBuiltResolution !== null) {
+        loader.setSubdivisionBuiltResolution(parseInt(args.subdivisionBuiltResolution, 10));
+    }
+    if (args.subdivisionSmoothCage !== undefined) loader.setSubdivisionSmoothCage(!!args.subdivisionSmoothCage);
+
+    if (args.attenuateStrength !== undefined && args.attenuateStrength !== null) {
+        loader.setAttenuateStrength(parseFloat(args.attenuateStrength));
+    }
+    if (args.attenuateEdgeStrength !== undefined && args.attenuateEdgeStrength !== null) {
+        loader.setAttenuateEdgeStrength(parseFloat(args.attenuateEdgeStrength));
+    }
+    if (args.attenuateMapPath) loader.setAttenuateMapPath(String(args.attenuateMapPath));
+
+    if (args.propertyGroupPath) loader.setPropertyGroupPath(String(args.propertyGroupPath));
+    if (args.hideSecondaryProperties !== undefined) loader.setHideSecondaryProperties(!!args.hideSecondaryProperties);
+
+    // Attention (SDK docs): applyReverseDeformationsPose() must run before createMorph().
+    if (args.reverseDeformations) {
+        loader.setReverseDeformations(true);
+        if (args.reverseDeformationsPosePath) {
+            loader.setReverseDeformationsPose(String(args.reverseDeformationsPosePath));
+        }
+        var okPose = loader.applyReverseDeformationsPose();
+        if (!okPose) {
+            throw new Error("applyReverseDeformationsPose() failed — check reverseDeformationsPosePath");
+        }
+    }
+
+    var controlPropLabel = null;
+    if (args.createControlProperty) {
+        if (!args.controlPropertyName) {
+            throw new Error("controlPropertyName is required when createControlProperty is true");
+        }
+        var controlNode = args.controlNodeLabel ? resolveNode(args.controlNodeLabel) : node;
+        var controlProp = findProp(controlNode, args.controlPropertyName);
+        if (!controlProp) {
+            throw new Error("Control property not found: " + args.controlPropertyName + " on " + controlNode.getLabel());
+        }
+        if (!controlProp.inherits("DzNumericProperty")) {
+            throw new Error("Control property is not numeric: " + args.controlPropertyName);
+        }
+        loader.setCreateControlProperty(true);
+        loader.setControlNode(controlNode);
+        loader.setControlProperty(controlProp);
+        controlPropLabel = controlProp.getLabel();
+        if (args.controlPropertyCustomLabel) {
+            loader.setControlPropertyUseCustomLabel(true);
+            loader.setControlPropertyCustomLabel(String(args.controlPropertyCustomLabel));
+        }
+        if (args.controlPropertyErcType) {
+            loader.setControlPropertyERCType(
+                lookupEnum(ERC_TYPES, args.controlPropertyErcType, "controlPropertyErcType")
+            );
+        }
+        if (args.controlPropertyErcCustomValue !== undefined && args.controlPropertyErcCustomValue !== null) {
+            loader.setControlPropertyERCUseCustomValue(true);
+            loader.setControlPropertyERCCustomValue(parseFloat(args.controlPropertyErcCustomValue));
+        }
+    }
+
+    var settings = new DzFileIOSettings();
+    settings.setFloatValue("Scale", args.scale !== undefined ? parseFloat(args.scale) : 1.0);
+    settings.setIntValue("RunSilent", 1);
+
+    var onlyErrorsOrWarnings = args.onlyErrorsOrWarnings !== undefined ? !!args.onlyErrorsOrWarnings : true;
+    var log = loader.createMorph(settings, node, onlyErrorsOrWarnings, true);
+
+    var resolvedMorphName = loader.getMorphName();
+
+    return {
+        success: true,
+        node: node.getLabel(),
+        file: args.objPath,
+        morphName: resolvedMorphName,
+        loadMode: args.loadMode || "EntireFigure",
+        overwriteMode: args.overwriteMode || "MakeUnique",
+        mirroring: args.mirroring || "DoNotMirror",
+        controlProperty: controlPropLabel,
+        log: log || ""
+    };
+})()
+"""
+
+_CREATE_STRAND_HAIR_SCRIPT = """\
+(function(){
+    var args = getArguments()[0] || {};
+    var targetLabel = args.targetNodeLabel;
+
+    var target = Scene.findNodeByLabel(targetLabel);
+    if (!target) target = Scene.findNode(targetLabel);
+    if (!target) throw new Error("Target node not found: " + targetLabel);
+
+    function strandHairLabels() {
+        var labels = [];
+        for (var i = 0; i < Scene.getNumNodes(); i++) {
+            var n = Scene.getNode(i);
+            if (n.inherits("DzStrandHairNode")) labels.push(n.getLabel());
+        }
+        return labels;
+    }
+
+    var before = strandHairLabels();
+
+    var mgr = MainWindow.getActionMgr();
+    var act = mgr.findAction("DzStrandHairCreateNodeAction");
+    if (!act) throw new Error("Action 'DzStrandHairCreateNodeAction' not found in DzActionMgr");
+
+    Scene.selectAllNodes(false);
+    target.select(true);
+
+    // This call blocks until the user confirms (or cancels) DAZ Studio's
+    // "Create Strand-Based Hair" dialog. That's expected — this script is
+    // meant to be run via the async endpoint so the HTTP caller doesn't
+    // block waiting for a human to click a button in the DAZ Studio window.
+    act.trigger();
+
+    var after = strandHairLabels();
+    var newLabels = [];
+    for (var i = 0; i < after.length; i++) {
+        if (before.indexOf(after[i]) === -1) newLabels.push(after[i]);
+    }
+
+    if (newLabels.length === 0) {
+        throw new Error(
+            "No new Strand-Based Hair node appeared after the action ran. " +
+            "The user likely cancelled the confirmation dialog, or DAZ Studio " +
+            "is still waiting for it to be confirmed."
+        );
+    }
+
+    var newNode = Scene.findNodeByLabel(newLabels[0]);
+    var obj = newNode.getObject();
+    var hasGeometry = !!obj;
+
+    return {
+        success: true,
+        node: newNode.getLabel(),
+        target: target.getLabel(),
+        has_geometry: hasGeometry
+    };
+})()
+"""
+
+_LIST_STRAND_HAIR_NODES_SCRIPT = """\
+(function(){
+    var result = [];
+    for (var i = 0; i < Scene.getNumNodes(); i++) {
+        var n = Scene.getNode(i);
+        if (!n.inherits("DzStrandHairNode")) continue;
+
+        var target = n.getTargetNode();
+        var obj = n.getObject();
+        var hasGeometry = !!obj;
+        var materials = [];
+        if (obj) {
+            var shape = obj.getCurrentShape();
+            if (shape) {
+                for (var m = 0; m < shape.getNumMaterials(); m++) {
+                    var mat = shape.getMaterial(m);
+                    var lbl = (typeof mat.getLabel === "function") ? mat.getLabel() : mat.getName();
+                    materials.push(lbl || mat.getName());
+                }
+            }
+        }
+
+        result.push({
+            label: n.getLabel(),
+            name: n.getName(),
+            target: target ? target.getLabel() : null,
+            has_geometry: hasGeometry,
+            materials: materials
+        });
+    }
+    return { count: result.length, nodes: result };
+})()
+"""
+
+# Phase 6.12: Wearable Preset save trigger (Bug-Katalog #22 Teil 2)
+# Selects the target figure and fires DzWearablesAssetFilterAction. This
+# BLOCKS on two native dialogs (a file-save dialog, then a Qt options
+# dialog) — must be submitted via the async endpoint. The Python-side
+# tool (daz_save_wearable_preset, _ui_automation.py) drives those dialogs
+# via Windows UI Automation once this has fired; DzWearablesAssetFilter's
+# own doSave() script API reproducibly fails with an unexplained generic
+# error and is not used here (see docs/daz-mcp-bridge-bugs.md #22 Teil 2).
+_TRIGGER_WEARABLE_SAVE_SCRIPT = "(function(){\n" + _RESOLVE_NODE_JS + """
+    var args = getArguments()[0] || {};
+    var fig = resolveNode(args.figureLabel);
+    Scene.selectAllNodes(false);
+    fig.select(true);
+    var mgr = MainWindow.getActionMgr();
+    var act = mgr.findAction("DzWearablesAssetFilterAction");
+    if (!act) throw new Error("DzWearablesAssetFilterAction not found in DzActionMgr");
+    act.trigger();
+    return { success: true, figure: fig.getLabel() };
 })()
 """
 
@@ -7704,6 +8859,11 @@ _REGISTRY: dict[str, tuple[str, str]] = {
         "Set render output filename path and/or image dimensions (width x height)",
         _SET_RENDER_OUTPUT_SCRIPT,
     ),
+    "vangard-set-render-engine": (
+        "Set DS6 render engine via DzRenderOptions.renderType "
+        "(iray / multi_pass_opengl / viewport)",
+        _SET_RENDER_ENGINE_SCRIPT,
+    ),
     # Phase 5: Pose reset
     "vangard-reset-pose": (
         "Zero all bone rotations on a figure recursively; optionally zero root transforms too",
@@ -7722,8 +8882,23 @@ _REGISTRY: dict[str, tuple[str, str]] = {
         _UNFIT_ITEM_SCRIPT,
     ),
     # Phase 6.2: dForce simulation
+    "vangard-add-dforce-dynamic-surface": (
+        "Add a dForce Dynamic Surface modifier to a node via DzActionMgr "
+        "(Edit > Object > Geometry > Add dForce Modifier: Dynamic Surface)",
+        _ADD_DFORCE_DYNAMIC_SURFACE_SCRIPT,
+    ),
+    "vangard-set-dforce-influence-weights": (
+        "Pin/free individual vertices for dForce simulation via "
+        "DzDForceModifier.setInfluenceWeights (0 = fixed to base shape, 1 = free)",
+        _SET_DFORCE_INFLUENCE_WEIGHTS_SCRIPT,
+    ),
+    "vangard-get-dforce-influence-weights": (
+        "Read the per-vertex dForce influence (pinning) weights on a node",
+        _GET_DFORCE_INFLUENCE_WEIGHTS_SCRIPT,
+    ),
     "vangard-run-dforce-simulation": (
-        "Run dForce cloth/hair simulation for a frame range, optionally limited to one node",
+        "Run dForce cloth/hair simulation (duration set by DAZ's own Simulation "
+        "Settings, not scriptable), optionally limited to one node",
         _RUN_DFORCE_SIMULATION_SCRIPT,
     ),
     "vangard-bake-simulation": (
@@ -7733,6 +8908,22 @@ _REGISTRY: dict[str, tuple[str, str]] = {
     "vangard-set-dforce-property": (
         "Set a dForce modifier property (stiffness, gravity scale, etc.) on a scene node",
         _SET_DFORCE_PROPERTY_SCRIPT,
+    ),
+    "vangard-run-transfer-utility": (
+        "Project rigging/morphs/UVs/groups from a source node onto a target node "
+        "via DzTransferUtility (headless equivalent of Edit > Object > Rigging > "
+        "Transfer Utility...)",
+        _RUN_TRANSFER_UTILITY_SCRIPT,
+    ),
+    "vangard-get-dforce-surface-properties": (
+        "List per-surface dForce simulation properties (Collision Offset, Self "
+        "Collide, Dynamics Strength, stiffness, etc.) via DzDForceSettingsProvider "
+        "— these live on the Surfaces-pane 'Simulation' category, not on DzMaterial",
+        _GET_DFORCE_SURFACE_PROPERTIES_SCRIPT,
+    ),
+    "vangard-set-dforce-surface-property": (
+        "Set a per-surface dForce simulation property via DzDForceSettingsProvider",
+        _SET_DFORCE_SURFACE_PROPERTY_SCRIPT,
     ),
     # Phase 6.3: Pose library
     "vangard-collect-pose": (
@@ -7771,6 +8962,53 @@ _REGISTRY: dict[str, tuple[str, str]] = {
     "vangard-export-scene": (
         "Export selected nodes to FBX or OBJ via DzExportMgr",
         _EXPORT_SCENE_SCRIPT,
+    ),
+    "vangard-import-obj": (
+        "Import a Wavefront OBJ with Scale=1 and RunSilent (no options dialog)",
+        _IMPORT_OBJ_SCRIPT,
+    ),
+    "vangard-find-nodes": (
+        "List every scene node matching a label or internal name, with elementIDs",
+        _FIND_NODES_SCRIPT,
+    ),
+    "vangard-find-actions": (
+        "Search DzActionMgr actions by className/simpleText/description (no menuBar, no trigger)",
+        _FIND_ACTIONS_SCRIPT,
+    ),
+    "vangard-erc-freeze": (
+        "Headless ERC Freeze via DzERCFreeze (Property Hierarchy plugin), not DzERCFreezeAction",
+        _ERC_FREEZE_SCRIPT,
+    ),
+    "vangard-save-prop-asset": (
+        "Save a node as a DSON Figure/Prop Support Asset (.duf + .dsf geometry) into "
+        "a configured content directory via DzNodeSupportAssetFilter — headless "
+        "equivalent of File > Save As > Support Asset > Prop Asset",
+        _SAVE_PROP_ASSET_SCRIPT,
+    ),
+    # Phase 6.12: Morph Loader Pro
+    "vangard-load-morph-pro": (
+        "Load an OBJ morph target onto a node via DzMorphLoader (Morph Loader Pro "
+        "plugin) — full option set: load mode, mirroring, overwrite mode, reverse "
+        "deformations, subdivision mapping, attenuation maps, ERC control property",
+        _LOAD_MORPH_PRO_SCRIPT,
+    ),
+    # Phase 6.13: Strand-Based Hair
+    "vangard-create-strand-hair": (
+        "Create a native Strand-Based Hair node fit to a target figure via "
+        "DzStrandHairCreateNodeAction. BLOCKS on a DAZ Studio confirmation "
+        "dialog the user must click — always submit via the async endpoint",
+        _CREATE_STRAND_HAIR_SCRIPT,
+    ),
+    "vangard-list-strand-hair-nodes": (
+        "List every DzStrandHairNode in the scene with its target figure and "
+        "whether it has generated geometry yet",
+        _LIST_STRAND_HAIR_NODES_SCRIPT,
+    ),
+    "vangard-trigger-wearable-save": (
+        "Select a figure and fire DzWearablesAssetFilterAction (File > Save As > "
+        "Wearable(s) Preset) — blocks on native dialogs, submit via async endpoint only; "
+        "daz_save_wearable_preset drives the resulting dialogs via UI Automation",
+        _TRIGGER_WEARABLE_SAVE_SCRIPT,
     ),
 }
 

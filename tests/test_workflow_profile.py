@@ -65,7 +65,7 @@ def test_expert_profile_preserves_detailed_surface():
     assert DEFAULT_TOOLS < set(snapshot["tools"])
     assert "daz_set_property" in snapshot["tools"]
     assert "daz_execute" in snapshot["tools"]
-    assert len(snapshot["tools"]) == 144
+    assert len(snapshot["tools"]) == 159
 
 
 async def test_materialize_recipe_delegates_file_job(monkeypatch):

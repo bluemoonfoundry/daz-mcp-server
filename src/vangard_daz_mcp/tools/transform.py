@@ -10,23 +10,43 @@ from .._errors import handle_dazpy_error
 
 @mcp.tool()
 async def daz_get_node(node_label: str) -> dict[str, Any]:
-    """Return all numeric properties of a scene node by its label or internal name.
+    """Return all numeric properties of a scene node.
 
     Useful for reading transforms (X Translate, Y Translate, Z Translate,
     X Rotate, Y Rotate, Z Rotate, Scale), morph dials, and any other
     numeric property on the node.
 
     Args:
-        node_label: The display label or internal name of the node (e.g. "Genesis 9").
-                    Label is matched first; internal name is the fallback.
+        node_label: Display label, internal name, numeric elementID, or
+                    ``Parent/Label`` path (e.g. ``"Genesis 8 Female/hip"``).
+                    Duplicate labels raise instead of picking the first match.
 
     Returns a dict with:
       - name: internal node name
       - label: display label
       - type: DazScript class name (e.g. DzFigure, DzBone, DzCamera)
+      - elementID: unique scene element id
+      - parent: parent node label, or null
       - properties: mapping of property label → current numeric value
     """
     return await _execute_by_id("vangard-get-node", {"nodeLabel": node_label})
+
+
+@mcp.tool()
+async def daz_find_nodes(query: str) -> dict[str, Any]:
+    """List every scene node whose label or internal name equals ``query``.
+
+    Use this when a label is shared (e.g. two nodes named ``Hip``). Each match
+    includes ``elementID`` and ``parent`` so a later ``daz_get_node`` /
+    ``daz_set_property`` can target one node uniquely.
+
+    Args:
+        query: Exact display label or internal name.
+
+    Returns:
+        Dict with query, count, and matches[{label, name, type, elementID, parent}].
+    """
+    return await _execute_by_id("vangard-find-nodes", {"query": query})
 
 
 @mcp.tool()

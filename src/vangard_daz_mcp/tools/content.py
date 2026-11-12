@@ -1,6 +1,7 @@
 """Content browser tools: category listing, browsing, metadata, search, and product loading."""
 from __future__ import annotations
 
+import asyncio
 import json as _json
 import os
 from pathlib import Path
@@ -9,8 +10,9 @@ from typing import Any
 import httpx
 from fastmcp.exceptions import ToolError
 
-from .._mcp import mcp, _execute_by_id
+from .._mcp import mcp, _execute_by_id, _execute_by_id_async
 from .._client import get_content_browser_client, CONTENT_BROWSER_URL
+from .. import _ui_automation
 
 
 # ---------------------------------------------------------------------------
@@ -253,3 +255,189 @@ async def daz_check_compatibility(asset_path: str, figure_label: str) -> dict[st
         }
     except Exception as e:
         return {"compatible": None, "error": str(e)}
+
+
+# ---------------------------------------------------------------------------
+# Tools — Content-Library asset creation
+# ---------------------------------------------------------------------------
+
+
+@mcp.tool()
+async def daz_save_prop_asset(
+    node_label: str,
+    output_path: str,
+    vendor_name: str = "Author",
+    product_name: str = "Product",
+    item_name: str | None = None,
+    category: str | None = None,
+    compatibility_base: str | None = None,
+    compatible_with: str | None = None,
+    smart_parent: bool | None = None,
+    write_geometry: bool | None = None,
+    write_parameters: bool | None = None,
+    write_uvs: bool | None = None,
+    force_unique_ids: bool | None = None,
+    compress_output: bool | None = None,
+) -> dict[str, Any]:
+    """Save a node as a reusable Content-Library Prop/Figure Support Asset (.duf).
+
+    Headless equivalent of **File > Save As > Support Asset > Prop Asset** (or
+    "Figure Asset" for a rigged node), via ``DzNodeSupportAssetFilter``. Writes
+    two things: the ``.duf`` preset at ``output_path``, and the actual geometry/
+    UV/rigging data under ``<content dir>/data/<vendor>/<product>/<item>/...``.
+    Once saved, the asset shows up like any other library prop and can be
+    reloaded with ``daz_load_file`` or dragged from Smart Content/Content Library.
+
+    Args:
+        node_label: Display label, internal name, elementID, or ``Parent/Label``
+            of the node to save.
+        output_path: Absolute path for the ``.duf`` file. **Must be inside one of
+            the DAZ Studio instance's configured content directories** (e.g.
+            under "My Library" or a shared content root) — the tool resolves
+            which content directory it belongs to and errors with the list of
+            configured directories if it isn't inside any of them.
+        vendor_name: Vendor/author name embedded in the asset metadata (default
+            "Author").
+        product_name: Product name embedded in the asset metadata (default
+            "Product").
+        item_name: Item name embedded in the asset metadata. Defaults to
+            ``node_label`` if omitted.
+        category: Content-Library category path to tag the asset with (e.g.
+            "Props/Furniture").
+        compatibility_base: Figure/base this asset declares compatibility with
+            (e.g. "Genesis 9").
+        compatible_with: Additional compatible-figure declaration string.
+        smart_parent: Enable Smart Parent behavior when the asset is applied.
+        write_geometry: Include geometry data (default plugin behavior if
+            omitted — normally on).
+        write_parameters: Include parameter/morph definitions (default plugin
+            behavior if omitted — normally on).
+        write_uvs: Include UV set definitions (default plugin behavior if
+            omitted — normally on).
+        force_unique_ids: Force regeneration of unique asset IDs instead of
+            reusing existing ones.
+        compress_output: Compress the written ``.duf``/``.dsf`` files (default
+            plugin behavior if omitted — normally on).
+
+    Returns:
+        Dict with success, node, outputPath, baseDataPath (the resolved content
+        directory), vendorName, productName, itemName.
+
+    Examples:
+        daz_save_prop_asset(
+            "Long Wavy Hair",
+            "C:/Users/me/Documents/DAZ 3D/Studio/My Library/Props/MyHair/My Hair.duf",
+            vendor_name="MyStudio", product_name="Custom Hair", item_name="Long Wavy Hair",
+        )
+
+    Notes:
+        - Live-verified: writes correct ``.duf`` + ``data/.../*.dsf`` files,
+          fully silent (no dialog), confirmed round-trip-loadable via
+          ``daz_load_file``.
+        - Does **not** generate a thumbnail image — Daz's Content Library pane
+          generates one lazily the first time it browses the folder, or you can
+          render/place one yourself as ``<output_path>.png`` next to the .duf.
+        - For a "Wearable Preset" (auto-fit-to-figure behavior when dragged
+          from Smart Content, like a clothing/hair outfit), the underlying
+          ``DzWearablesAssetFilter`` was investigated but not solved — its
+          ``doSave()`` reproducibly failed with a generic error code across
+          several configurations (asset-backed vs. ad-hoc geometry, with/
+          without a parent node, various ``NodeNames``/``MaterialNames``
+          settings). Use this Prop Asset tool instead; it covers the
+          "Support Asset" half of the original request.
+    """
+    payload: dict[str, Any] = {
+        "nodeLabel": node_label,
+        "outputPath": output_path,
+        "vendorName": vendor_name,
+        "productName": product_name,
+    }
+    if item_name is not None:
+        payload["itemName"] = item_name
+    if category is not None:
+        payload["category"] = category
+    if compatibility_base is not None:
+        payload["compatibilityBase"] = compatibility_base
+    if compatible_with is not None:
+        payload["compatibleWith"] = compatible_with
+    if smart_parent is not None:
+        payload["smartParent"] = smart_parent
+    if write_geometry is not None:
+        payload["writeGeometry"] = write_geometry
+    if write_parameters is not None:
+        payload["writeParameters"] = write_parameters
+    if write_uvs is not None:
+        payload["writeUvs"] = write_uvs
+    if force_unique_ids is not None:
+        payload["forceUniqueIds"] = force_unique_ids
+    if compress_output is not None:
+        payload["compressOutput"] = compress_output
+
+    return await _execute_by_id("vangard-save-prop-asset", payload)
+
+
+@mcp.tool()
+async def daz_save_wearable_preset(
+    figure_label: str,
+    output_path: str,
+    dialog_timeout: float = 30.0,
+) -> dict[str, Any]:
+    """Save a figure (with everything currently fitted to it) as a reusable
+    Wearable(s) Preset — the fit-to-figure asset type, as opposed to
+    ``daz_save_prop_asset``'s plain geometry-only Support Asset.
+
+    Headless-*ish* equivalent of **File > Save As > Wearable(s) Preset**.
+    "Headless-ish" because the underlying ``DzWearablesAssetFilter`` script
+    API (``doSave()``) was found to reproducibly fail with an unexplained
+    generic error code under every configuration tried (see
+    ``docs/daz-mcp-bridge-bugs.md`` Bug 22 Teil 2 for the full investigation)
+    — but the real GUI action works, so this tool drives *that* action's two
+    native dialogs directly via Windows UI Automation (``pywinauto``)
+    instead. No DAZ Studio window needs to be focused or in the foreground
+    for this — everything is done via the accessibility tree and posted
+    window messages.
+
+    **Windows-only, and only works when this MCP server process runs on the
+    same machine as DAZ Studio** — there is no remote-UI-automation path.
+
+    Args:
+        figure_label: Display label of the figure to save (e.g.
+            ``"Genesis 8 Female"``). Must already have at least one item
+            fit or parented to it — DAZ Studio itself refuses to save a
+            Wearable(s) Preset otherwise ("A figure in the scene with other
+            objects fit or parented to it must be selected...").
+        output_path: Absolute path for the ``.duf`` file. Its parent
+            directory is created automatically if missing (the native save
+            dialog does **not** create missing subfolders on its own and
+            errors instead).
+        dialog_timeout: Seconds to wait for each native dialog to appear/
+            close before giving up (default 30s). Increase if DAZ Studio is
+            slow to respond (e.g. a very heavy scene).
+
+    Returns:
+        Dict with success and outputPath.
+
+    Examples:
+        daz_save_wearable_preset(
+            "Genesis 8 Female",
+            "C:/Users/me/Documents/DAZ 3D/Studio/My Library/Presets/Wearables/My Hair.duf",
+        )
+
+    Notes:
+        - Bundles **every** item currently fit/parented to the figure, not
+          just one you care about — the dialog's own node-selection
+          checklist has no confirmed programmatic toggle mechanism (its
+          items are custom-painted, not standard checkable controls; see
+          Bug 22 Teil 2). If the figure is wearing other things you don't
+          want included, unfit them first (``daz_unfit_item``), save, then
+          re-fit them.
+        - Produces a real thumbnail (``<output>.duf.png``/``.tip.png``)
+          automatically — unlike ``daz_save_prop_asset``, which does not.
+        - Live-verified end to end (2026-09-09) against a real figure with
+          a fitted test prop, then fully reverted — no lasting scene changes.
+    """
+    _ui_automation._require_pywinauto()  # pylint: disable=protected-access
+    await _execute_by_id_async("vangard-trigger-wearable-save", {"figureLabel": figure_label})
+    return await asyncio.to_thread(
+        _ui_automation.drive_wearable_preset_save, output_path, dialog_timeout
+    )

@@ -113,6 +113,17 @@ class TestScriptHelp:
         assert isinstance(result, str)
         assert len(result) > 10
 
+    async def test_animation_docs_use_real_key_api(self):
+        result = await daz_script_help("animation")
+        assert "prop.setValue(time, value)" in result
+        assert "prop.getKeyTime(i)" in result
+        assert "prop.deleteKeys(time, time)" in result
+        assert "prop.deleteAllKeys()" in result
+        assert "prop.setKeyFrame(" not in result
+        assert "prop.getKeyFrame(" not in result
+        assert "prop.deleteKey(" not in result
+        assert "var fps = Scene.getFPS()" not in result
+
 
 # ---------------------------------------------------------------------------
 # daz_validate_script  (local — no DAZ Studio connection required)

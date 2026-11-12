@@ -1,7 +1,10 @@
 """Material and surface tools for DAZ Studio scene nodes."""
 from __future__ import annotations
 
+import gzip
 import json
+import re
+from pathlib import Path
 from typing import Any
 
 from fastmcp.exceptions import ToolError
@@ -9,6 +12,35 @@ from fastmcp.exceptions import ToolError
 from .._mcp import mcp, _execute_by_id
 from .._client import get_daz_client, run_dazpy
 from .._errors import handle_dazpy_error
+
+_MAP_EXT = re.compile(r"\.(?:jpe?g|png|tiff?|gif|bmp|exr|hdr|dsf)$", re.I)
+
+
+def extract_preset_map_paths(preset_path: str) -> list[str]:
+    """Return every texture-map path referenced anywhere in a .duf/.dsf preset."""
+    path = Path(preset_path)
+    raw = path.read_bytes()
+    if raw[:2] == b"\x1f\x8b":
+        raw = gzip.decompress(raw)
+    data = json.loads(raw.decode("utf-8"))
+    found: list[str] = []
+    seen: set[str] = set()
+
+    def walk(obj: Any) -> None:
+        if isinstance(obj, str):
+            base = obj.split("#", 1)[0].replace("\\", "/")
+            if _MAP_EXT.search(base) and base not in seen:
+                seen.add(base)
+                found.append(base)
+        elif isinstance(obj, dict):
+            for value in obj.values():
+                walk(value)
+        elif isinstance(obj, list):
+            for value in obj:
+                walk(value)
+
+    walk(data)
+    return found
 
 
 # ---------------------------------------------------------------------------
@@ -160,7 +192,11 @@ async def daz_set_material_property(
 
 
 @mcp.tool()
-async def daz_apply_material_preset(node_label: str, preset_path: str) -> dict[str, Any]:
+async def daz_apply_material_preset(
+    node_label: str,
+    preset_path: str,
+    allow_missing: bool = False,
+) -> dict[str, Any]:
     """Apply a DAZ material preset (.duf) file to a scene node.
 
     Selects the named node and calls ``App.getContentMgr().openFile()`` with the
@@ -171,11 +207,16 @@ async def daz_apply_material_preset(node_label: str, preset_path: str) -> dict[s
     The node must already be present in the scene.  The preset must be a material
     preset ``.duf`` file — not a full scene or prop file.
 
+    Texture paths referenced by the preset are resolved before ``openFile``.
+    Missing maps abort with an error instead of opening Studio's Missing Files
+    dialog (which blocks the script server and can crash DAZ if left open).
+
     Args:
         node_label: Display label of the node to apply the material to
             (e.g. ``"Genesis 9"``).
         preset_path: Absolute path to the ``.duf`` material preset file
             (e.g. ``"C:/DAZ/My Library/Materials/Skin/Hero Skin.duf"``).
+        allow_missing: If True, apply anyway when maps are missing (dialog risk).
 
     Returns:
         Dict with keys:
@@ -189,14 +230,25 @@ async def daz_apply_material_preset(node_label: str, preset_path: str) -> dict[s
         daz_apply_material_preset("Genesis 9", "C:/Library/Materials/Skin/Hero Skin.duf")
         daz_apply_material_preset("Genesis 9", "D:/assets/Mats/Sci-Fi Suit.duf")
     """
+    try:
+        map_paths = extract_preset_map_paths(preset_path)
+    except (OSError, json.JSONDecodeError, UnicodeDecodeError, gzip.BadGzipFile) as exc:
+        raise ToolError(f"Failed to read material preset {preset_path!r}: {exc}") from exc
     return await _execute_by_id(
         "vangard-apply-material-preset",
-        {"nodeLabel": node_label, "presetPath": preset_path},
+        {
+            "nodeLabel": node_label,
+            "presetPath": preset_path,
+            "mapPaths": map_paths,
+            "allowMissing": allow_missing,
+        },
     )
 
 
 @mcp.tool()
-async def daz_convert_to_iray_uber(node_label: str, preset_path: str | None = None) -> dict[str, Any]:
+async def daz_convert_to_iray_uber(
+    node_label: str, preset_path: str | None = None
+) -> dict[str, Any]:
     """Upgrade every material zone on a node from DzDefaultMaterial to DzUberIrayMaterial.
 
     Content merged into a scene as raw DSON (a hand-authored .duf, or output from a

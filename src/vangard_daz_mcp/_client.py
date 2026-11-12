@@ -38,19 +38,22 @@ DAZ_API_TOKEN: str = os.environ.get("DAZ_API_TOKEN") or _load_token_from_file()
 # Shared protocol/content clients — set/cleared by the server lifespan
 # ---------------------------------------------------------------------------
 
-_async_daz_client: AsyncDazClient | None = None
-_content_browser_client: httpx.AsyncClient | None = None
+# Mutable singleton state reassigned via `global` in set_async_daz_client()/
+# set_content_browser_client() below, not a real constant; pylint's naming checker
+# treats any module-scope scalar assignment as one regardless of case.
+_async_daz_client: AsyncDazClient | None = None  # pylint: disable=invalid-name
+_content_browser_client: httpx.AsyncClient | None = None  # pylint: disable=invalid-name
 
 
 def set_async_daz_client(client: AsyncDazClient | None) -> None:
     """Set or clear the sole async Daz Script Server protocol client."""
-    global _async_daz_client
+    global _async_daz_client  # pylint: disable=global-statement
     _async_daz_client = client
 
 
 def set_content_browser_client(client: httpx.AsyncClient | None) -> None:
     """Set (or clear) the shared content-browser httpx client."""
-    global _content_browser_client
+    global _content_browser_client  # pylint: disable=global-statement
     _content_browser_client = client
 
 
@@ -72,13 +75,13 @@ def get_content_browser_client() -> httpx.AsyncClient:
 # dazpy singletons — created lazily on first access
 # ---------------------------------------------------------------------------
 
-_daz_client: DazClient | None = None
-_daz_scene: DazScene | None = None
+_daz_client: DazClient | None = None  # pylint: disable=invalid-name
+_daz_scene: DazScene | None = None  # pylint: disable=invalid-name
 
 
 def get_daz_client() -> DazClient:
     """Return the singleton DazClient, creating it on first access."""
-    global _daz_client
+    global _daz_client  # pylint: disable=global-statement
     if _daz_client is None:
         _daz_client = DazClient(
             host=DAZ_HOST,
@@ -91,7 +94,7 @@ def get_daz_client() -> DazClient:
 
 def get_scene() -> DazScene:
     """Return the singleton DazScene, creating it on first access."""
-    global _daz_scene
+    global _daz_scene  # pylint: disable=global-statement
     if _daz_scene is None:
         _daz_scene = DazScene(get_daz_client())
     return _daz_scene
@@ -104,7 +107,7 @@ def set_scene(scene: DazScene | None) -> None:
     silently fall through to a real DazScene/DazClient connection for any tool
     that uses get_scene()/run_dazpy(), reaching a live DAZ Studio instance.
     """
-    global _daz_scene
+    global _daz_scene  # pylint: disable=global-statement
     _daz_scene = scene
 
 

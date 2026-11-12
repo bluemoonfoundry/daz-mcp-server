@@ -34,8 +34,10 @@ try:
 except (OSError, json.JSONDecodeError):
     pass
 
-_macro_recording: bool = False
-_current_macro: dict[str, Any] | None = None
+# Mutable module state toggled via `global` in daz_start_recording()/
+# daz_stop_recording() below, not a real constant.
+_macro_recording: bool = False  # pylint: disable=invalid-name
+_current_macro: dict[str, Any] | None = None  # pylint: disable=invalid-name
 _macro_library: dict[str, dict[str, Any]] = {}
 _call_stats: dict[str, int] = {}
 
@@ -77,6 +79,11 @@ async def daz_execute(
        (function(){ return Scene.getNumNodes(); })()
 
     4. ✅ Environment node is ALWAYS Scene.getNode(1) - not findNodeByLabel()
+
+    5. ❌ NEVER use MainWindow.menuBar() — not Q_INVOKABLE (undefined on DS6).
+       ✅ MainWindow.getActionMgr().findAction("DzERCFreezeAction")
+       ✅ mgr.getMenu() walks DzActionMenu (item.label / item.action)
+       ✅ new DzERCFreeze() for headless ERC freeze — do not act.trigger()
 
     For detailed examples and documentation, use the daz_script_help tool first.
 
@@ -188,6 +195,39 @@ async def daz_script_help(topic: str = "overview") -> str:
     content = doc.get("content", "No content available.")
 
     return f"# {title}\n\n{content}"
+
+
+@mcp.tool()
+async def daz_find_actions(
+    query: str,
+    max_results: int = 30,
+) -> dict[str, Any]:
+    """Search DAZ Studio actions without walking Qt menus.
+
+    ``MainWindow.menuBar()`` is not scriptable (not Q_INVOKABLE). Use this
+    instead of guessing menu APIs. Searches ``DzActionMgr`` by className,
+    simpleText, description, defaultMenu, and actionGroup.
+
+    Does **not** trigger actions — many ``Dz*Action`` classes open modal
+    dialogs and time out the script server.
+
+    Args:
+        query: Case-insensitive substring (e.g. ``"ERC Freeze"``,
+            ``"DzERCFreezeAction"``, ``"Transfer Utility"``).
+        max_results: Cap on returned matches (default 30, max 100).
+
+    Returns:
+        Dict with query, count, scanned, truncated, and
+        matches[{className, simpleText, description, defaultMenu, actionGroup}].
+
+    Examples:
+        daz_find_actions("ERC Freeze")
+        daz_find_actions("DzStrandHairCreateNodeAction")
+    """
+    return await _execute_by_id(
+        "vangard-find-actions",
+        {"query": query, "maxResults": max_results},
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -355,7 +395,7 @@ async def daz_validate_script(script: str) -> dict[str, Any]:
     warnings_list = []
     suggestions = []
 
-    _ANTI_PATTERNS = [
+    anti_patterns = [
         # (regex_fragment, is_error, message, suggestion)
         (
             "DzNewCameraAction",
@@ -410,7 +450,7 @@ async def daz_validate_script(script: str) -> dict[str, Any]:
     has_iife = "(function()" in script or "(function (" in script
 
     for line_idx, line in enumerate(lines, start=1):
-        for pattern, is_error, message, suggestion in _ANTI_PATTERNS:
+        for pattern, is_error, message, suggestion in anti_patterns:
             if re.search(pattern, line):
                 entry = {
                     "line": line_idx,
@@ -603,7 +643,7 @@ async def daz_start_recording(
         - Macros are stored in memory and lost when MCP server restarts
         - Use daz_replay_macro() to execute saved macros
     """
-    global _macro_recording, _current_macro
+    global _macro_recording, _current_macro  # pylint: disable=global-statement
 
     # Validate macro name
     if not macro_name or len(macro_name) > 64:

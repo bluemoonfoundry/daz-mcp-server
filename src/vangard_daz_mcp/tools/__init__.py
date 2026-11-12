@@ -18,3 +18,4 @@ from . import content       # noqa: F401
 from . import cinematic     # noqa: F401
 from . import wardrobe      # noqa: F401
 from . import workflow      # noqa: F401
+from . import hair          # noqa: F401

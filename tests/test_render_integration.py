@@ -23,6 +23,7 @@ from vangard_daz_mcp.tools.render import (
     daz_get_render_settings,
     daz_render,
     daz_render_with_camera,
+    daz_set_render_engine,
     daz_set_render_quality,
 )
 
@@ -38,8 +39,9 @@ class TestGetRenderSettings:
 
     async def test_has_render_engine(self, live_client):
         result = await daz_get_render_settings()
-        text = str(result).lower()
-        assert any(k in text for k in ["engine", "render", "iray", "3delight", "quality"])
+        assert result["engine"] in ("viewport", "multi_pass_opengl", "iray", "other")
+        assert result["renderType"] in (0, 1, 2)
+        assert "activeRendererClass" in result
 
     async def test_has_dimensions(self, live_client):
         result = await daz_get_render_settings()
@@ -60,6 +62,25 @@ class TestSetRenderQuality:
     async def test_invalid_preset_raises(self, live_client):
         with pytest.raises((ToolError, ValueError, Exception)):
             await daz_set_render_quality("nonexistent_preset_xyz")
+
+
+class TestSetRenderEngine:
+    async def test_set_iray_and_opengl_roundtrip(self, live_client):
+        opengl = await daz_set_render_engine("multi_pass_opengl")
+        assert opengl["engine"] == "multi_pass_opengl"
+        assert opengl["renderType"] == 1
+        got = await daz_get_render_settings()
+        assert got["engine"] == "multi_pass_opengl"
+        iray = await daz_set_render_engine("iray")
+        assert iray["engine"] == "iray"
+        assert iray["renderType"] == 2
+        assert iray["activeRendererClass"] == "DzIrayRenderer"
+        got = await daz_get_render_settings()
+        assert got["engine"] == "iray"
+
+    async def test_invalid_engine_raises(self, live_client):
+        with pytest.raises((ToolError, ValueError, Exception)):
+            await daz_set_render_engine("filament")
 
 
 # ---------------------------------------------------------------------------

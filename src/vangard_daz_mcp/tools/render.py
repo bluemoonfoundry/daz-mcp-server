@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import asyncio
 import os
+import time
 from typing import Any
 
 import dazpy.exceptions as daz_exc
@@ -27,9 +28,10 @@ async def daz_render(
     configured in DAZ Studio's Render Settings panel.
 
     Args:
-        output_path: Optional absolute path for the output image
-                     (e.g. "C:/renders/scene.png"). If omitted, DAZ Studio
-                     uses its currently configured output path.
+        output_path: Absolute path for the output image
+                     (e.g. "C:/renders/scene.png"). Required unless
+                     daz_set_render_output already set a file path — otherwise
+                     Studio opens a filename dialog instead of rendering.
 
     Returns:
       - success: true when the render was launched without error
@@ -99,13 +101,21 @@ async def daz_get_render_settings() -> dict[str, Any]:
       - aspectRatio: aspect ratio value
       - aspectWidth: aspect width component
       - aspectHeight: aspect height component
+      - width: render image width in pixels
+      - height: render image height in pixels
+      - engine: viewport | multi_pass_opengl | iray | other
+      - renderType: 0 ScreenShot / 1 HardwareAssisted / 2 Software
+      - renderTypeName: ScreenShot | HardwareAssisted | Software
+      - activeRenderer: DzRenderer display name (usually NVIDIA Iray)
+      - activeRendererClass: DzRenderer class name
+      - warning: present when engine is viewport (needs DirectToFile + output path)
 
     Example:
         # Check render settings
         settings = daz_get_render_settings()
         print(f"Render camera: {settings['currentCamera']}")
         print(f"Output: {settings['outputPath']}")
-        print(f"Aspect: {settings['aspectWidth']}x{settings['aspectHeight']}")
+        print(f"Size: {settings['width']}x{settings['height']}")
 
         # Verify render is configured correctly before batch render
         settings = daz_get_render_settings()
@@ -113,9 +123,11 @@ async def daz_get_render_settings() -> dict[str, Any]:
             print("Warning: Render is configured for viewport, not file output")
 
     Note:
-        - Aspect ratio determines render dimensions relative to each other
-        - Pixel dimensions cannot be set reliably via DazScript
+        - width/height come from DzRenderOptions.imageSize (pixels)
+        - Use daz_set_render_output to persist DirectToFile + path + size
         - currentCamera may be null if using active viewport camera
+        - DS6 Engine dropdown is opts.renderType, not getActiveRenderer()
+        - Use daz_set_render_engine to change engine
     """
     return await _execute_by_id("vangard-get-render-settings", {})
 
@@ -706,7 +718,6 @@ async def daz_wait_for_request(
         ToolError: If the request failed or was cancelled.
         asyncio.TimeoutError: If the timeout is exceeded.
     """
-    import time
     deadline = time.monotonic() + timeout_seconds
 
     while True:
@@ -771,3 +782,22 @@ async def daz_set_render_output(
         "vangard-set-render-output",
         {"outputPath": output_path, "width": width, "height": height},
     )
+
+
+@mcp.tool()
+async def daz_set_render_engine(engine: str) -> dict[str, Any]:
+    """Set the DS6 Render Settings engine (Viewport / OpenGL / Iray).
+
+    The UI dropdown is ``DzRenderOptions.renderType``, not a DzRenderer switch.
+    ``getActiveRenderer()`` stays NVIDIA Iray for all three modes.
+
+    Args:
+        engine: ``iray``, ``multi_pass_opengl`` (aliases: ``opengl``), or
+                ``viewport``. Viewport needs DirectToFile + output path or Studio
+                opens a filename dialog.
+
+    Returns:
+        success, engine, renderType, renderTypeName, activeRenderer,
+        activeRendererClass, and warning when engine is viewport.
+    """
+    return await _execute_by_id("vangard-set-render-engine", {"engine": engine})

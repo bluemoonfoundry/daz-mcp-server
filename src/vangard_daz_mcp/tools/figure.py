@@ -410,3 +410,55 @@ async def daz_load_pose(
         raise
     except Exception as e:
         handle_dazpy_error(e)
+
+
+@mcp.tool()
+async def daz_erc_freeze(
+    controller_node: str,
+    controller_property: str,
+    freeze_nodes: list[str] | None = None,
+    restore_figure: bool = True,
+    restore_rigging: bool = True,
+    apply_controller: bool = True,
+    keyed: bool = False,
+) -> dict[str, Any]:
+    """Headless ERC Freeze — link current non-default numeric values to a controller.
+
+    Uses ``new DzERCFreeze()`` from the Property Hierarchy plugin, not the
+    ``DzERCFreezeAction`` menu item (which opens a dialog and will time out).
+    ``MainWindow.menuBar()`` is not needed and is not scriptable.
+
+    The controller property must already exist. Properties to freeze are
+    whatever currently differs from raw/default on each freeze node
+    (``addPropertiesToFreeze``). If everything is at default, the call errors.
+
+    Args:
+        controller_node: Figure or bone that owns the controlling dial
+            (label, name, elementID, or ``Parent/Label``).
+        controller_property: Label or internal name of the controlling
+            numeric property (e.g. a custom morph).
+        freeze_nodes: Nodes whose non-default numeric properties are linked.
+            Defaults to ``controller_node`` itself.
+        restore_figure: Restore figure shape after freeze (default True).
+        restore_rigging: Restore rigging after freeze (default True).
+        apply_controller: Apply the controller as part of the freeze (default True).
+        keyed: Use keyed ERC instead of delta-add (default False).
+
+    Returns:
+        Dict with success, controllerNode, controllerProperty, freezeNodes,
+        propertiesFrozen.
+
+    Examples:
+        daz_erc_freeze("Genesis 8 Female", "MyShape", freeze_nodes=["Genesis 8 Female"])
+    """
+    payload: dict[str, Any] = {
+        "controllerNode": controller_node,
+        "controllerProperty": controller_property,
+        "restoreFigure": restore_figure,
+        "restoreRigging": restore_rigging,
+        "applyController": apply_controller,
+        "keyed": keyed,
+    }
+    if freeze_nodes:
+        payload["freezeNodes"] = freeze_nodes
+    return await _execute_by_id("vangard-erc-freeze", payload)

@@ -1315,7 +1315,7 @@ async def daz_animate_light(
         raise ToolError("start_frame must be >= 0 and end_frame must be > start_frame")
     if intensity < 0 or intensity > 100000:
         raise ToolError("intensity must be between 0 and 100000 lumens")
-    if not (0.0 <= flicker_amount <= 1.0):
+    if not 0.0 <= flicker_amount <= 1.0:
         raise ToolError("flicker_amount must be between 0.0 and 1.0")
     if strobe_interval < 1:
         raise ToolError("strobe_interval must be at least 1 frame")
@@ -1930,13 +1930,13 @@ async def daz_set_scene_atmosphere(
             f"Invalid environment_mode {environment_mode}. "
             "Valid: 0 (Sun-Sky Only), 1 (Dome Only), 2 (Sun-Sky+Dome), 3 (Scene Only)"
         )
-    if environment_intensity is not None and not (0.0 <= environment_intensity <= 10.0):
+    if environment_intensity is not None and not 0.0 <= environment_intensity <= 10.0:
         raise ToolError("environment_intensity must be between 0.0 and 10.0")
-    if dome_scale is not None and not (0.01 <= dome_scale <= 100.0):
+    if dome_scale is not None and not 0.01 <= dome_scale <= 100.0:
         raise ToolError("dome_scale must be between 0.01 and 100.0")
-    if dome_rotation is not None and not (0.0 <= dome_rotation <= 360.0):
+    if dome_rotation is not None and not 0.0 <= dome_rotation <= 360.0:
         raise ToolError("dome_rotation must be between 0.0 and 360.0")
-    if sun_light_intensity is not None and not (0.0 <= sun_light_intensity <= 10.0):
+    if sun_light_intensity is not None and not 0.0 <= sun_light_intensity <= 10.0:
         raise ToolError("sun_light_intensity must be between 0.0 and 10.0")
 
     return await _execute_by_id("vangard-set-scene-atmosphere", {
@@ -2009,7 +2009,7 @@ async def daz_apply_visual_style(
             f"Invalid style_name '{style_name}'. "
             f"Valid: {', '.join(sorted(_VALID_VISUAL_STYLES))}"
         )
-    if not (0.1 <= intensity <= 5.0):
+    if not 0.1 <= intensity <= 5.0:
         raise ToolError("intensity must be between 0.1 and 5.0")
 
     return await _execute_by_id("vangard-apply-visual-style", {
@@ -2199,7 +2199,7 @@ async def daz_import_node_config(
     """
     if not input_path:
         raise ToolError("input_path must not be empty")
-    if not (0.0001 <= scale_transforms <= 1000.0):
+    if not 0.0001 <= scale_transforms <= 1000.0:
         raise ToolError("scale_transforms must be between 0.0001 and 1000.0")
 
     input_file = Path(input_path)
@@ -2339,7 +2339,7 @@ async def daz_time_expression(
     if emotion not in _EMOTION_DEFINITIONS:
         valid = sorted(_EMOTION_DEFINITIONS.keys())
         raise ToolError(f"Unknown emotion '{emotion}'. Valid: {', '.join(valid)}")
-    if not (0.0 <= intensity <= 1.0):
+    if not 0.0 <= intensity <= 1.0:
         raise ToolError("intensity must be between 0.0 and 1.0")
     if ease_in_frames < 0 or hold_frames < 0 or ease_out_frames < 0:
         raise ToolError("ease_in_frames, hold_frames, and ease_out_frames must be >= 0")

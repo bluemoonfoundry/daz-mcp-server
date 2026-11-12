@@ -1,5 +1,8 @@
 # CLAUDE.md (Project Index)
 
+Handoff: `D:\OpenCode\Projects\daz-mcp-dev-handoff.md`
+Bug-Katalog: `C:\Users\Black-Byte\Development\pinkcharakter\docs\daz-mcp-bridge-bugs.md`
+
 ## Primary Commands
 - `uv sync` - Install dependencies
 - `uv run pytest tests/ -v` - Run all tests
@@ -15,7 +18,7 @@
 ## Architecture Summary
 - **Version:** 0.4.0
 - **Bridge:** Connects to DazScriptServer (port 18811)
-- **Registry:** 138 tools registered across 13 tool modules.
+- **Registry:** 149 tools registered across 13 tool modules.
 - **Structure:** Modular — `_mcp.py` holds shared FastMCP instance; `tools/__init__.py` imports all 13 modules so `@mcp.tool()` decorators fire at import time.
 - **Phase 4.8:** Lighting Animation — `daz_animate_light`, `daz_create_light_sequence`
 - **Phase 4.9:** Shot Planning — `daz_plan_shot`, `daz_create_storyboard`
@@ -25,13 +28,28 @@
 - **Phase 4.13:** Performance Timing — `daz_time_expression`, `daz_sync_character_beats`
 - **Phase 5:** Gap Coverage — `daz_list_materials`, `daz_get_material`, `daz_set_material_property`, `daz_set_morph`, `daz_delete_node`, `daz_list_lights`, `daz_create_light`, `daz_list_cameras`, `daz_create_camera`, `daz_save_scene`, `daz_get_selected_nodes`, `daz_set_render_output`, `daz_reset_pose`
 - **Phase 6.1:** Wardrobe — `daz_list_fitted_items`, `daz_fit_clothing`, `daz_unfit_item`
-- **Phase 6.2:** dForce Simulation — `daz_run_dforce_simulation`, `daz_bake_simulation`, `daz_set_dforce_property`
+- **Phase 6.2:** dForce Simulation — `daz_add_dforce_dynamic_surface`, `daz_set_dforce_influence_weights`, `daz_get_dforce_influence_weights`, `daz_run_dforce_simulation`, `daz_bake_simulation`, `daz_set_dforce_property`
 - **Phase 6.3:** Pose Library — `daz_save_pose`, `daz_load_pose`
 - **Phase 6.4:** Material Preset — `daz_apply_material_preset`, `daz_copy_material`
 - **Phase 6.5:** Figure Diagnostics — `daz_get_figure_info`, `daz_set_subdivision`
 - **Phase 6.6:** Scene Export — `daz_export_fbx`, `daz_export_obj`
 - **Phase 6.7:** Shader-class fixup — `daz_convert_to_iray_uber` (fixes content that lands as
   legacy `DzDefaultMaterial` instead of `DzUberIrayMaterial` after a raw/merged `.duf` import)
+- **Phase 6.8:** Transfer Utility — `daz_run_transfer_utility` (headless `DzTransferUtility`
+  projection of rigging/morphs/UVs/groups between nodes; Bug-Katalog #17)
+- **Phase 6.9:** dForce Surface Properties — `daz_get_dforce_surface_properties`,
+  `daz_set_dforce_surface_property` (per-material `DzDForceSettingsProvider` — Collision
+  Offset, Self Collide, Dynamics Strength, stiffness, etc.; Bug-Katalog #18)
+- **Phase 6.11:** Content-Library Asset Export — `daz_save_prop_asset` (headless
+  `DzNodeSupportAssetFilter` Prop/Figure Support Asset export; Bug-Katalog #22 Teil 1)
+- **Phase 6.12:** Morph Loader Pro — `daz_load_morph_pro` (headless `DzMorphLoader` OBJ
+  morph-target import: load mode, mirroring, overwrite mode, reverse deformations,
+  subdivision mapping, attenuation maps, ERC control-property linking; harvested from
+  fork ebf444a)
+- **Phase 6.12:** Wearable Preset export — `daz_save_wearable_preset` (fit-to-figure
+  asset export via Windows UI Automation, working around a reproducibly broken
+  `DzWearablesAssetFilter.doSave()` script API; Windows-only, requires `pywinauto`;
+  Bug-Katalog #22 Teil 2; harvested from fork 6a0f9c1)
 
 ## Render API (DazScriptServer native endpoints)
 `daz_render_async`, `daz_render_with_camera_async`, `daz_batch_render_cameras_async` use

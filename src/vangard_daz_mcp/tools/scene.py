@@ -56,11 +56,31 @@ async def daz_load_file(
                    (.duf, .daz, .obj, .fbx, etc.).
         merge: If True (default), merge the file into the existing scene.
                If False, replace the current scene entirely.
+               Ignored for ``.obj`` — OBJ import always merges via the silent
+               importer at scale 1 (1 unit = 1 cm).
 
     Returns:
       - success: true on success
       - file: the path that was loaded
+
+    Do not pass ``.bvh`` files. The native BVH importer always opens a modal
+    Studio dialog (Bug 11); this call blocks until a human clicks it, and
+    leaving the dialog open can hang or crash Studio. Parse the BVH and set
+    keys with ``setValue(time, value)`` instead.
     """
+    if file_path.lower().endswith(".bvh"):
+        raise ToolError(
+            "BVH cannot be loaded via daz_load_file: DzBvhImporter always "
+            "opens a modal dialog that blocks the script server until a human "
+            "confirms it (Bug 11). Do not wait on this call. Parse the BVH and "
+            "apply keys with setValue(time, value), or use a dedicated pipeline "
+            "script. See D:/OpenCode/Projects/bvh-dialog-loesung.md"
+        )
+    if file_path.lower().endswith(".obj"):
+        return await _execute_by_id(
+            "vangard-import-obj",
+            {"filePath": file_path, "scaleFactor": 1.0},
+        )
     if merge:
         try:
             await run_dazpy(lambda: get_scene().load(file_path))

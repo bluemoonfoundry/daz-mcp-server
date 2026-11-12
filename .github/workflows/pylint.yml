@@ -26,6 +26,11 @@ jobs:
         # and missing-function/class-docstring since 99% of the 467 hits there
         # are self-descriptively-named test_* functions and TestXxx grouping
         # classes (daz-mcp-server-dk7) -- module docstrings stay required.
+        # import-outside-toplevel is also disabled for tests/: nearly every test
+        # file imports `fastmcp.exceptions.ToolError` or `json` inside the test
+        # function right next to its usage, a consistent, deliberate convention
+        # across the whole suite (not incidental to any one file) rather than a
+        # real defect (daz-mcp-server-e2v).
         # --fail-under: pass CI on rating ≥7.0 despite warnings/refactors/conventions.
         pylint --fail-under=7.0 $(git ls-files '*.py' | grep -v '^tests/')
-        pylint --fail-under=7.0 --disable=redefined-outer-name,unused-argument,missing-function-docstring,missing-class-docstring $(git ls-files 'tests/*.py')
+        pylint --fail-under=7.0 --disable=redefined-outer-name,unused-argument,missing-function-docstring,missing-class-docstring,import-outside-toplevel $(git ls-files 'tests/*.py')

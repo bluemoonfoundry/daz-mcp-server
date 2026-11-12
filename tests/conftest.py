@@ -39,6 +39,29 @@ BASE_URL = "http://localhost:18811"
 # on every test in the same process run.
 _cache: dict = {}
 
+# Fixture names that talk to a real DAZ Studio instance (directly or
+# transitively) — matched by name so this also catches test_phase5_integration.py's
+# own local live_client, which intentionally duplicates the one below.
+_LIVE_FIXTURE_NAMES = {
+    "live_client", "figure_label", "second_figure_label",
+    "temp_camera", "temp_spot_light", "first_material",
+}
+
+
+def pytest_collection_modifyitems(items):
+    """Auto-mark every test using a live-DAZ fixture as `integration`.
+
+    Several test files use `live_client` (or a fixture that depends on it)
+    without an explicit `@pytest.mark.integration`, so `-m "not integration"`
+    silently failed to exclude them whenever DAZ Studio happened to be
+    reachable — the runtime skip inside the fixture only fires when it
+    isn't. This makes the marker filter actually reliable regardless of
+    whether the file remembered to set it.
+    """
+    for item in items:
+        if _LIVE_FIXTURE_NAMES & set(getattr(item, "fixturenames", ())):
+            item.add_marker(pytest.mark.integration)
+
 
 def _daz_available() -> bool:
     """Synchronous probe — True if DazScriptServer is reachable."""
