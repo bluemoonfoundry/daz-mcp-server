@@ -6788,6 +6788,8 @@ _LIST_FITTED_ITEMS_SCRIPT = """\
     for (var i = 0; i < numNodes; i++) {
         var node = Scene.getNode(i);
         if (!node || node === fig) continue;
+        // Skip the figure's own skeleton (e.g. the Hip root bone is parented to the figure)
+        if (typeof node.inherits === 'function' && node.inherits("DzBone")) continue;
 
         var isFitted = false;
         var itemType = "prop";
@@ -7816,6 +7818,8 @@ _GET_FIGURE_INFO_SCRIPT = """\
     for (var n = 0; n < Scene.getNumNodes(); n++) {
         var other = Scene.getNode(n);
         if (!other || other.elementID === myID) continue;
+        // Skip the figure's own skeleton (e.g. the Hip root bone is parented to the figure)
+        if (typeof other.inherits === 'function' && other.inherits("DzBone")) continue;
         if (typeof other.getFollowTarget === 'function') {
             var ft = other.getFollowTarget();
             if (ft && ft.elementID === myID) { fittedCount++; continue; }
