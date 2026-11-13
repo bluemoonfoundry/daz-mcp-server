@@ -7812,17 +7812,17 @@ _GET_FIGURE_INFO_SCRIPT = """\
 
     // Count fitted items (nodes with follow target pointing to this figure, or direct children)
     var fittedCount = 0;
-    var myID = fig.getElementID();
+    var myID = fig.elementID;
     for (var n = 0; n < Scene.getNumNodes(); n++) {
         var other = Scene.getNode(n);
-        if (!other || other.getElementID() === myID) continue;
+        if (!other || other.elementID === myID) continue;
         if (typeof other.getFollowTarget === 'function') {
             var ft = other.getFollowTarget();
-            if (ft && ft.getElementID() === myID) { fittedCount++; continue; }
+            if (ft && ft.elementID === myID) { fittedCount++; continue; }
         }
         if (typeof other.getNodeParent === 'function') {
             var par = other.getNodeParent();
-            if (par && par.getElementID() === myID) fittedCount++;
+            if (par && par.elementID === myID) fittedCount++;
         }
     }
 
