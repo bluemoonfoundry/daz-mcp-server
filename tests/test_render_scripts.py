@@ -86,3 +86,5 @@ def test_camera_render_scripts_switch_and_restore_viewport_camera():
         assert "finally" in script, script_id
         assert "viewport3D.setCamera(previousViewportCam)" in script, script_id
         assert script.index("doRender(opts)") < script.index("viewport3D.setCamera(previousViewportCam)"), script_id
+        assert "if (previousCam) opts.camera" not in script, script_id
+        assert "opts.camera = previousCam;" in script, script_id

@@ -1374,7 +1374,7 @@ _RENDER_WITH_CAMERA_SCRIPT = """\
         renderMgr.doRender(opts);
     } finally {
         if (previousViewportCam) viewport3D.setCamera(previousViewportCam);
-        if (previousCam) opts.camera = previousCam;
+        opts.camera = previousCam;  // may be null; never leave a dangling camera ref
         opts.applyChanges();
     }
 
@@ -1512,7 +1512,7 @@ _BATCH_RENDER_CAMERAS_SCRIPT = """\
         }
     } finally {
         if (previousViewportCam) viewport3D.setCamera(previousViewportCam);
-        if (previousCam) opts.camera = previousCam;
+        opts.camera = previousCam;  // may be null; never leave a dangling camera ref
         opts.renderImgFilename = previousFilename;
         opts.applyChanges();
     }
@@ -1606,7 +1606,7 @@ _RENDER_ANIMATION_SCRIPT = """\
         // Restore previous frame, camera, and output path
         Scene.setFrame(previousFrame);
         if (cam && previousViewportCam) viewport3D.setCamera(previousViewportCam);
-        if (previousCam) opts.camera = previousCam;
+        opts.camera = previousCam;  // may be null; never leave a dangling camera ref
         opts.renderImgFilename = previousFilename;
         opts.applyChanges();
     }
