@@ -64,3 +64,25 @@ def test_set_render_engine_uses_render_type_not_renderer_count():
     assert "opts.renderType = opts.Software" in script
     assert "opts.applyChanges()" in script
     assert "getNumRenderers" not in script
+
+
+def test_camera_render_scripts_switch_and_restore_viewport_camera():
+    """DS6 renders from the active viewport camera and ignores opts.camera.
+
+    Verified live 2026-10-31: viewport=FaceCam + opts.camera="Portrait Cam"
+    rendered FaceCam. Camera-targeted scripts must switch the viewport camera
+    before doRender and restore it in a finally block.
+    """
+    for script_id in (
+        "vangard-render-with-camera",
+        "vangard-batch-render-cameras",
+        "vangard-render-animation",
+    ):
+        script = _REGISTRY[script_id][1]
+        assert "MainWindow.getViewportMgr()" in script, script_id
+        assert "App.getViewportMgr" not in script, script_id
+        assert "viewport3D.setCamera(cam)" in script, script_id
+        assert script.index("viewport3D.setCamera(cam)") < script.index("doRender(opts)"), script_id
+        assert "finally" in script, script_id
+        assert "viewport3D.setCamera(previousViewportCam)" in script, script_id
+        assert script.index("doRender(opts)") < script.index("viewport3D.setCamera(previousViewportCam)"), script_id
