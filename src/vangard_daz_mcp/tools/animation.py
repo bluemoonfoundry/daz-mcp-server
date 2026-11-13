@@ -360,11 +360,18 @@ async def daz_get_animation_info() -> dict[str, Any]:
         current = scene.frame()
         anim = scene.anim_range()
         # DAZ Studio uses 4800 ticks/second; time_step = ticks per frame
+        # getTimeStep() returns a DzTime object, which serialises to a dict;
+        # .valueOf() yields the tick count (Number(ts) would return 0).
         ts_result = client.execute(
-            "(function(){ return Scene.getTimeStep(); })();"
+            "(function(){ return Scene.getTimeStep().valueOf(); })();"
         )
-        step = ts_result.value or 160  # 160 ticks @ 30 fps
-        fps = round(4800 / step) if step > 0 else 30
+        raw_step = ts_result.value
+        step = (
+            raw_step
+            if isinstance(raw_step, (int, float)) and not isinstance(raw_step, bool) and raw_step > 0
+            else 160  # 160 ticks @ 30 fps
+        )
+        fps = round(4800 / step)
         start = anim["start"]
         end = anim["end"]
         total = max(0, end - start + 1)
