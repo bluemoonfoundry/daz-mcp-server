@@ -1322,44 +1322,66 @@ _RENDER_WITH_CAMERA_SCRIPT = """\
     var renderMgr = App.getRenderMgr();
     var opts = renderMgr.getRenderOptions();
 
-    // Save previous camera
-    var previousCam = opts.camera;
-
-    // Set render camera
-    opts.camera = cam;
-
     var path = args.outputPath || opts.renderImgFilename;
     if (!path) {
         throw new Error("Render output path is not set. Pass output_path or call daz_set_render_output first — otherwise Studio opens a filename dialog.");
     }
-    opts.renderImgToId = opts.DirectToFile;
-    opts.renderImgFilename = path;
-    try {
-        var helper = renderMgr.getOptionHelper();
-        if (helper) {
-            var slash = Math.max(String(path).lastIndexOf("/"), String(path).lastIndexOf("\\\\"));
-            var dir = slash >= 0 ? String(path).substring(0, slash) : "";
-            var name = slash >= 0 ? String(path).substring(slash + 1) : String(path);
-            var np = helper.findProperty("Image Name");
-            var pp = helper.findProperty("Image Path");
-            if (np && typeof np.setValue === "function") np.setValue(name);
-            if (pp && typeof pp.setValue === "function") pp.setValue(dir);
-        }
-    } catch (e) {}
-    opts.applyChanges();
-    if (Number(opts.renderImgToId) !== Number(opts.DirectToFile) || !opts.renderImgFilename) {
-        throw new Error("Render-to-file did not persist (renderImgToId=" + opts.renderImgToId + ", file=" + opts.renderImgFilename + ")");
-    }
-    renderMgr.doRender(opts);
 
-    if (previousCam) {
-        opts.camera = previousCam;
+    // DS6: doRender() renders from the active 3D viewport's camera and ignores
+    // opts.camera, so the viewport camera must be switched too (verified live:
+    // viewport=FaceCam + opts.camera="Portrait Cam" rendered FaceCam).
+    var viewport3D = null;
+    try {
+        var vpMgr = MainWindow.getViewportMgr();
+        var activeVp = vpMgr ? vpMgr.getActiveViewport() : null;
+        viewport3D = activeVp ? activeVp.get3DViewport() : null;
+    } catch (e) { viewport3D = null; }
+    if (!viewport3D) throw new Error("Cannot access the active 3D viewport to select the render camera");
+    var previousViewportCam = viewport3D.getCamera();
+
+    // Save previous camera
+    var previousCam = opts.camera;
+    var renderedFrom = null;
+
+    try {
+        // Set render camera (viewport camera is what DS6 actually renders from)
+        opts.camera = cam;
+        viewport3D.setCamera(cam);
+
+        opts.renderImgToId = opts.DirectToFile;
+        opts.renderImgFilename = path;
+        try {
+            var helper = renderMgr.getOptionHelper();
+            if (helper) {
+                var slash = Math.max(String(path).lastIndexOf("/"), String(path).lastIndexOf("\\\\"));
+                var dir = slash >= 0 ? String(path).substring(0, slash) : "";
+                var name = slash >= 0 ? String(path).substring(slash + 1) : String(path);
+                var np = helper.findProperty("Image Name");
+                var pp = helper.findProperty("Image Path");
+                if (np && typeof np.setValue === "function") np.setValue(name);
+                if (pp && typeof pp.setValue === "function") pp.setValue(dir);
+            }
+        } catch (e) {}
+        opts.applyChanges();
+        if (Number(opts.renderImgToId) !== Number(opts.DirectToFile) || !opts.renderImgFilename) {
+            throw new Error("Render-to-file did not persist (renderImgToId=" + opts.renderImgToId + ", file=" + opts.renderImgFilename + ")");
+        }
+        var activeCam = viewport3D.getCamera();
+        renderedFrom = activeCam ? activeCam.getLabel() : null;
+        if (renderedFrom !== cam.getLabel()) {
+            throw new Error("Viewport camera did not switch to " + cam.getLabel() + " (active: " + renderedFrom + ")");
+        }
+        renderMgr.doRender(opts);
+    } finally {
+        if (previousViewportCam) viewport3D.setCamera(previousViewportCam);
+        opts.camera = previousCam;  // may be null; never leave a dangling camera ref
         opts.applyChanges();
     }
 
     return {
         success: true,
         camera: cam.getLabel(),
+        renderedFromCamera: renderedFrom,
         outputPath: args.outputPath || null
     };
 })()
@@ -1438,38 +1460,60 @@ _BATCH_RENDER_CAMERAS_SCRIPT = """\
     var renderMgr = App.getRenderMgr();
     var opts = renderMgr.getRenderOptions();
     var previousCam = opts.camera;
+    var previousFilename = opts.renderImgFilename;
+
+    // DS6: doRender() renders from the active 3D viewport's camera and ignores
+    // opts.camera, so the viewport camera must be switched too (verified live:
+    // viewport=FaceCam + opts.camera="Portrait Cam" rendered FaceCam).
+    var viewport3D = null;
+    try {
+        var vpMgr = MainWindow.getViewportMgr();
+        var activeVp = vpMgr ? vpMgr.getActiveViewport() : null;
+        viewport3D = activeVp ? activeVp.get3DViewport() : null;
+    } catch (e) { viewport3D = null; }
+    if (!viewport3D) throw new Error("Cannot access the active 3D viewport to select the render camera");
+    var previousViewportCam = viewport3D.getCamera();
 
     var rendered = [];
 
-    for (var i = 0; i < cameras.length; i++) {
-        var camLabel = cameras[i];
-        var cam = Scene.findNodeByLabel(camLabel);
-        if (!cam) cam = Scene.findNode(camLabel);
+    try {
+        for (var i = 0; i < cameras.length; i++) {
+            var camLabel = cameras[i];
+            var cam = Scene.findNodeByLabel(camLabel);
+            if (!cam) cam = Scene.findNode(camLabel);
 
-        if (cam && cam.inherits("DzCamera")) {
-            // Build output path
-            var outputPath = outputDir;
-            if (outputPath && outputPath.charAt(outputPath.length - 1) !== "/" &&
-                outputPath.charAt(outputPath.length - 1) !== "\\\\") {
-                outputPath += "/";
+            if (cam && cam.inherits("DzCamera")) {
+                // Build output path
+                var outputPath = outputDir;
+                if (outputPath && outputPath.charAt(outputPath.length - 1) !== "/" &&
+                    outputPath.charAt(outputPath.length - 1) !== "\\\\") {
+                    outputPath += "/";
+                }
+                outputPath += baseFilename + "_" + camLabel.replace(/[^a-zA-Z0-9]/g, "_") + ".png";
+
+                // Viewport camera is what DS6 actually renders from
+                opts.camera = cam;
+                viewport3D.setCamera(cam);
+                var activeCam = viewport3D.getCamera();
+                if (!activeCam || activeCam.getLabel() !== cam.getLabel()) {
+                    throw new Error("Viewport camera did not switch to " + cam.getLabel());
+                }
+                opts.renderImgToId = opts.DirectToFile;
+                opts.renderImgFilename = outputPath;
+                opts.applyChanges();
+                renderMgr.doRender(opts);
+
+                rendered.push({
+                    camera: cam.getLabel(),
+                    renderedFromCamera: activeCam.getLabel(),
+                    outputPath: outputPath
+                });
             }
-            outputPath += baseFilename + "_" + camLabel.replace(/[^a-zA-Z0-9]/g, "_") + ".png";
-
-            opts.camera = cam;
-            opts.renderImgToId = opts.DirectToFile;
-            opts.renderImgFilename = outputPath;
-            opts.applyChanges();
-            renderMgr.doRender(opts);
-
-            rendered.push({
-                camera: cam.getLabel(),
-                outputPath: outputPath
-            });
         }
-    }
-
-    if (previousCam) {
-        opts.camera = previousCam;
+    } finally {
+        if (previousViewportCam) viewport3D.setCamera(previousViewportCam);
+        opts.camera = previousCam;  // may be null; never leave a dangling camera ref
+        opts.renderImgFilename = previousFilename;
         opts.applyChanges();
     }
 
@@ -1495,50 +1539,75 @@ _RENDER_ANIMATION_SCRIPT = """\
     var renderMgr = App.getRenderMgr();
     var opts = renderMgr.getRenderOptions();
 
-    // Set camera if specified
-    var previousCam = opts.camera;
-    if (args.camera) {
-        var cam = Scene.findNodeByLabel(args.camera);
-        if (!cam) cam = Scene.findNode(args.camera);
-        if (cam && cam.inherits("DzCamera")) {
-            opts.camera = cam;
-        }
-    }
+    // DS6: doRender() renders from the active 3D viewport's camera and ignores
+    // opts.camera, so the viewport camera must be switched too (verified live:
+    // viewport=FaceCam + opts.camera="Portrait Cam" rendered FaceCam).
+    var viewport3D = null;
+    try {
+        var vpMgr = MainWindow.getViewportMgr();
+        var activeVp = vpMgr ? vpMgr.getActiveViewport() : null;
+        viewport3D = activeVp ? activeVp.get3DViewport() : null;
+    } catch (e) { viewport3D = null; }
+    if (!viewport3D) throw new Error("Cannot access the active 3D viewport to select the render camera");
+    var previousViewportCam = viewport3D.getCamera();
 
-    opts.renderImgToId = opts.DirectToFile;
-    opts.applyChanges();
+    // Set camera if specified (viewport camera is what DS6 actually renders from)
+    var previousCam = opts.camera;
+    var cam = null;
+    if (args.camera) {
+        cam = Scene.findNodeByLabel(args.camera);
+        if (!cam) cam = Scene.findNode(args.camera);
+        if (!cam || !cam.inherits("DzCamera")) throw new Error("Camera not found: " + args.camera);
+    }
 
     var rendered = [];
     var previousFrame = Scene.getFrame();
+    var previousFilename = opts.renderImgFilename;
+    var renderedFrom = null;
 
-    for (var frame = startFrame; frame <= endFrame; frame++) {
-        Scene.setFrame(frame);
-
-        var frameStr = String(frame);
-        while (frameStr.length < 4) frameStr = "0" + frameStr;
-
-        var outputPath = outputDir;
-        if (outputPath && outputPath.charAt(outputPath.length - 1) !== "/" &&
-            outputPath.charAt(outputPath.length - 1) !== "\\\\") {
-            outputPath += "/";
+    try {
+        if (cam) {
+            opts.camera = cam;
+            viewport3D.setCamera(cam);
+            var activeCam = viewport3D.getCamera();
+            if (!activeCam || activeCam.getLabel() !== cam.getLabel()) {
+                throw new Error("Viewport camera did not switch to " + cam.getLabel());
+            }
         }
-        outputPath += filenamePattern + "_" + frameStr + ".png";
+        var vpCam = viewport3D.getCamera();
+        renderedFrom = vpCam ? vpCam.getLabel() : null;
 
-        opts.renderImgFilename = outputPath;
+        opts.renderImgToId = opts.DirectToFile;
         opts.applyChanges();
-        renderMgr.doRender(opts);
 
-        rendered.push({
-            frame: frame,
-            outputPath: outputPath
-        });
-    }
+        for (var frame = startFrame; frame <= endFrame; frame++) {
+            Scene.setFrame(frame);
 
-    // Restore previous frame
-    Scene.setFrame(previousFrame);
+            var frameStr = String(frame);
+            while (frameStr.length < 4) frameStr = "0" + frameStr;
 
-    if (previousCam) {
-        opts.camera = previousCam;
+            var outputPath = outputDir;
+            if (outputPath && outputPath.charAt(outputPath.length - 1) !== "/" &&
+                outputPath.charAt(outputPath.length - 1) !== "\\\\") {
+                outputPath += "/";
+            }
+            outputPath += filenamePattern + "_" + frameStr + ".png";
+
+            opts.renderImgFilename = outputPath;
+            opts.applyChanges();
+            renderMgr.doRender(opts);
+
+            rendered.push({
+                frame: frame,
+                outputPath: outputPath
+            });
+        }
+    } finally {
+        // Restore previous frame, camera, and output path
+        Scene.setFrame(previousFrame);
+        if (cam && previousViewportCam) viewport3D.setCamera(previousViewportCam);
+        opts.camera = previousCam;  // may be null; never leave a dangling camera ref
+        opts.renderImgFilename = previousFilename;
         opts.applyChanges();
     }
 
@@ -1546,6 +1615,7 @@ _RENDER_ANIMATION_SCRIPT = """\
         success: true,
         rendered: rendered,
         total: rendered.length,
+        renderedFromCamera: renderedFrom,
         frames: {start: startFrame, end: endFrame}
     };
 })()
