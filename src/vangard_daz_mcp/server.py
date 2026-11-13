@@ -18,6 +18,10 @@ SKILL_DEVELOPMENT.md), not from here.
 
 from ._mcp import mcp  # noqa: F401 — creates the FastMCP instance + lifespan
 from . import tools  # noqa: F401 — registers all @mcp.tool() functions  # pylint: disable=unused-import
+from ._profile import configure_profile
+
+
+ACTIVE_PROFILE = configure_profile(mcp)
 
 # Re-export every tool function so `from vangard_daz_mcp.server import daz_x`
 # keeps working regardless of which tools/<module>.py it actually lives in.

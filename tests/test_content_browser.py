@@ -10,11 +10,12 @@ import pytest
 import pytest_asyncio
 import respx
 import httpx
+from dazpy.aio import AsyncDazClient
 
 from vangard_daz_mcp._client import (
     CONTENT_BROWSER_URL,
     set_content_browser_client,
-    set_http_client,
+    set_async_daz_client,
 )
 from vangard_daz_mcp.tools.content import daz_search_content, daz_load_product
 
@@ -31,13 +32,13 @@ CB_BASE = CONTENT_BROWSER_URL  # http://localhost:8080 by default
 async def clients():
     """Wire both HTTP clients into the server module for every test."""
     async with (
-        httpx.AsyncClient(base_url=DAZ_BASE) as daz_client,
+        AsyncDazClient(host="localhost", port=18811, token="") as daz_client,
         httpx.AsyncClient(base_url=CB_BASE) as cb_client,
     ):
-        set_http_client(daz_client)
+        set_async_daz_client(daz_client)
         set_content_browser_client(cb_client)
         yield
-    set_http_client(None)
+    set_async_daz_client(None)
     set_content_browser_client(None)
 
 

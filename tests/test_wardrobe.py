@@ -16,8 +16,9 @@ import pytest
 import pytest_asyncio
 import respx
 import httpx
+from dazpy.aio import AsyncDazClient
 
-from vangard_daz_mcp._client import set_http_client
+from vangard_daz_mcp._client import set_async_daz_client
 from vangard_daz_mcp.tools.wardrobe import daz_list_fitted_items, daz_fit_clothing, daz_unfit_item
 
 BASE_URL = "http://localhost:18811"
@@ -38,11 +39,11 @@ def _fail(error):
 
 
 @pytest_asyncio.fixture(autouse=True)
-async def http_client():
-    async with httpx.AsyncClient(base_url=BASE_URL) as client:
-        set_http_client(client)
+async def daz_client():
+    async with AsyncDazClient(host="localhost", port=18811, token="") as client:
+        set_async_daz_client(client)
         yield client
-    set_http_client(None)
+    set_async_daz_client(None)
 
 
 @pytest.fixture

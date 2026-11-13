@@ -14,7 +14,8 @@ import pytest_asyncio
 import respx
 import httpx
 
-from vangard_daz_mcp._client import set_http_client
+from dazpy.aio import AsyncDazClient
+from vangard_daz_mcp._client import set_async_daz_client
 from vangard_daz_mcp.tools.wardrobe import (
     daz_add_dforce_dynamic_surface,
     daz_get_dforce_influence_weights,
@@ -39,11 +40,15 @@ def _fail(error):
 
 
 @pytest_asyncio.fixture(autouse=True)
-async def http_client():
-    async with httpx.AsyncClient(base_url=BASE_URL) as client:
-        set_http_client(client)
+async def daz_client():
+    """Provide the protocol client (respx patches its internal transport)."""
+    # check_version=False keeps the version probe out of the recorded calls.
+    async with AsyncDazClient(
+        host="localhost", port=18811, token="", check_version=False
+    ) as client:
+        set_async_daz_client(client)
         yield client
-    set_http_client(None)
+    set_async_daz_client(None)
 
 
 @pytest.fixture

@@ -383,14 +383,14 @@ wheels = [
 
 [[package]]
 name = "dazpy"
-version = "2.9.0"
+version = "2.10.1"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "requests" },
 ]
-sdist = { url = "https://files.pythonhosted.org/packages/5d/76/3c71612e4809bcf07c1eb1af22a8a0d408bdd7433b305dbba98b6c29e28c/dazpy-2.9.0.tar.gz", hash = "sha256:39e8c9d8482e8f1ba8051422a09abfaeb5535991ea9e584ec207a25610d0b266", size = 291055, upload-time = "2026-08-17T03:02:39.594Z" }
+sdist = { url = "https://files.pythonhosted.org/packages/2d/0a/e90bc0c3ace3f5e13bd758b851711b47da588b7aa802c7c34fc7056e2000/dazpy-2.10.1.tar.gz", hash = "sha256:7600fa739a4b7175748a92c26c19c2a6eb249d96d28166bcc6f736e3d115d30f", size = 323191, upload-time = "2026-11-12T12:39:25.122Z" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/79/52/ff5161c0aaf5271cc132ef9c70692091831ce04925275dba71596f5cee45/dazpy-2.9.0-py3-none-any.whl", hash = "sha256:a0ce0a0d127ee5451fc96a0822345b841e635782b969ecde2ae4c83f294a1aa8", size = 160836, upload-time = "2026-08-17T03:02:37.821Z" },
+    { url = "https://files.pythonhosted.org/packages/35/f7/a7ca7dfe11d6b5bc43fd8e1e673921979389688ef979a9b4fbca3a60474f/dazpy-2.10.1-py3-none-any.whl", hash = "sha256:b1f62a4543145104967e4cdb2d140d30a329b529ff914db16d24eddfa14fcaef", size = 175786, upload-time = "2026-11-12T12:39:23.355Z" },
 ]
 
 [[package]]
@@ -1058,8 +1058,8 @@ name = "pywinauto"
 version = "0.6.9"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
-    { name = "comtypes" },
-    { name = "pywin32" },
+    { name = "comtypes", marker = "sys_platform == 'win32'" },
+    { name = "pywin32", marker = "sys_platform == 'win32'" },
     { name = "six" },
 ]
 sdist = { url = "https://files.pythonhosted.org/packages/2c/85/cc65e3b64e7473cc86c07f0b5c415d509402c03ef19dadc39c583835eb5f/pywinauto-0.6.9.tar.gz", hash = "sha256:94d710bfa796df245250f952ffa65d97233d9807bcd42e052b71b81af469b6de", size = 434734, upload-time = "2025-01-06T11:30:01.801Z" }
@@ -1390,7 +1390,7 @@ wheels = [
 
 [[package]]
 name = "vangard-daz-mcp"
-version = "0.5.10"
+version = "0.6.0"
 source = { editable = "." }
 dependencies = [
     { name = "dazpy" },
@@ -1408,8 +1408,8 @@ dev = [
 
 [package.metadata]
 requires-dist = [
-    { name = "dazpy", specifier = ">=2.8.0" },
-    { name = "fastmcp", specifier = ">=2.0" },
+    { name = "dazpy", specifier = ">=2.10.1" },
+    { name = "fastmcp", specifier = ">=3.0" },
     { name = "httpx", specifier = ">=0.27" },
     { name = "pywinauto", marker = "sys_platform == 'win32'", specifier = ">=0.6.9" },
 ]

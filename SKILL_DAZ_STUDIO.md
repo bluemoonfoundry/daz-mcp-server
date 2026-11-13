@@ -2,6 +2,25 @@
 
 Read this before any DAZ Studio session involving cameras, lighting, posing, or rendering.
 
+## MCP Surface
+
+Normal sessions use the compact MCP profile. Its five tools form one workflow:
+
+1. `daz_inspect_scene` before choosing a recipe.
+2. `daz_materialize_recipe` for repeatable scene work, or `daz_submit_job` for
+   a general file-backed DazScript job.
+3. `daz_observe_job` for live progress and the terminal result.
+4. `daz_fetch_artifact` for an image or file declared in the job manifest.
+
+Use a unique JSONL report file for each submission. Keep long work file-backed;
+inline scripts do not preserve the recipe filename or its relative includes.
+Static DazScript reference material lives at `daz://help/{topic}`.
+
+The detailed tools named later in this document require the expert profile.
+Set `DAZ_MCP_PROFILE=expert` in the MCP server environment and restart the MCP
+client when doing low-level development or one-off scene surgery. The expert
+profile changes visibility only; it uses the same implementations as compact.
+
 ---
 
 ## Coordinate System & Rotation Conventions

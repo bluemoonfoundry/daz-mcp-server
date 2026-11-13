@@ -1,10 +1,11 @@
 """DazScript fragments and the script registry for DazScriptServer."""
 from __future__ import annotations
 
-import httpx
+import dazpy.exceptions as daz_exc
+from dazpy.aio import AsyncDazClient
 
 
-async def _register_scripts(client: httpx.AsyncClient) -> None:
+async def _register_scripts(client: AsyncDazClient) -> None:
     """Register all built-in scripts with DazScriptServer.
 
     Called at startup and automatically on 404 (DAZ Studio restarted and cleared
@@ -12,12 +13,8 @@ async def _register_scripts(client: httpx.AsyncClient) -> None:
     """
     for script_id, (description, script_text) in _REGISTRY.items():
         try:
-            await client.post("/scripts/register", json={
-                "name": script_id,
-                "description": description,
-                "script": script_text,
-            })
-        except httpx.RequestError:
+            await client.register_script(script_id, script_text, description)
+        except (daz_exc.ConnectionError, daz_exc.TimeoutError):
             break  # DAZ Studio not running; remaining registrations skipped
 
 
