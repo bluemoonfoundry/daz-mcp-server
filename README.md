@@ -107,18 +107,19 @@ Configure the server via environment variables:
 | `DAZ_TIMEOUT` | `30.0` | Request timeout in seconds (increase for long renders) |
 | `DAZ_API_TOKEN` | *(from file)* | API token for authentication |
 | `DAZ_CONTENT_BROWSER_URL` | `http://localhost:8080` | Content browser API URL (if using a separate content service) |
-| `DAZ_MCP_PROFILE` | `compact` | Model-facing surface: `compact` (5 workflow tools) or `expert` (all 144 registered tools) |
+| `DAZ_MCP_PROFILE` | `compact` | Model-facing surface: `compact` (10 workflow tools) or `expert` (all 164 registered tools) |
 
 ### Tool profiles
 
 The default `compact` profile is the normal model-facing API. It keeps tool
-selection predictable by exposing five task tools:
+selection predictable by exposing ten task tools (five job tools and five scene-recipe tools):
 
 - `daz_inspect_scene` — inspect the scene before acting
 - `daz_submit_job` — queue general file-backed DazScript work
 - `daz_observe_job` — poll, collect, or cancel a queued job
 - `daz_run_script_job` — run a `.dsa`/`.ds` script file as an async job through the same job boundary
 - `daz_fetch_artifact` — fetch an output declared by that job's manifest
+- `daz_recipe_validate`, `daz_recipe_plan`, `daz_recipe_apply`, `daz_recipe_observe`, `daz_recipe_render` — declarative scene recipes: validate → plan → apply → render, with hand-edit conflict handling (`ask` / `recipe_wins` / `scene_wins` / per-path `resolutions`). Schema: `daz://recipe/schema` resource; guide: [`SKILL_RECIPE.md`](SKILL_RECIPE.md)
 
 Static DazScript guidance is available as the `daz://help/{topic}` resource,
 so its large catalogue and examples do not consume the always-visible tool
@@ -127,6 +128,8 @@ scene surgery by setting `DAZ_MCP_PROFILE=expert` in the MCP server's `env`
 configuration and restarting the MCP client.
 
 ### Changes
+
+- Added five scene-recipe tools to the compact profile, plus the `daz://recipe/schema` resources (needs a dazpy that ships `dazpy.recipe`).
 
 - **BREAKING:** `daz_materialize_recipe` was renamed to `daz_run_script_job`; its `recipe_file` argument is now `script_file`; behaviour otherwise unchanged; no alias.
 

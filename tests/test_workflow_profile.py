@@ -20,6 +20,11 @@ DEFAULT_TOOLS = {
     "daz_run_script_job",
     "daz_observe_job",
     "daz_submit_job",
+    "daz_recipe_validate",
+    "daz_recipe_plan",
+    "daz_recipe_apply",
+    "daz_recipe_observe",
+    "daz_recipe_render",
 }
 
 
@@ -65,7 +70,7 @@ def test_expert_profile_preserves_detailed_surface():
     assert DEFAULT_TOOLS < set(snapshot["tools"])
     assert "daz_set_property" in snapshot["tools"]
     assert "daz_execute" in snapshot["tools"]
-    assert len(snapshot["tools"]) == 159
+    assert len(snapshot["tools"]) == 164
 
 
 async def test_run_script_job_delegates_file_job(monkeypatch):

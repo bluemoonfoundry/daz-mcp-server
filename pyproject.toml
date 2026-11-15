@@ -21,6 +21,10 @@ Repository = "https://github.com/bluemoonfoundry/daz-mcp-server"
 Documentation = "https://bluemoonfoundry.github.io/daz-script-server/"
 "Bug Tracker" = "https://github.com/bluemoonfoundry/daz-mcp-server/issues"
 
+[tool.uv.sources]
+# TEMPORARY (Task 12): local dazpy with dazpy.recipe; removed in Task 13 when the pin is bumped.
+dazpy = { path = "../daz-script-server", editable = true }
+
 [project.scripts]
 vangard-daz-mcp = "vangard_daz_mcp.server:main"
 
