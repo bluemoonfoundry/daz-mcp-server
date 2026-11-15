@@ -17,7 +17,7 @@ from vangard_daz_mcp.tools import workflow
 DEFAULT_TOOLS = {
     "daz_fetch_artifact",
     "daz_inspect_scene",
-    "daz_materialize_recipe",
+    "daz_run_script_job",
     "daz_observe_job",
     "daz_submit_job",
 }
@@ -68,7 +68,7 @@ def test_expert_profile_preserves_detailed_surface():
     assert len(snapshot["tools"]) == 159
 
 
-async def test_materialize_recipe_delegates_file_job(monkeypatch):
+async def test_run_script_job_delegates_file_job(monkeypatch):
     calls = []
 
     async def submit(script_file, args, report_file):
@@ -76,7 +76,7 @@ async def test_materialize_recipe_delegates_file_job(monkeypatch):
         return {"request_id": "job-1", "status": "queued"}
 
     monkeypatch.setattr(workflow, "daz_execute_file_async", submit)
-    result = await workflow.daz_materialize_recipe(
+    result = await workflow.daz_run_script_job(
         "C:/recipes/pose-probe.dsa",
         {"doggy": True},
         "C:/runs/job-1.jsonl",
@@ -91,9 +91,9 @@ async def test_materialize_recipe_delegates_file_job(monkeypatch):
     ]
 
 
-async def test_materialize_recipe_rejects_non_script_file():
+async def test_run_script_job_rejects_non_script_file():
     with pytest.raises(ToolError, match="must be a .dsa or .ds file"):
-        await workflow.daz_materialize_recipe("C:/recipes/pose.json")
+        await workflow.daz_run_script_job("C:/recipes/pose.json")
 
 
 async def test_observe_job_routes_each_action(monkeypatch):

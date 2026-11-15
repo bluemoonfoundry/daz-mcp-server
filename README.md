@@ -117,7 +117,7 @@ selection predictable by exposing five task tools:
 - `daz_inspect_scene` — inspect the scene before acting
 - `daz_submit_job` — queue general file-backed DazScript work
 - `daz_observe_job` — poll, collect, or cancel a queued job
-- `daz_materialize_recipe` — queue a scene recipe through the same job boundary
+- `daz_run_script_job` — run a `.dsa`/`.ds` script file as an async job through the same job boundary
 - `daz_fetch_artifact` — fetch an output declared by that job's manifest
 
 Static DazScript guidance is available as the `daz://help/{topic}` resource,
@@ -125,6 +125,10 @@ so its large catalogue and examples do not consume the always-visible tool
 surface. Low-level primitives remain available for development and unusual
 scene surgery by setting `DAZ_MCP_PROFILE=expert` in the MCP server's `env`
 configuration and restarting the MCP client.
+
+### Changes
+
+- **BREAKING:** the former recipe-materializing tool is now `daz_run_script_job`, which runs a `.dsa`/`.ds` script file as an async job. No alias is kept; update MCP clients and prompts that call the old name. Behaviour is unchanged.
 
 ### Authentication
 
