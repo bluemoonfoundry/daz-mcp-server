@@ -128,7 +128,7 @@ configuration and restarting the MCP client.
 
 ### Changes
 
-- **BREAKING:** the former recipe-materializing tool is now `daz_run_script_job`, which runs a `.dsa`/`.ds` script file as an async job. No alias is kept; update MCP clients and prompts that call the old name. Behaviour is unchanged.
+- **BREAKING:** `daz_materialize_recipe` was renamed to `daz_run_script_job` (same behaviour; no alias).
 
 ### Authentication
 
