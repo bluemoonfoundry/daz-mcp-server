@@ -13,7 +13,7 @@ Normal sessions use the compact MCP profile. Its five tools form one workflow:
 4. `daz_fetch_artifact` for an image or file declared in the job manifest.
 
 Use a unique JSONL report file for each submission. Keep long work file-backed;
-inline scripts do not preserve the recipe filename or its relative includes.
+inline scripts do not preserve the script filename or its relative includes.
 Static DazScript reference material lives at `daz://help/{topic}`.
 
 The detailed tools named later in this document require the expert profile.

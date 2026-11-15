@@ -128,7 +128,7 @@ configuration and restarting the MCP client.
 
 ### Changes
 
-- **BREAKING:** `daz_materialize_recipe` was renamed to `daz_run_script_job` (same behaviour; no alias).
+- **BREAKING:** `daz_materialize_recipe` was renamed to `daz_run_script_job`; its `recipe_file` argument is now `script_file`; behaviour otherwise unchanged; no alias.
 
 ### Authentication
 

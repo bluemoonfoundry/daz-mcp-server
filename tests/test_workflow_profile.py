@@ -91,6 +91,18 @@ async def test_run_script_job_delegates_file_job(monkeypatch):
     ]
 
 
+async def test_run_script_job_takes_script_file_keyword(monkeypatch):
+    calls = []
+
+    async def submit(script_file, args, report_file):
+        calls.append((script_file, args, report_file))
+        return {"request_id": "job-2", "status": "queued"}
+
+    monkeypatch.setattr(workflow, "daz_execute_file_async", submit)
+    await workflow.daz_run_script_job(script_file="C:/scripts/probe.dsa", parameters={"a": 1})
+    assert calls == [("C:/scripts/probe.dsa", {"a": 1}, None)]
+
+
 async def test_run_script_job_rejects_non_script_file():
     with pytest.raises(ToolError, match="must be a .dsa or .ds file"):
         await workflow.daz_run_script_job("C:/recipes/pose.json")
