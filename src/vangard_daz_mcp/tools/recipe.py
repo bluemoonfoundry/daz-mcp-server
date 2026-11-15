@@ -28,6 +28,10 @@ and the scene both changed since the last apply.  ``on_conflict``: ``ask``
 remembered preference: "always override" -> ``recipe_wins``, "always defer" ->
 ``scene_wins``, otherwise ``ask``, show the user the conflicts, then send
 ``resolutions`` mapping each conflict path to ``"recipe"`` or ``"scene"``.
+Keeping a removed entity's node (``scene``) releases it: it stays in the scene,
+no longer owned by the recipe.  A ``duplicate_record`` conflict (two nodes carry
+one entity) cannot be resolved by any policy: ask the user to delete the extra
+node.
 """
 
 

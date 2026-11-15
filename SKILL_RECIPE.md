@@ -2,8 +2,11 @@
 
 A scene recipe is a JSON document describing a scene declaratively: assets,
 actors, props, lighting, cameras, shots and render settings. Apply is
-idempotent and only touches nodes the recipe created, so you can iterate: edit
-the recipe, apply again. The schema is the `daz://recipe/schema` resource.
+idempotent (re-applying an unchanged recipe changes nothing, even after you
+moved actors in the recipe) and only touches nodes the recipe created, so you
+can iterate: edit the recipe, apply again. The schema is the
+`daz://recipe/schema` resource. Assets must load a single root node (a figure,
+a prop); multi-root assets such as some scene subsets are rejected.
 
 ## The loop
 
@@ -30,7 +33,8 @@ compares recipe, last-applied base, and live scene:
 - Both changed: a **conflict**. Each has `path` (`<entity>.<channel>`, e.g.
   `cameras.close_up.transform`, `actors.model.pose`,
   `lighting.rigs.main.key.transform`), `kind`, and `desired` / `base` / `live`.
-  Kinds include `removed_from_recipe`, `deleted_in_scene`, `has_foreign_children`.
+  Kinds include `removed_from_recipe`, `deleted_in_scene`, `has_foreign_children`,
+  `duplicate_record`.
 
 Channels: actors `transform`/`pose`; props `transform`; cameras
 `transform`/`optics`; lights and rig lights `transform`/`output`; environment
@@ -56,7 +60,19 @@ conflict (what the recipe wants vs what is in the scene), and re-call apply with
 
 A `resolutions` key matching no conflict gives an `unknown_resolution` warning.
 Resolving `deleted_in_scene` with `scene` records a tombstone; later applies
-warn `hand_deleted_kept` until you resolve that path with `recipe`.
+warn `hand_deleted_kept` until you resolve that path with `recipe`, and observe
+still counts the scene as in sync.
+
+Keeping a removed or replaced entity's node (`scene` on `removed_from_recipe` or
+`has_foreign_children`) **releases** it: the node stays in the scene but the
+recipe no longer owns it, so later applies ignore it (warning
+`removed_entity_kept` once). For a replaced asset the new asset is still
+created next to it.
+
+`duplicate_record` means two nodes carry the same recipe entity (usually the
+user duplicated a recipe node in Studio). No policy or resolution can resolve
+it: apply never touches either node. Tell the user to delete the extra node
+(the conflict lists both node names).
 
 ## Worked example
 

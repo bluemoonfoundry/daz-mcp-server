@@ -64,6 +64,22 @@ def test_compact_profile_exposes_only_workflow_tools_and_help_resources():
     assert "daz://help/{topic}" in snapshot["templates"]
 
 
+def test_profiles_resource_describes_every_compact_tool():
+    text = workflow.daz_profiles_resource()
+    assert "ten" in text and "five" not in text
+    for name in ("validate", "plan", "apply", "observe", "render"):
+        assert name in text
+    assert "SKILL_RECIPE.md" in text
+
+
+def test_daz_studio_skill_counts_the_compact_tools():
+    text = (Path(__file__).parents[1] / "SKILL_DAZ_STUDIO.md").read_text(encoding="utf-8")
+    assert "five tools" not in text
+    assert "SKILL_RECIPE.md" in text
+    for name in sorted(DEFAULT_TOOLS):
+        assert f"`{name}`" in text, name
+
+
 def test_expert_profile_preserves_detailed_surface():
     snapshot = _profile_snapshot("expert")
     assert snapshot["profile"] == "expert"

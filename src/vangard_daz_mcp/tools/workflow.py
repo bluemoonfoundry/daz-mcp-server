@@ -150,8 +150,11 @@ async def daz_help_resource(topic: str) -> str:
 def daz_profiles_resource() -> str:
     """Describe the compact and expert MCP profiles."""
     return (
-        "The default compact profile exposes five workflow tools: inspect scene, "
-        "submit job, observe job, run script job, and fetch artifact. Set "
-        "DAZ_MCP_PROFILE=expert in the MCP server environment to expose the full "
-        "low-level DAZ operation catalogue as well."
+        "The default compact profile exposes ten tools. Five job tools: inspect "
+        "scene, submit job, observe job, run script job, and fetch artifact. Five "
+        "scene recipe tools: recipe validate, plan, apply, observe, and render "
+        "(the declarative way to build a scene; see SKILL_RECIPE.md and the "
+        "daz://recipe/schema resource). Set DAZ_MCP_PROFILE=expert in the MCP "
+        "server environment to expose the full low-level DAZ operation catalogue "
+        "as well."
     )
