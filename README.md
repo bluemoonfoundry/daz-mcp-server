@@ -1,6 +1,6 @@
 # vangard-daz-mcp
 
-**Version 0.5.0** | MCP Server for DAZ Studio
+**Version 0.7.0** | MCP Server for DAZ Studio
 
 A [Model Context Protocol (MCP)](https://modelcontextprotocol.io) server that exposes DAZ Studio operations to Claude and other MCP clients. Built on [FastMCP](https://github.com/jlowin/fastmcp) and wraps the [DazScriptServer](https://github.com/bluemoonfoundry/daz-script-server) HTTP plugin.
 
@@ -129,7 +129,7 @@ configuration and restarting the MCP client.
 
 ### Changes
 
-- Added five scene-recipe tools to the compact profile, plus the `daz://recipe/schema` resources (needs a dazpy that ships `dazpy.recipe`).
+- Added five scene-recipe tools to the compact profile, plus the `daz://recipe/schema` resources (requires dazpy 2.12.0 or later).
 
 - **BREAKING:** `daz_materialize_recipe` was renamed to `daz_run_script_job`; its `recipe_file` argument is now `script_file`; behaviour otherwise unchanged; no alias.
 
@@ -3035,7 +3035,7 @@ Export a node to OBJ format.
 
 ---
 
-### 🌿 New Character & Lighting Tools (v0.4.0)
+### 🌿 New Character & Lighting Tools (added in v0.4.0)
 
 #### `daz_set_body_language`
 Apply full-body posture language to a character (beyond facial expressions).
@@ -3527,7 +3527,7 @@ If DAZ Studio restarts and clears the session registry, the server automatically
 - Authentication failures → Token file location in error message
 - Script errors → Full error details with line numbers and captured output
 
-### 🏗️ Modular Architecture (v0.4.0)
+### 🏗️ Modular Architecture (added in v0.4.0)
 The server was refactored from a single 15,000-line `server.py` into focused
 tool modules under `tools/`. A shared `_mcp.py` holds the `FastMCP` instance
 and all execute helpers, avoiding circular imports. Import-time side effects
@@ -3699,20 +3699,22 @@ vangard-daz-mcp/
 │   ├── dazscript_docs.json    # DazScript documentation (daz_script_help)
 │   └── tools/
 │       ├── __init__.py        # Imports all modules (registers decorators)
-│       ├── workflow.py        # Five task tools in the compact default profile
+│       ├── workflow.py        # Task tools in the compact default profile (5 tools)
+│       ├── recipe.py          # Scene recipes: validate, plan, apply, observe, render; compact profile (5 tools)
 │       ├── spatial.py         # World position, bounding box, distance, layout (7 tools)
-│       ├── transform.py       # Node properties, batch ops, visibility, selection (7 tools)
+│       ├── transform.py       # Node properties, batch ops, visibility, selection (8 tools)
 │       ├── scene.py           # Load/save, hierarchy, checkpoints (11 tools)
-│       ├── figure.py          # Posing, look-at, IK, interaction, pose library (7 tools)
-│       ├── morph.py           # Morphs, emotions, body language, gaze (6 tools)
+│       ├── figure.py          # Posing, look-at, IK, interaction, pose library (8 tools)
+│       ├── morph.py           # Morphs, emotions, body language, gaze (7 tools)
 │       ├── camera_light.py    # Cameras, lights, presets, mood/time-of-day (15 tools)
-│       ├── render.py          # Sync/async render, batch, animation export (16 tools)
+│       ├── render.py          # Sync/async render, batch, animation export (17 tools)
 │       ├── animation.py       # Keyframes, timeline, frame range (7 tools)
-│       ├── material.py        # Materials: list, get, set, presets, copy (5 tools)
-│       ├── utility.py         # Status, execute, docs, validate, macros (19 tools)
-│       ├── content.py         # Content browser, search, compatibility (6 tools)
+│       ├── material.py        # Materials: list, get, set, presets, copy (6 tools)
+│       ├── utility.py         # Status, execute, docs, validate, macros (20 tools)
+│       ├── content.py         # Content browser, search, compatibility (8 tools)
 │       ├── cinematic.py       # Shot sequences, camera paths, storyboard (22 tools)
-│       └── wardrobe.py        # Clothing, dForce, subdivision, export (10 tools)
+│       ├── hair.py            # Strand-based hair (2 tools)
+│       └── wardrobe.py        # Clothing, dForce, subdivision, export (16 tools)
 ├── tests/
 │   └── test_server.py         # Test suite with respx mocks
 ├── pyproject.toml             # Project config (version, dependencies)
@@ -3723,7 +3725,7 @@ vangard-daz-mcp/
 
 ### Architecture
 
-- **FastMCP 3.x server** with stdio transport (144 tools registered; 5 visible by default)
+- **FastMCP 3.x server** with stdio transport (164 tools registered; 10 visible in the default `compact` profile)
 - **Profiled model boundary**: the compact facade is selected by default; `DAZ_MCP_PROFILE=expert` reveals every detailed tool without changing their implementation
 - **Modular tool package**: focused modules under `tools/`; decorators fire at import time via the shared `mcp` instance from `_mcp.py`, avoiding circular imports with `server.py`
 - **One DazScriptServer protocol client**: `dazpy.aio.AsyncDazClient` owns endpoint URLs, wire payloads, timeout policy, request lifecycle, SSE streams, and typed errors
