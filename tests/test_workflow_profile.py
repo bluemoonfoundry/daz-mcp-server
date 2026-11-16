@@ -17,9 +17,14 @@ from vangard_daz_mcp.tools import workflow
 DEFAULT_TOOLS = {
     "daz_fetch_artifact",
     "daz_inspect_scene",
-    "daz_materialize_recipe",
+    "daz_run_script_job",
     "daz_observe_job",
     "daz_submit_job",
+    "daz_recipe_validate",
+    "daz_recipe_plan",
+    "daz_recipe_apply",
+    "daz_recipe_observe",
+    "daz_recipe_render",
 }
 
 
@@ -59,16 +64,32 @@ def test_compact_profile_exposes_only_workflow_tools_and_help_resources():
     assert "daz://help/{topic}" in snapshot["templates"]
 
 
+def test_profiles_resource_describes_every_compact_tool():
+    text = workflow.daz_profiles_resource()
+    assert "ten" in text and "five" not in text
+    for name in ("validate", "plan", "apply", "observe", "render"):
+        assert name in text
+    assert "SKILL_RECIPE.md" in text
+
+
+def test_daz_studio_skill_counts_the_compact_tools():
+    text = (Path(__file__).parents[1] / "SKILL_DAZ_STUDIO.md").read_text(encoding="utf-8")
+    assert "five tools" not in text
+    assert "SKILL_RECIPE.md" in text
+    for name in sorted(DEFAULT_TOOLS):
+        assert f"`{name}`" in text, name
+
+
 def test_expert_profile_preserves_detailed_surface():
     snapshot = _profile_snapshot("expert")
     assert snapshot["profile"] == "expert"
     assert DEFAULT_TOOLS < set(snapshot["tools"])
     assert "daz_set_property" in snapshot["tools"]
     assert "daz_execute" in snapshot["tools"]
-    assert len(snapshot["tools"]) == 159
+    assert len(snapshot["tools"]) == 164
 
 
-async def test_materialize_recipe_delegates_file_job(monkeypatch):
+async def test_run_script_job_delegates_file_job(monkeypatch):
     calls = []
 
     async def submit(script_file, args, report_file):
@@ -76,7 +97,7 @@ async def test_materialize_recipe_delegates_file_job(monkeypatch):
         return {"request_id": "job-1", "status": "queued"}
 
     monkeypatch.setattr(workflow, "daz_execute_file_async", submit)
-    result = await workflow.daz_materialize_recipe(
+    result = await workflow.daz_run_script_job(
         "C:/recipes/pose-probe.dsa",
         {"doggy": True},
         "C:/runs/job-1.jsonl",
@@ -91,9 +112,21 @@ async def test_materialize_recipe_delegates_file_job(monkeypatch):
     ]
 
 
-async def test_materialize_recipe_rejects_non_script_file():
+async def test_run_script_job_takes_script_file_keyword(monkeypatch):
+    calls = []
+
+    async def submit(script_file, args, report_file):
+        calls.append((script_file, args, report_file))
+        return {"request_id": "job-2", "status": "queued"}
+
+    monkeypatch.setattr(workflow, "daz_execute_file_async", submit)
+    await workflow.daz_run_script_job(script_file="C:/scripts/probe.dsa", parameters={"a": 1})
+    assert calls == [("C:/scripts/probe.dsa", {"a": 1}, None)]
+
+
+async def test_run_script_job_rejects_non_script_file():
     with pytest.raises(ToolError, match="must be a .dsa or .ds file"):
-        await workflow.daz_materialize_recipe("C:/recipes/pose.json")
+        await workflow.daz_run_script_job("C:/recipes/pose.json")
 
 
 async def test_observe_job_routes_each_action(monkeypatch):

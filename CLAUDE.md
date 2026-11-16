@@ -5,7 +5,8 @@ Bug-Katalog: `C:\Users\Black-Byte\Development\pinkcharakter\docs\daz-mcp-bridge-
 
 ## Primary Commands
 - `uv sync` - Install dependencies
-- `uv run pytest tests/ -v` - Run all tests
+- `uv run pytest tests/ -m "not integration and not slow"` - Unit tests only (safe while DAZ Studio is running)
+- `uv run pytest tests/ -v` - All tests. **Integration tests run against DAZ Studio whenever it is reachable on 18811** (they render and add nodes), so close Studio or use the line above unless you mean it.
 - `uv run vangard-daz-mcp` - Run the MCP server
 
 ## Skill Modules (Reference with @)
@@ -16,10 +17,11 @@ Bug-Katalog: `C:\Users\Black-Byte\Development\pinkcharakter\docs\daz-mcp-bridge-
 - **@SKILL_CINEMA.md**: Cameras, lighting, animation, shot composition, and rendering.
 
 ## Architecture Summary
-- **Version:** 0.4.0
+- **Version:** 0.7.0 (source of truth: `pyproject.toml`; `tests/test_version_consistency.py` checks the docs and the server match it)
 - **Bridge:** Connects to DazScriptServer (port 18811)
-- **Registry:** 149 tools registered across 13 tool modules.
-- **Structure:** Modular — `_mcp.py` holds shared FastMCP instance; `tools/__init__.py` imports all 13 modules so `@mcp.tool()` decorators fire at import time.
+- **Registry:** 164 tools registered across 16 tool modules.
+- **Structure:** Modular — `_mcp.py` holds shared FastMCP instance; `tools/__init__.py` imports all 16 modules so `@mcp.tool()` decorators fire at import time.
+- **Scene recipes:** `tools/recipe.py` — `daz_recipe_validate/plan/apply/observe/render` + `daz://recipe/schema` resources, compact profile, thin wrappers over `dazpy.recipe` (see SKILL_RECIPE.md)
 - **Phase 4.8:** Lighting Animation — `daz_animate_light`, `daz_create_light_sequence`
 - **Phase 4.9:** Shot Planning — `daz_plan_shot`, `daz_create_storyboard`
 - **Phase 4.10:** Focus & DOF — `daz_set_focus_point`, `daz_animate_focus_pull`

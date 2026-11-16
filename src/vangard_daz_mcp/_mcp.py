@@ -6,6 +6,7 @@ without creating circular imports with ``server.py``.
 from __future__ import annotations
 
 from contextlib import asynccontextmanager
+from importlib.metadata import version as _package_version
 from typing import Any
 
 import httpx
@@ -143,4 +144,5 @@ async def _lifespan(server: FastMCP):  # pylint: disable=unused-argument
     set_async_daz_client(None)
 
 
-mcp = FastMCP("vangard-daz-mcp", lifespan=_lifespan)
+# version: what MCP clients see in serverInfo (without it FastMCP reports its own version).
+mcp = FastMCP("vangard-daz-mcp", version=_package_version("vangard-daz-mcp"), lifespan=_lifespan)

@@ -27,7 +27,7 @@ _IMAGE_SUFFIXES = {".bmp", ".gif", ".jpeg", ".jpg", ".png", ".webp"}
 
 @mcp.tool(tags=_DEFAULT_TAG)
 async def daz_inspect_scene() -> dict[str, Any]:
-    """Inspect the open scene before choosing or running a recipe.
+    """Inspect the open scene before choosing or running a script job.
 
     Returns the scene file, selected node, figures, cameras, lights, and node
     count.  Use the ``daz://help/{topic}`` resource for static DazScript help.
@@ -43,8 +43,7 @@ async def daz_submit_job(
 ) -> dict[str, Any]:
     """Submit a file-backed DazScript job and return immediately.
 
-    This is the general escape hatch for work that is not expressed as a
-    materializer recipe.  Prefer a unique ``report_file`` so observation can
+    This is the general escape hatch for file-backed work.  Prefer a unique ``report_file`` so observation can
     expose structured progress, logs, and an output manifest.
     """
     return await daz_execute_file_async(script_file, args, report_file)
@@ -71,21 +70,21 @@ async def daz_observe_job(
 
 
 @mcp.tool(tags=_DEFAULT_TAG)
-async def daz_materialize_recipe(
-    recipe_file: str,
+async def daz_run_script_job(
+    script_file: str,
     parameters: dict[str, Any] | None = None,
     report_file: str | None = None,
 ) -> dict[str, Any]:
-    """Run a file-backed scene recipe through the asynchronous job boundary.
+    """Run a .dsa/.ds script file through the asynchronous job boundary.
 
-    A recipe owns scene construction and its immutable run manifest; this tool
-    only supplies parameters and queues it.  The recipe must be a ``.dsa`` or
+    The script owns its own scene construction and run manifest; this tool
+    only supplies parameters and queues it. The file must be a ``.dsa`` or
     ``.ds`` file. Poll the returned request with ``daz_observe_job``.
     """
-    suffix = Path(recipe_file).suffix.lower()
+    suffix = Path(script_file).suffix.lower()
     if suffix not in {".ds", ".dsa"}:
-        raise ToolError("A materializer recipe must be a .dsa or .ds file")
-    return await daz_execute_file_async(recipe_file, parameters, report_file)
+        raise ToolError("A script job file must be a .dsa or .ds file")
+    return await daz_execute_file_async(script_file, parameters, report_file)
 
 
 @mcp.tool(tags=_DEFAULT_TAG)
@@ -151,8 +150,11 @@ async def daz_help_resource(topic: str) -> str:
 def daz_profiles_resource() -> str:
     """Describe the compact and expert MCP profiles."""
     return (
-        "The default compact profile exposes five workflow tools: inspect scene, "
-        "submit job, observe job, materialize recipe, and fetch artifact. Set "
-        "DAZ_MCP_PROFILE=expert in the MCP server environment to expose the full "
-        "low-level DAZ operation catalogue as well."
+        "The default compact profile exposes ten tools. Five job tools: inspect "
+        "scene, submit job, observe job, run script job, and fetch artifact. Five "
+        "scene recipe tools: recipe validate, plan, apply, observe, and render "
+        "(the declarative way to build a scene; see SKILL_RECIPE.md and the "
+        "daz://recipe/schema resource). Set DAZ_MCP_PROFILE=expert in the MCP "
+        "server environment to expose the full low-level DAZ operation catalogue "
+        "as well."
     )

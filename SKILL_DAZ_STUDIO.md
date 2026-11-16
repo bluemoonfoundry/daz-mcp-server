@@ -4,16 +4,24 @@ Read this before any DAZ Studio session involving cameras, lighting, posing, or 
 
 ## MCP Surface
 
-Normal sessions use the compact MCP profile. Its five tools form one workflow:
+Normal sessions use the compact MCP profile. It has ten tools.
 
-1. `daz_inspect_scene` before choosing a recipe.
-2. `daz_materialize_recipe` for repeatable scene work, or `daz_submit_job` for
+To build a scene declaratively, use the five scene recipe tools: describe the
+scene as JSON (schema: `daz://recipe/schema`), then `daz_recipe_validate`,
+`daz_recipe_plan`, `daz_recipe_apply`, `daz_recipe_render`, and
+`daz_recipe_observe` at any time. Re-applying an edited recipe changes only what
+changed and never silently overwrites hand edits. See `SKILL_RECIPE.md`.
+
+For anything a recipe cannot express, the five job tools form one workflow:
+
+1. `daz_inspect_scene` before choosing a script.
+2. `daz_run_script_job` for repeatable scene work, or `daz_submit_job` for
    a general file-backed DazScript job.
 3. `daz_observe_job` for live progress and the terminal result.
 4. `daz_fetch_artifact` for an image or file declared in the job manifest.
 
 Use a unique JSONL report file for each submission. Keep long work file-backed;
-inline scripts do not preserve the recipe filename or its relative includes.
+inline scripts do not preserve the script filename or its relative includes.
 Static DazScript reference material lives at `daz://help/{topic}`.
 
 The detailed tools named later in this document require the expert profile.

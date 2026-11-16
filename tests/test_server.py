@@ -97,12 +97,15 @@ def _fail(error, output=None):
 # ---------------------------------------------------------------------------
 
 async def test_daz_status_ok(mock_daz):
+    # A server as new as the installed dazpy (an older one triggers its
+    # ServerVersionWarning; dazpy's own tests cover that warning).
+    import dazpy
     mock_daz.get("/status").mock(
-        return_value=httpx.Response(200, json={"running": True, "version": "2.10.1"})
+        return_value=httpx.Response(200, json={"running": True, "version": dazpy.__version__})
     )
     result = await daz_status()
     assert result["running"] is True
-    assert result["version"] == "2.10.1"
+    assert result["version"] == dazpy.__version__
 
 
 async def test_daz_status_connect_error(mock_daz):
