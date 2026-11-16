@@ -1,6 +1,6 @@
 [project]
 name = "vangard-daz-mcp"
-version = "0.6.2"
+version = "0.7.0"
 description = "MCP server wrapping the DazScriptServer HTTP API for DAZ Studio"
 readme = "README.md"
 requires-python = ">=3.11"
@@ -11,7 +11,7 @@ authors = [
 dependencies = [
     "fastmcp>=3.0",
     "httpx>=0.27",
-    "dazpy>=2.10.1",
+    "dazpy>=2.12.0",
     "pywinauto>=0.6.9; platform_system == 'Windows'",
 ]
 
@@ -20,10 +20,6 @@ Homepage = "https://github.com/bluemoonfoundry/daz-mcp-server"
 Repository = "https://github.com/bluemoonfoundry/daz-mcp-server"
 Documentation = "https://bluemoonfoundry.github.io/daz-script-server/"
 "Bug Tracker" = "https://github.com/bluemoonfoundry/daz-mcp-server/issues"
-
-[tool.uv.sources]
-# TEMPORARY (Task 12): local dazpy with dazpy.recipe; removed in Task 13 when the pin is bumped.
-dazpy = { path = "../daz-script-server", editable = true }
 
 [project.scripts]
 vangard-daz-mcp = "vangard_daz_mcp.server:main"
