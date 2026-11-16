@@ -127,7 +127,7 @@ surface. Low-level primitives remain available for development and unusual
 scene surgery by setting `DAZ_MCP_PROFILE=expert` in the MCP server's `env`
 configuration and restarting the MCP client.
 
-### Changes
+### Changes in 0.7.0
 
 - Added five scene-recipe tools to the compact profile, plus the `daz://recipe/schema` resources (requires dazpy 2.12.0 or later).
 
