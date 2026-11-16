@@ -85,7 +85,7 @@ it: apply never touches either node. Tell the user to delete the extra node
     "model": {
       "asset": "g9",
       "position": [0, 0, 0],
-      "pose": "/People/Genesis 9/Poses/Base Poses/Base Pose Standing.duf"
+      "pose": "/People/Genesis 9/Poses/Daz Originals/Base Poses/Base/G9 Base Pose 12 Standing G9B.duf"
     }
   },
   "lighting": {
