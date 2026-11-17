@@ -33,3 +33,25 @@ def test_compat_block():
     assert "dazpy >= 2.13.0" in result.stdout
     assert f"plugin (DazScriptServer) >= {dazpy.MIN_SERVER_VERSION}" in result.stdout
     assert "daz-script-server/releases" in result.stdout
+
+
+def _ancestors(jobs: dict, name: str) -> set:
+    needs = jobs[name].get("needs", [])
+    needs = [needs] if isinstance(needs, str) else needs
+    out = set(needs)
+    for n in needs:
+        out |= _ancestors(jobs, n)
+    return out
+
+
+def test_release_notes_are_built_before_publishing():
+    # A missing CHANGELOG section must stop the release before PyPI, which
+    # can't be undone, not after it.
+    import yaml
+
+    jobs = yaml.safe_load((ROOT / ".github/workflows/release.yml").read_text(encoding="utf-8"))["jobs"]
+    makers = [name for name, job in jobs.items()
+              if any("notes.md" in (step.get("run") or "") and "CHANGELOG.md" in (step.get("run") or "")
+                     for step in job.get("steps", []))]
+    assert makers, "no job extracts the CHANGELOG section into notes.md"
+    assert all(m in _ancestors(jobs, "publish-pypi") for m in makers), makers
