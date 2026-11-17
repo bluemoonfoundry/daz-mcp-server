@@ -7,7 +7,7 @@ Tools for morphs, emotions, and movement.
 - `daz_set_morph`: Set a single morph by name and value.
 - `daz_load_morph_pro`: Import a new OBJ morph target via Morph Loader Pro (load mode,
   mirroring, overwrite mode, reverse deformations, subdivision, attenuation maps, ERC
-  control-property linking). See SKILL_DAZSCRIPT.md's "Morph Loader Pro" gotchas.
+  control-property linking). See daz://guide/dazscript's "Morph Loader Pro" gotchas.
 
 ## Emotional Direction
 - `daz_set_emotion`: Apply `happy`, `angry`, `confident`, etc., with `intensity`.

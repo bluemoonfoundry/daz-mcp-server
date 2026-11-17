@@ -119,7 +119,7 @@ selection predictable by exposing ten task tools (five job tools and five scene-
 - `daz_observe_job` — poll, collect, or cancel a queued job
 - `daz_run_script_job` — run a `.dsa`/`.ds` script file as an async job through the same job boundary
 - `daz_fetch_artifact` — fetch an output declared by that job's manifest
-- `daz_recipe_validate`, `daz_recipe_plan`, `daz_recipe_apply`, `daz_recipe_observe`, `daz_recipe_render` — declarative scene recipes: validate → plan → apply → render, with hand-edit conflict handling (`ask` / `recipe_wins` / `scene_wins` / per-path `resolutions`). Schema: `daz://recipe/schema` resource; guide: [`SKILL_RECIPE.md`](SKILL_RECIPE.md)
+- `daz_recipe_validate`, `daz_recipe_plan`, `daz_recipe_apply`, `daz_recipe_observe`, `daz_recipe_render` — declarative scene recipes: validate → plan → apply → render, with hand-edit conflict handling (`ask` / `recipe_wins` / `scene_wins` / per-path `resolutions`). Schema: `daz://recipe/schema` resource; guide: [`src/daz_mcp_server/guides/recipe.md`](src/daz_mcp_server/guides/recipe.md)
 
 Static DazScript guidance is available as the `daz://help/{topic}` resource,
 so its large catalogue and examples do not consume the always-visible tool
@@ -286,17 +286,17 @@ The repository ships six **SKILL files** — curated knowledge documents that yo
 Ask Claude to read the relevant file at the start of a session or task:
 
 ```
-Read the file SKILL_DAZ_STUDIO.md before we begin.
+Read the file src/daz_mcp_server/guides/daz_studio.md before we begin.
 ```
 
 ```
-Before writing any DazScript code, read SKILL_DAZSCRIPT.md.
+Before writing any DazScript code, read src/daz_mcp_server/guides/dazscript.md.
 ```
 
 You can load more than one if your task spans domains:
 
 ```
-Read SKILL_DAZ_STUDIO.md and SKILL_CINEMA.md — we're going to set up a portrait shot.
+Read src/daz_mcp_server/guides/daz_studio.md and src/daz_mcp_server/guides/cinema.md — we're going to set up a portrait shot.
 ```
 
 ---
@@ -305,16 +305,16 @@ Read SKILL_DAZ_STUDIO.md and SKILL_CINEMA.md — we're going to set up a portrai
 
 | File | Domain | Load when… |
 |------|--------|------------|
-| [`SKILL_DAZ_STUDIO.md`](SKILL_DAZ_STUDIO.md) | DAZ Studio conventions | Starting any session — covers coordinate system inversions, camera Y-rotation being backwards, bone rotation limits, and known tool limitations |
-| [`SKILL_DAZSCRIPT.md`](SKILL_DAZSCRIPT.md) | DazScript API | Writing or debugging custom scripts via `daz_execute` — documents verified-working API patterns and a list of broken/wrong methods to avoid |
-| [`SKILL_SCENE.md`](SKILL_SCENE.md) | Scene management | Working with scene hierarchy, content library, spatial layout, materials, or batch operations |
-| [`SKILL_ACTORS.md`](SKILL_ACTORS.md) | Characters & posing | Working with morphs, emotions, body language, gaze direction, wardrobe, or multi-character interactions |
-| [`SKILL_CINEMA.md`](SKILL_CINEMA.md) | Cameras, lighting & rendering | Composing shots, setting up lighting rigs, animating cameras, or running renders |
+| [`src/daz_mcp_server/guides/daz_studio.md`](src/daz_mcp_server/guides/daz_studio.md) | DAZ Studio conventions | Starting any session — covers coordinate system inversions, camera Y-rotation being backwards, bone rotation limits, and known tool limitations |
+| [`src/daz_mcp_server/guides/dazscript.md`](src/daz_mcp_server/guides/dazscript.md) | DazScript API | Writing or debugging custom scripts via `daz_execute` — documents verified-working API patterns and a list of broken/wrong methods to avoid |
+| [`src/daz_mcp_server/guides/scene.md`](src/daz_mcp_server/guides/scene.md) | Scene management | Working with scene hierarchy, content library, spatial layout, materials, or batch operations |
+| [`src/daz_mcp_server/guides/actors.md`](src/daz_mcp_server/guides/actors.md) | Characters & posing | Working with morphs, emotions, body language, gaze direction, wardrobe, or multi-character interactions |
+| [`src/daz_mcp_server/guides/cinema.md`](src/daz_mcp_server/guides/cinema.md) | Cameras, lighting & rendering | Composing shots, setting up lighting rigs, animating cameras, or running renders |
 | [`SKILL_DEVELOPMENT.md`](SKILL_DEVELOPMENT.md) | MCP server internals | Modifying or extending the MCP server itself — module layout, how to add tools, the script registry |
 
 ---
 
-### When to load `SKILL_DAZ_STUDIO.md`
+### When to load `src/daz_mcp_server/guides/daz_studio.md`
 
 This is the most important file and the one most likely to save you from a frustrating session. Key things it corrects:
 

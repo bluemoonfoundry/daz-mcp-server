@@ -11,6 +11,7 @@ from typing import Any, Literal
 from fastmcp.exceptions import ToolError
 from fastmcp.utilities.types import File, Image
 
+from .._guides import guide_index, read_guide
 from .._mcp import mcp
 from .render import (
     daz_cancel_request,
@@ -146,6 +147,18 @@ async def daz_help_resource(topic: str) -> str:
     return await daz_script_help(topic)
 
 
+@mcp.resource("daz://guides")
+def daz_guides_resource() -> str:
+    """List the bundled agent guides (read one at daz://guide/{name})."""
+    return guide_index()
+
+
+@mcp.resource("daz://guide/{name}")
+def daz_guide_resource(name: str) -> str:
+    """Read one bundled agent guide: actors, cinema, daz_studio, dazscript, recipe, scene."""
+    return read_guide(name)
+
+
 @mcp.resource("daz://profiles")
 def daz_profiles_resource() -> str:
     """Describe the compact and expert MCP profiles."""
@@ -153,7 +166,7 @@ def daz_profiles_resource() -> str:
         "The default compact profile exposes ten tools. Five job tools: inspect "
         "scene, submit job, observe job, run script job, and fetch artifact. Five "
         "scene recipe tools: recipe validate, plan, apply, observe, and render "
-        "(the declarative way to build a scene; see SKILL_RECIPE.md and the "
+        "(the declarative way to build a scene; see daz://guide/recipe and the "
         "daz://recipe/schema resource). Set DAZ_MCP_PROFILE=expert in the MCP "
         "server environment to expose the full low-level DAZ operation catalogue "
         "as well."

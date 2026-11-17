@@ -13,7 +13,7 @@ any external caller importing from ``daz_mcp_server.server`` directly
 Without it, every name below raises ImportError from here even though the
 tool is correctly registered on the live ``mcp`` instance. The test suite
 imports from each ``daz_mcp_server.tools.<module>`` directly instead (see
-SKILL_DEVELOPMENT.md), not from here.
+the repo's development guide), not from here.
 """
 
 from ._mcp import mcp  # noqa: F401 — creates the FastMCP instance + lifespan

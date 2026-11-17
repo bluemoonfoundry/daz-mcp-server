@@ -7538,7 +7538,7 @@ _APPLY_MATERIAL_PRESET_SCRIPT = """\
 
     // Collect resulting material names for confirmation. Materials live on
     // the shape, not the object directly - DzObject has no getNumMaterials()
-    // of its own (see SKILL_DAZSCRIPT.md "Materials - always go through
+    // of its own (see daz://guide/dazscript "Materials - always go through
     // getCurrentShape()"). Calling it on the bare object throws and was
     // silently discarding a *successful* preset application, since the
     // openFile() call above had already completed by this point.

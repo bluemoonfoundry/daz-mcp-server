@@ -62,6 +62,8 @@ def test_compact_profile_exposes_only_workflow_tools_and_help_resources():
     assert set(snapshot["tools"]) == DEFAULT_TOOLS
     assert "daz://profiles" in snapshot["resources"]
     assert "daz://help/{topic}" in snapshot["templates"]
+    assert "daz://guides" in snapshot["resources"]
+    assert "daz://guide/{name}" in snapshot["templates"]
 
 
 def test_profiles_resource_describes_every_compact_tool():
@@ -69,13 +71,13 @@ def test_profiles_resource_describes_every_compact_tool():
     assert "ten" in text and "five" not in text
     for name in ("validate", "plan", "apply", "observe", "render"):
         assert name in text
-    assert "SKILL_RECIPE.md" in text
+    assert "daz://guide/recipe" in text
 
 
 def test_daz_studio_skill_counts_the_compact_tools():
-    text = (Path(__file__).parents[1] / "SKILL_DAZ_STUDIO.md").read_text(encoding="utf-8")
+    text = (Path(__file__).parents[1] / "src" / "daz_mcp_server" / "guides" / "daz_studio.md").read_text(encoding="utf-8")
     assert "five tools" not in text
-    assert "SKILL_RECIPE.md" in text
+    assert "daz://guide/recipe" in text
     for name in sorted(DEFAULT_TOOLS):
         assert f"`{name}`" in text, name
 

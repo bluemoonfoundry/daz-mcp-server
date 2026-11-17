@@ -59,3 +59,10 @@ def test_no_personal_paths_in_source():
         and any(s in p.read_text(encoding="utf-8", errors="ignore") for s in ("OpenCode",))
     ]
     assert hits == []
+
+
+def test_wheel_has_guides(wheel_names):
+    from daz_mcp_server._guides import GUIDE_NAMES
+
+    for name in GUIDE_NAMES:
+        assert f"daz_mcp_server/guides/{name}.md" in wheel_names, name

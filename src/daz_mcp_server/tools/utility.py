@@ -21,6 +21,7 @@ from .._mcp import (
 )
 from .._client import get_async_daz_client
 from .._errors import handle_dazpy_error
+from .._guides import GUIDE_NAMES, guide_index, read_guide
 
 # ---------------------------------------------------------------------------
 # Module-level state
@@ -179,6 +180,8 @@ async def daz_script_help(topic: str = "overview") -> str:
     - viewport: Viewport and camera control, positioning, framing, presets
     - animation: Animation system, keyframing, timeline control, rendering animations
     - rendering: Advanced rendering control, multi-camera, batch rendering, animation export
+    - guides: list the bundled agent guides; guide:<name> returns one
+      (actors, cinema, daz_studio, dazscript, recipe, scene)
 
     Args:
         topic: Documentation topic to retrieve (default: "overview")
@@ -186,6 +189,16 @@ async def daz_script_help(topic: str = "overview") -> str:
     Returns:
         Formatted documentation with examples for the requested topic.
     """
+    if topic == "guides":
+        return guide_index()
+    if topic.startswith("guide:"):
+        try:
+            return read_guide(topic.split(":", 1)[1])
+        except KeyError:
+            return (
+                f"Unknown topic: '{topic}'\n\nAvailable guides: "
+                + ", ".join(f"guide:{name}" for name in GUIDE_NAMES)
+            )
     if topic not in _DAZSCRIPT_DOCS:
         available = ", ".join(sorted(_DAZSCRIPT_DOCS.keys()))
         return f"Unknown topic: '{topic}'\n\nAvailable topics: {available}"

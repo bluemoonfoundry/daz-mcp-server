@@ -10,7 +10,7 @@ To build a scene declaratively, use the five scene recipe tools: describe the
 scene as JSON (schema: `daz://recipe/schema`), then `daz_recipe_validate`,
 `daz_recipe_plan`, `daz_recipe_apply`, `daz_recipe_render`, and
 `daz_recipe_observe` at any time. Re-applying an edited recipe changes only what
-changed and never silently overwrites hand edits. See `SKILL_RECIPE.md`.
+changed and never silently overwrites hand edits. See `daz://guide/recipe`.
 
 For anything a recipe cannot express, the five job tools form one workflow:
 
