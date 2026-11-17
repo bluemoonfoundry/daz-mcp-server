@@ -29,6 +29,19 @@ daz-mcp-server = "daz_mcp_server.server:main"
 requires = ["hatchling"]
 build-backend = "hatchling.build"
 
+[tool.hatch.build.targets.sdist]
+exclude = [
+    ".beads",
+    ".agents",
+    ".claude",
+    ".github",
+    ".worktrees",
+    ".venv",
+    ".superpowers",
+    "_test_*.py",
+    "docs/superpowers",
+]
+
 [tool.hatch.build.targets.wheel]
 packages = ["src/daz_mcp_server"]
 
