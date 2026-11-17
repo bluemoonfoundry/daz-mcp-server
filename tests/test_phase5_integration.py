@@ -25,30 +25,30 @@ import pytest_asyncio
 from dazpy.aio import AsyncDazClient
 from fastmcp.exceptions import ToolError
 
-from vangard_daz_mcp._client import DAZ_API_TOKEN, set_async_daz_client
-from vangard_daz_mcp._registry import _register_scripts
-from vangard_daz_mcp.tools.camera_light import (
+from daz_mcp_server._client import DAZ_API_TOKEN, set_async_daz_client
+from daz_mcp_server._registry import _register_scripts
+from daz_mcp_server.tools.camera_light import (
     daz_list_lights,
     daz_create_light,
     daz_list_cameras,
     daz_create_camera,
 )
-from vangard_daz_mcp.tools.figure import daz_reset_pose
-from vangard_daz_mcp.tools.material import (
+from daz_mcp_server.tools.figure import daz_reset_pose
+from daz_mcp_server.tools.material import (
     daz_list_materials,
     daz_get_material,
     daz_set_material_property,
     daz_convert_to_iray_uber,
 )
-from vangard_daz_mcp.tools.morph import daz_set_morph, daz_search_morphs
-from vangard_daz_mcp.tools.render import daz_set_render_output
-from vangard_daz_mcp.tools.scene import (
+from daz_mcp_server.tools.morph import daz_set_morph, daz_search_morphs
+from daz_mcp_server.tools.render import daz_set_render_output
+from daz_mcp_server.tools.scene import (
     daz_scene_info,
     daz_save_scene,
     daz_get_selected_nodes,
     daz_load_file,
 )
-from vangard_daz_mcp.tools.transform import daz_delete_node, daz_set_property
+from daz_mcp_server.tools.transform import daz_delete_node, daz_set_property
 
 # pylint: disable=duplicate-code
 # This file intentionally duplicates conftest.py's live_client/figure_label

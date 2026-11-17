@@ -18,8 +18,8 @@ import respx
 import httpx
 from dazpy.aio import AsyncDazClient
 
-from vangard_daz_mcp._client import set_async_daz_client
-from vangard_daz_mcp.tools.wardrobe import daz_list_fitted_items, daz_fit_clothing, daz_unfit_item
+from daz_mcp_server._client import set_async_daz_client
+from daz_mcp_server.tools.wardrobe import daz_list_fitted_items, daz_fit_clothing, daz_unfit_item
 
 BASE_URL = "http://localhost:18811"
 

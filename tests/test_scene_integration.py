@@ -25,14 +25,14 @@ import pytest
 import pytest_asyncio
 from fastmcp.exceptions import ToolError
 
-from vangard_daz_mcp.tools.camera_light import daz_create_camera
-from vangard_daz_mcp.tools.scene import (
+from daz_mcp_server.tools.camera_light import daz_create_camera
+from daz_mcp_server.tools.scene import (
     daz_get_node_hierarchy,
     daz_get_parent,
     daz_list_children,
     daz_scene_info,
 )
-from vangard_daz_mcp.tools.spatial import (
+from daz_mcp_server.tools.spatial import (
     daz_calculate_distance,
     daz_check_overlap,
     daz_find_nearby_nodes,
@@ -41,13 +41,13 @@ from vangard_daz_mcp.tools.spatial import (
     daz_get_spatial_relationship,
     daz_get_world_position,
 )
-from vangard_daz_mcp.tools.transform import (
+from daz_mcp_server.tools.transform import (
     daz_delete_node,
     daz_get_node,
     daz_set_parent,
     daz_set_property,
 )
-from vangard_daz_mcp.tools.utility import daz_validate_scene
+from daz_mcp_server.tools.utility import daz_validate_scene
 
 
 # ---------------------------------------------------------------------------

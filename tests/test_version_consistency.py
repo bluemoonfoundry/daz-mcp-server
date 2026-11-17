@@ -11,8 +11,8 @@ import tomllib
 from importlib.metadata import version as installed_version
 from pathlib import Path
 
-import vangard_daz_mcp.tools  # noqa: F401  registers every tool
-from vangard_daz_mcp._mcp import mcp
+import daz_mcp_server.tools  # noqa: F401  registers every tool
+from daz_mcp_server._mcp import mcp
 
 ROOT = Path(__file__).resolve().parent.parent
 VERSION = tomllib.loads((ROOT / "pyproject.toml").read_text(encoding="utf-8"))["project"]["version"]
@@ -27,7 +27,7 @@ def _tools() -> list:
 
 
 def test_installed_package_matches_pyproject():
-    assert installed_version("vangard-daz-mcp") == VERSION
+    assert installed_version("daz-mcp-server") == VERSION
 
 
 def test_server_reports_the_package_version_to_clients():
@@ -67,3 +67,13 @@ def test_readme_module_tree_lists_every_module_with_its_count():
         line = re.search(rf"│\s+[├└]── {mod}\.py\s+#.*\((\d+) tools?\)", readme)
         assert line, f"README module tree has no line for tools/{mod}.py with a tool count"
         assert int(line.group(1)) == n, f"tools/{mod}.py: README says {line.group(1)}, registry has {n}"
+
+
+def test_readme_compatibility_row():
+    # README "Compatibility" table: | daz-mcp-server | dazpy | Daz Studio plugin |
+    deps = tomllib.loads(_read("pyproject.toml"))["project"]["dependencies"]
+    floor = next(d.split(">=", 1)[1] for d in deps if d.startswith("dazpy>="))
+    row = re.search(rf"^\|\s*{re.escape(VERSION)}\s*\|\s*>=\s*([\d.]+)\s*\|\s*>=\s*([\d.]+)\s*\|",
+                    _read("README.md"), re.M)
+    assert row, f"README Compatibility table has no row for {VERSION}"
+    assert row.group(1) == floor

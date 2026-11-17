@@ -382,15 +382,48 @@ wheels = [
 ]
 
 [[package]]
+name = "daz-mcp-server"
+version = "0.8.0"
+source = { editable = "." }
+dependencies = [
+    { name = "dazpy" },
+    { name = "fastmcp" },
+    { name = "httpx" },
+    { name = "pywinauto", marker = "sys_platform == 'win32'" },
+]
+
+[package.dev-dependencies]
+dev = [
+    { name = "pytest" },
+    { name = "pytest-asyncio" },
+    { name = "respx" },
+]
+
+[package.metadata]
+requires-dist = [
+    { name = "dazpy", specifier = ">=2.13.0" },
+    { name = "fastmcp", specifier = ">=3.0" },
+    { name = "httpx", specifier = ">=0.27" },
+    { name = "pywinauto", marker = "sys_platform == 'win32'", specifier = ">=0.6.9" },
+]
+
+[package.metadata.requires-dev]
+dev = [
+    { name = "pytest", specifier = ">=8.0" },
+    { name = "pytest-asyncio", specifier = ">=0.24" },
+    { name = "respx", specifier = ">=0.21" },
+]
+
+[[package]]
 name = "dazpy"
-version = "2.12.0"
+version = "2.13.0"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "requests" },
 ]
-sdist = { url = "https://files.pythonhosted.org/packages/f1/58/469672588b83d51e2150201ecf1596c7150fd79d25891c8059162d5bea9c/dazpy-2.12.0.tar.gz", hash = "sha256:2289483160b5379684857ae4d41b6d242266732b0ebe30efd38ed0f430efaedf", size = 450341, upload-time = "2026-11-16T05:05:31.691Z" }
+sdist = { url = "https://files.pythonhosted.org/packages/0e/5a/86c687dcdf725892af6b097303c31a207fcb22ae53ba877771dc50e966fc/dazpy-2.13.0.tar.gz", hash = "sha256:86fc41748ff28c100c1ef7a9a853f113be6be67464d730876050bec0f7d31fb7", size = 456829, upload-time = "2026-11-17T03:59:45.367Z" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/ad/03/e16971013784ff77076a7abfc24960f04fde69a9f9977705d6238254bf24/dazpy-2.12.0-py3-none-any.whl", hash = "sha256:53aa549119a7a9ce8511b0e586e6a1f06504b03593564f5c5e44456d675230bb", size = 237442, upload-time = "2026-11-16T05:05:30.237Z" },
+    { url = "https://files.pythonhosted.org/packages/ec/f1/277605eeb776dd36ff6cd4239dd04f488d0291178971a33067c761392ff7/dazpy-2.13.0-py3-none-any.whl", hash = "sha256:10ab35698ac29a9f6b4ee7f8add7548ee4709cb1364fe40f031af66210c20efb", size = 240315, upload-time = "2026-11-17T03:59:43.538Z" },
 ]
 
 [[package]]
@@ -1386,39 +1419,6 @@ dependencies = [
 sdist = { url = "https://files.pythonhosted.org/packages/32/ce/eeb58ae4ac36fe09e3842eb02e0eb676bf2c53ae062b98f1b2531673efdd/uvicorn-0.41.0.tar.gz", hash = "sha256:09d11cf7008da33113824ee5a1c6422d89fbc2ff476540d69a34c87fab8b571a", size = 82633, upload-time = "2026-02-16T23:07:24.1Z" }
 wheels = [
     { url = "https://files.pythonhosted.org/packages/83/e4/d04a086285c20886c0daad0e026f250869201013d18f81d9ff5eada73a88/uvicorn-0.41.0-py3-none-any.whl", hash = "sha256:29e35b1d2c36a04b9e180d4007ede3bcb32a85fbdfd6c6aeb3f26839de088187", size = 68783, upload-time = "2026-02-16T23:07:22.357Z" },
-]
-
-[[package]]
-name = "vangard-daz-mcp"
-version = "0.7.0"
-source = { editable = "." }
-dependencies = [
-    { name = "dazpy" },
-    { name = "fastmcp" },
-    { name = "httpx" },
-    { name = "pywinauto", marker = "sys_platform == 'win32'" },
-]
-
-[package.dev-dependencies]
-dev = [
-    { name = "pytest" },
-    { name = "pytest-asyncio" },
-    { name = "respx" },
-]
-
-[package.metadata]
-requires-dist = [
-    { name = "dazpy", specifier = ">=2.12.0" },
-    { name = "fastmcp", specifier = ">=3.0" },
-    { name = "httpx", specifier = ">=0.27" },
-    { name = "pywinauto", marker = "sys_platform == 'win32'", specifier = ">=0.6.9" },
-]
-
-[package.metadata.requires-dev]
-dev = [
-    { name = "pytest", specifier = ">=8.0" },
-    { name = "pytest-asyncio", specifier = ">=0.24" },
-    { name = "respx", specifier = ">=0.21" },
 ]
 
 [[package]]

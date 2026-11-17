@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-Live integration tests for the vangard-daz-mcp server.
+Live integration tests for the daz-mcp-server server.
 
 Verifies DazScriptServer is reachable, initialises the MCP server module
 (HTTP client + script registration), then calls every tool and reports pass/fail.
@@ -24,12 +24,12 @@ import dazpy.exceptions as daz_exc
 from dazpy.aio import AsyncDazClient
 from fastmcp.exceptions import ToolError
 
-from vangard_daz_mcp.tools.animation import (
+from daz_mcp_server.tools.animation import (
     daz_get_animation_info,
     daz_set_frame,
     daz_set_frame_range,
 )
-from vangard_daz_mcp.tools.camera_light import (
+from daz_mcp_server.tools.camera_light import (
     daz_apply_camera_angle,
     daz_apply_composition_rule,
     daz_apply_lighting_preset,
@@ -40,15 +40,15 @@ from vangard_daz_mcp.tools.camera_light import (
     daz_save_camera_preset,
     daz_set_active_camera,
 )
-from vangard_daz_mcp.tools.content import daz_browse_category, daz_list_categories
-from vangard_daz_mcp.tools.morph import daz_list_morphs, daz_search_morphs, daz_set_emotion
-from vangard_daz_mcp.tools.render import (
+from daz_mcp_server.tools.content import daz_browse_category, daz_list_categories
+from daz_mcp_server.tools.morph import daz_list_morphs, daz_search_morphs, daz_set_emotion
+from daz_mcp_server.tools.render import (
     daz_get_render_settings,
     daz_get_request_status,
     daz_list_requests,
     daz_set_render_quality,
 )
-from vangard_daz_mcp.tools.scene import (
+from daz_mcp_server.tools.scene import (
     daz_get_node_hierarchy,
     daz_list_checkpoints,
     daz_list_children,
@@ -56,7 +56,7 @@ from vangard_daz_mcp.tools.scene import (
     daz_save_scene_state,
     daz_scene_info,
 )
-from vangard_daz_mcp.tools.spatial import (
+from daz_mcp_server.tools.spatial import (
     daz_calculate_distance,
     daz_check_overlap,
     daz_find_nearby_nodes,
@@ -65,8 +65,8 @@ from vangard_daz_mcp.tools.spatial import (
     daz_get_spatial_relationship,
     daz_get_world_position,
 )
-from vangard_daz_mcp.tools.transform import daz_batch_select, daz_batch_visibility, daz_get_node
-from vangard_daz_mcp.tools.utility import (
+from daz_mcp_server.tools.transform import daz_batch_select, daz_batch_visibility, daz_get_node
+from daz_mcp_server.tools.utility import (
     daz_batch_set_properties,
     daz_execute,
     daz_get_property_metadata,
@@ -75,8 +75,8 @@ from vangard_daz_mcp.tools.utility import (
     daz_validate_scene,
     daz_validate_script,
 )
-from vangard_daz_mcp._client import DAZ_API_TOKEN, DAZ_TIMEOUT, set_async_daz_client
-from vangard_daz_mcp._registry import _REGISTRY, _register_scripts
+from daz_mcp_server._client import DAZ_API_TOKEN, DAZ_TIMEOUT, set_async_daz_client
+from daz_mcp_server._registry import _REGISTRY, _register_scripts
 
 
 # ---------------------------------------------------------------------------
@@ -594,7 +594,7 @@ async def main(host: str, port: int, verbose: bool) -> int:
     base_url = f"http://{host}:{port}"
     token = DAZ_API_TOKEN  # loaded from env / token file at import time
 
-    print(f"\033[1mvangard-daz-mcp  integration tests\033[0m")
+    print(f"\033[1mdaz-mcp-server  integration tests\033[0m")
     print(f"Target: {base_url}")
 
     # 1. Pre-flight check
@@ -641,7 +641,7 @@ async def main(host: str, port: int, verbose: bool) -> int:
 
 
 if __name__ == "__main__":
-    parser = argparse.ArgumentParser(description="vangard-daz-mcp live integration tests")
+    parser = argparse.ArgumentParser(description="daz-mcp-server live integration tests")
     parser.add_argument(
         "--host", default="localhost", help="DazScriptServer host (default: localhost)"
     )

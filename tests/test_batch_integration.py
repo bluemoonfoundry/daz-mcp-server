@@ -12,14 +12,14 @@ from __future__ import annotations
 
 import pytest_asyncio
 
-from vangard_daz_mcp.tools.transform import (
+from daz_mcp_server.tools.transform import (
     daz_batch_select,
     daz_batch_transform,
     daz_batch_visibility,
     daz_get_node,
     daz_set_property,
 )
-from vangard_daz_mcp.tools.utility import daz_batch_set_properties
+from daz_mcp_server.tools.utility import daz_batch_set_properties
 
 
 # ---------------------------------------------------------------------------

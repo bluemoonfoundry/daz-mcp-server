@@ -14,8 +14,8 @@ import respx
 import httpx
 
 from dazpy.aio import AsyncDazClient
-from vangard_daz_mcp._client import set_async_daz_client
-from vangard_daz_mcp.tools.content import daz_save_prop_asset
+from daz_mcp_server._client import set_async_daz_client
+from daz_mcp_server.tools.content import daz_save_prop_asset
 
 BASE_URL = "http://localhost:18811"
 

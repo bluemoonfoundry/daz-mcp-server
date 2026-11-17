@@ -24,12 +24,12 @@ Use these for 5-10x speedup when changing 3+ items:
 - `daz_save_prop_asset`: Save a node as a reusable Prop/Figure Support Asset (`.duf` +
   geometry) into a configured content directory — headless equivalent of
   File > Save As > Support Asset > Prop Asset. `output_path` must resolve inside a
-  configured content directory (see SKILL_DAZSCRIPT.md's "Content-Library asset export"
+  configured content directory (see daz://guide/dazscript's "Content-Library asset export"
   section for the BaseDataPath/errCode 98 gotcha).
 - `daz_save_wearable_preset`: Save a figure plus everything fit/parented to it as a
   Wearable(s) Preset — headless-*ish* equivalent of File > Save As > Wearable(s) Preset,
   driven via Windows UI Automation since the script API reproducibly fails (Windows-only,
-  requires `pywinauto`; see SKILL_DAZSCRIPT.md's "Wearable Preset" section).
+  requires `pywinauto`; see daz://guide/dazscript's "Wearable Preset" section).
 
 ## Materials
 - `daz_list_materials`, `daz_get_material`: Inspect surfaces on a node.
@@ -37,7 +37,7 @@ Use these for 5-10x speedup when changing 3+ items:
 - `daz_apply_material_preset`, `daz_copy_material`: Apply presets or clone surfaces.
 - `daz_convert_to_iray_uber`: Fix content that lands as legacy `DzDefaultMaterial` instead of
   `DzUberIrayMaterial` (common after merging raw/hand-authored `.duf` content) — see
-  SKILL_DAZSCRIPT.md's "Materials — DzDefaultMaterial vs DzUberIrayMaterial" for why this happens
+  daz://guide/dazscript's "Materials — DzDefaultMaterial vs DzUberIrayMaterial" for why this happens
   and why the fix goes through shader-preset application rather than editing channel data.
 
 ## Scene Utilities
@@ -51,7 +51,7 @@ Use these for 5-10x speedup when changing 3+ items:
   produces hair with real geometry. **Blocks on a DAZ Studio confirmation dialog a human
   must click**, so this tool only exists as an async wrapper — it submits via the async
   endpoint and returns a `request_id` immediately; poll with `daz_get_request_status` /
-  `daz_get_request_result`. See SKILL_DAZSCRIPT.md's "Do NOT use UI Actions/Menus" note —
+  `daz_get_request_result`. See daz://guide/dazscript's "Do NOT use UI Actions/Menus" note —
   this is the one confirmed exception, and it's only safe because it's async-only.
 - `daz_list_strand_hair_nodes`: Enumerate `DzStrandHairNode`s with target figure,
   `has_geometry`, and material zone labels. Hair color/shader/thickness go through the

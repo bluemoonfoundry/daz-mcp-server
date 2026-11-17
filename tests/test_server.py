@@ -1,4 +1,4 @@
-"""Tests for vangard-daz-mcp server tools."""
+"""Tests for daz-mcp-server server tools."""
 
 from unittest.mock import MagicMock
 
@@ -10,8 +10,8 @@ import dazpy.exceptions as daz_exc
 from dazpy.aio import AsyncDazClient
 from fastmcp.exceptions import ToolError
 
-from vangard_daz_mcp._client import set_async_daz_client, set_scene
-from vangard_daz_mcp.tools.render import (
+from daz_mcp_server._client import set_async_daz_client, set_scene
+from daz_mcp_server.tools.render import (
     daz_render,
     daz_render_async,
     daz_render_with_camera_async,
@@ -25,9 +25,9 @@ from vangard_daz_mcp.tools.render import (
     daz_set_render_quality,
     daz_wait_for_request,
 )
-from vangard_daz_mcp.tools.scene import daz_scene_info, daz_load_file, daz_save_scene_copy
-from vangard_daz_mcp.tools.transform import daz_get_node, daz_set_property
-from vangard_daz_mcp.tools.utility import (
+from daz_mcp_server.tools.scene import daz_scene_info, daz_load_file, daz_save_scene_copy
+from daz_mcp_server.tools.transform import daz_get_node, daz_set_property
+from daz_mcp_server.tools.utility import (
     daz_status,
     daz_execute,
     daz_execute_file,

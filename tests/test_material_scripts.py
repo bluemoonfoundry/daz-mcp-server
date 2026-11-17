@@ -3,8 +3,8 @@ import gzip
 import json
 from pathlib import Path
 
-from vangard_daz_mcp._registry import _REGISTRY
-from vangard_daz_mcp.tools.material import extract_preset_map_paths
+from daz_mcp_server._registry import _REGISTRY
+from daz_mcp_server.tools.material import extract_preset_map_paths
 
 
 def test_set_property_and_morph_search_modifier_stack():

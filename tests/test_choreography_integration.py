@@ -16,9 +16,9 @@ import pytest
 import pytest_asyncio
 from fastmcp.exceptions import ToolError
 
-from vangard_daz_mcp.tools.animation import daz_clear_animation
-from vangard_daz_mcp.tools.camera_light import daz_list_cameras
-from vangard_daz_mcp.tools.cinematic import (
+from daz_mcp_server.tools.animation import daz_clear_animation
+from daz_mcp_server.tools.camera_light import daz_list_cameras
+from daz_mcp_server.tools.cinematic import (
     daz_animate_conversation,
     daz_arrange_characters,
     daz_choreograph_action,
@@ -26,7 +26,7 @@ from vangard_daz_mcp.tools.cinematic import (
     daz_create_scene,
     daz_create_shot_sequence,
 )
-from vangard_daz_mcp.tools.transform import daz_delete_node
+from daz_mcp_server.tools.transform import daz_delete_node
 
 
 # ---------------------------------------------------------------------------

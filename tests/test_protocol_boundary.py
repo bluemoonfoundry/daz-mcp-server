@@ -12,7 +12,7 @@ _DAZ_ROUTE = re.compile(
 
 def test_mcp_source_does_not_construct_dazscriptserver_routes():
     """Daz endpoint URLs and wire payloads belong to dazpy, not MCP tools."""
-    source_root = Path(__file__).parents[1] / "src" / "vangard_daz_mcp"
+    source_root = Path(__file__).parents[1] / "src" / "daz_mcp_server"
     violations = []
     for path in source_root.rglob("*.py"):
         for line_number, line in enumerate(path.read_text(encoding="utf-8").splitlines(), 1):

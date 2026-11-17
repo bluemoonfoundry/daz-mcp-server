@@ -74,7 +74,7 @@ async def daz_load_file(
             "opens a modal dialog that blocks the script server until a human "
             "confirms it (Bug 11). Do not wait on this call. Parse the BVH and "
             "apply keys with setValue(time, value), or use a dedicated pipeline "
-            "script. See D:/OpenCode/Projects/bvh-dialog-loesung.md"
+            "script."
         )
     if file_path.lower().endswith(".obj"):
         return await _execute_by_id(

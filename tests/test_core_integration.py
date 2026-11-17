@@ -16,7 +16,7 @@ from __future__ import annotations
 import pytest
 from fastmcp.exceptions import ToolError
 
-from vangard_daz_mcp.tools.utility import (
+from daz_mcp_server.tools.utility import (
     daz_execute,
     daz_execute_file,
     daz_get_property_metadata,

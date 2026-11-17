@@ -7,21 +7,22 @@ Bug-Katalog: `C:\Users\Black-Byte\Development\pinkcharakter\docs\daz-mcp-bridge-
 - `uv sync` - Install dependencies
 - `uv run pytest tests/ -m "not integration and not slow"` - Unit tests only (safe while DAZ Studio is running)
 - `uv run pytest tests/ -v` - All tests. **Integration tests run against DAZ Studio whenever it is reachable on 18811** (they render and add nodes), so close Studio or use the line above unless you mean it.
-- `uv run vangard-daz-mcp` - Run the MCP server
+- `uv run daz-mcp-server` - Run the MCP server (stdio); released builds run with `uvx daz-mcp-server`
+- Release: bump `pyproject.toml`, README badge/compatibility row, `CLAUDE.md` version and `CHANGELOG.md`; merge; push tag `vX.Y.Z` → `.github/workflows/release.yml` publishes to PyPI (Trusted Publishing, environment `pypi`) and creates the GitHub release
 
 ## Skill Modules (Reference with @)
 - **@SKILL_DEVELOPMENT.md**: Server architecture, MCP registry, and testing.
-- **@SKILL_DAZSCRIPT.md**: DazScript environment, globals, syntax rules, and "gotchas."
-- **@SKILL_SCENE.md**: Scene layout, hierarchy, batch operations, and content browsing.
-- **@SKILL_ACTORS.md**: Morphs, emotions, posing, interaction, and character movement.
-- **@SKILL_CINEMA.md**: Cameras, lighting, animation, shot composition, and rendering.
+- **@src/daz_mcp_server/guides/dazscript.md**: DazScript environment, globals, syntax rules, and "gotchas."
+- **@src/daz_mcp_server/guides/scene.md**: Scene layout, hierarchy, batch operations, and content browsing.
+- **@src/daz_mcp_server/guides/actors.md**: Morphs, emotions, posing, interaction, and character movement.
+- **@src/daz_mcp_server/guides/cinema.md**: Cameras, lighting, animation, shot composition, and rendering.
 
 ## Architecture Summary
-- **Version:** 0.7.0 (source of truth: `pyproject.toml`; `tests/test_version_consistency.py` checks the docs and the server match it)
+- **Version:** 0.8.0 (source of truth: `pyproject.toml`; `tests/test_version_consistency.py` checks the docs and the server match it)
 - **Bridge:** Connects to DazScriptServer (port 18811)
 - **Registry:** 164 tools registered across 16 tool modules.
 - **Structure:** Modular — `_mcp.py` holds shared FastMCP instance; `tools/__init__.py` imports all 16 modules so `@mcp.tool()` decorators fire at import time.
-- **Scene recipes:** `tools/recipe.py` — `daz_recipe_validate/plan/apply/observe/render` + `daz://recipe/schema` resources, compact profile, thin wrappers over `dazpy.recipe` (see SKILL_RECIPE.md)
+- **Scene recipes:** `tools/recipe.py` — `daz_recipe_validate/plan/apply/observe/render` + `daz://recipe/schema` resources, compact profile, thin wrappers over `dazpy.recipe` (see src/daz_mcp_server/guides/recipe.md)
 - **Phase 4.8:** Lighting Animation — `daz_animate_light`, `daz_create_light_sequence`
 - **Phase 4.9:** Shot Planning — `daz_plan_shot`, `daz_create_storyboard`
 - **Phase 4.10:** Focus & DOF — `daz_set_focus_point`, `daz_animate_focus_pull`

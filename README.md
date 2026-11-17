@@ -1,6 +1,6 @@
-# vangard-daz-mcp
+# daz-mcp-server
 
-**Version 0.7.0** | MCP Server for DAZ Studio
+**Version 0.8.0** | MCP Server for DAZ Studio
 
 A [Model Context Protocol (MCP)](https://modelcontextprotocol.io) server that exposes DAZ Studio operations to Claude and other MCP clients. Built on [FastMCP](https://github.com/jlowin/fastmcp) and wraps the [DazScriptServer](https://github.com/bluemoonfoundry/daz-script-server) HTTP plugin.
 
@@ -29,7 +29,7 @@ This MCP server allows Claude (via Claude Desktop or other MCP clients) to contr
 - Execute arbitrary DazScript code
 - Access comprehensive DazScript documentation and examples
 
-The server acts as a bridge: **MCP Client** ↔ **vangard-daz-mcp** ↔ **DazScriptServer plugin** ↔ **DAZ Studio 4.5+ or 6.25+**
+The server acts as a bridge: **MCP Client** ↔ **daz-mcp-server** ↔ **DazScriptServer plugin** ↔ **DAZ Studio 4.5+ or 6.25+**
 
 ---
 
@@ -66,31 +66,56 @@ powershell -ExecutionPolicy ByPass -c "irm https://astral.sh/uv/install.ps1 | ie
 
 See [uv installation docs](https://docs.astral.sh/uv/getting-started/installation/) for other options.
 
-### 2. Clone and install
+### 2. Run it with uvx
+
+daz-mcp-server is published on PyPI. `uvx` downloads it (and its dependencies,
+including dazpy) into a cached environment and runs it; there is nothing to
+clone or install by hand. Point your MCP client at it (see
+[MCP Client Configuration](#mcp-client-configuration)):
 
 ```bash
-# Clone the repository
-git clone https://github.com/bluemoonfoundry/daz-mcp-server.git
-cd daz-mcp-server
-
-# Install dependencies (creates .venv automatically)
-uv sync
-
-# Verify it works
-uv run vangard-daz-mcp --help
+uvx daz-mcp-server   # starts the stdio MCP server; your MCP client normally runs this
 ```
+
+`uvx` picks up new releases automatically; pin one with `uvx daz-mcp-server@0.8.0`.
 
 ### Using pip (alternative)
 
 ```bash
+pip install daz-mcp-server
+daz-mcp-server
+```
+
+### Developer setup (clone)
+
+```bash
 git clone https://github.com/bluemoonfoundry/daz-mcp-server.git
 cd daz-mcp-server
-
-pip install .
-
-# Run the server
-vangard-daz-mcp
+uv sync                 # creates .venv
+uv run daz-mcp-server   # starts the stdio server; Ctrl+C to stop
 ```
+
+For an MCP client, use `"command": "uv", "args": ["run", "--project", "/absolute/path/to/daz-mcp-server", "daz-mcp-server"]`
+(`--project`, not `--directory`, so `uv run` uses the project's `.venv`).
+
+---
+
+## Compatibility
+
+daz-mcp-server talks to the DazScriptServer plugin inside Daz Studio through
+[dazpy](https://pypi.org/project/dazpy/). Installing daz-mcp-server installs a
+matching dazpy; the plugin is installed separately in Daz Studio
+([plugin releases](https://github.com/bluemoonfoundry/daz-script-server/releases)).
+
+| daz-mcp-server | dazpy | Daz Studio plugin |
+|---|---|---|
+| 0.8.0 | >= 2.13.0 | >= 2.12 |
+
+If the plugin at `DAZ_HOST:DAZ_PORT` is older than required, the server still
+starts and says so: `daz_status` and `daz_inspect_scene` report
+`plugin_compatibility` with upgrade advice, tool errors caused by a missing
+plugin feature add the same advice, and your MCP client's log gets one warning.
+It notices a plugin upgrade (Studio restart) without restarting the MCP server.
 
 ---
 
@@ -119,13 +144,19 @@ selection predictable by exposing ten task tools (five job tools and five scene-
 - `daz_observe_job` — poll, collect, or cancel a queued job
 - `daz_run_script_job` — run a `.dsa`/`.ds` script file as an async job through the same job boundary
 - `daz_fetch_artifact` — fetch an output declared by that job's manifest
-- `daz_recipe_validate`, `daz_recipe_plan`, `daz_recipe_apply`, `daz_recipe_observe`, `daz_recipe_render` — declarative scene recipes: validate → plan → apply → render, with hand-edit conflict handling (`ask` / `recipe_wins` / `scene_wins` / per-path `resolutions`). Schema: `daz://recipe/schema` resource; guide: [`SKILL_RECIPE.md`](SKILL_RECIPE.md)
+- `daz_recipe_validate`, `daz_recipe_plan`, `daz_recipe_apply`, `daz_recipe_observe`, `daz_recipe_render` — declarative scene recipes: validate → plan → apply → render, with hand-edit conflict handling (`ask` / `recipe_wins` / `scene_wins` / per-path `resolutions`). Schema: `daz://recipe/schema` resource; guide: [`src/daz_mcp_server/guides/recipe.md`](src/daz_mcp_server/guides/recipe.md)
 
 Static DazScript guidance is available as the `daz://help/{topic}` resource,
 so its large catalogue and examples do not consume the always-visible tool
 surface. Low-level primitives remain available for development and unusual
 scene surgery by setting `DAZ_MCP_PROFILE=expert` in the MCP server's `env`
 configuration and restarting the MCP client.
+
+### Changes in 0.8.0
+
+- **Renamed** from `vangard-daz-mcp` to `daz-mcp-server` (package, command and server name) and published on PyPI: run it with `uvx daz-mcp-server`. See [Migrating from vangard-daz-mcp](#migrating-from-vangard-daz-mcp).
+- Agent guides ship in the package and are served as `daz://guides` and `daz://guide/<name>` resources (also `daz_script_help("guide:<name>")`).
+- Plugin compatibility reporting (requires dazpy 2.13.0); see [Compatibility](#compatibility).
 
 ### Changes in 0.7.0
 
@@ -155,18 +186,12 @@ Config file location:
 - **macOS:** `~/Library/Application Support/Claude/claude_desktop_config.json`
 - **Windows:** `%APPDATA%\Claude\claude_desktop_config.json`
 
-**macOS / Linux:**
 ```json
 {
   "mcpServers": {
-    "vangard-daz-mcp": {
-      "command": "uv",
-      "args": [
-        "run",
-        "--project",
-        "/absolute/path/to/daz-mcp-server",
-        "vangard-daz-mcp"
-      ],
+    "daz-mcp-server": {
+      "command": "uvx",
+      "args": ["daz-mcp-server"],
       "env": {
         "DAZ_HOST": "localhost",
         "DAZ_PORT": "18811"
@@ -176,33 +201,11 @@ Config file location:
 }
 ```
 
-**Windows:**
-```json
-{
-  "mcpServers": {
-    "vangard-daz-mcp": {
-      "command": "uv",
-      "args": [
-        "run",
-        "--project",
-        "C:\\Users\\YourName\\daz-mcp-server",
-        "vangard-daz-mcp"
-      ],
-      "env": {
-        "DAZ_HOST": "localhost",
-        "DAZ_PORT": "18811"
-      }
-    }
-  }
-}
-```
-
-Replace the path with the actual location where you cloned the repo. Use `--project` (not `--directory`) so `uv run` picks up the project's `.venv`.
-
-After saving the config, **restart Claude Desktop**. The five compact DAZ
-workflow tools will appear in Claude's tool palette. Add
-`"DAZ_MCP_PROFILE": "expert"` to `env` only when the full low-level catalogue
-is needed.
+After saving the config, **restart Claude Desktop**. The compact DAZ workflow
+tools will appear in Claude's tool palette. Add `"DAZ_MCP_PROFILE": "expert"`
+to `env` only when the full low-level catalogue is needed. Set `DAZ_HOST` to
+another machine's address to drive a Daz Studio running there (its plugin must
+listen on that address, and set `DAZ_API_TOKEN` since the token file is local).
 
 ---
 
@@ -213,14 +216,9 @@ Add to `.cursor/mcp.json` in your project, or `~/.cursor/mcp.json` for global ac
 ```json
 {
   "mcpServers": {
-    "vangard-daz-mcp": {
-      "command": "uv",
-      "args": [
-        "run",
-        "--project",
-        "/absolute/path/to/daz-mcp-server",
-        "vangard-daz-mcp"
-      ],
+    "daz-mcp-server": {
+      "command": "uvx",
+      "args": ["daz-mcp-server"],
       "env": {
         "DAZ_HOST": "localhost",
         "DAZ_PORT": "18811"
@@ -239,15 +237,10 @@ Add to `.vscode/mcp.json` in your workspace:
 ```json
 {
   "servers": {
-    "vangard-daz-mcp": {
+    "daz-mcp-server": {
       "type": "stdio",
-      "command": "uv",
-      "args": [
-        "run",
-        "--project",
-        "/absolute/path/to/daz-mcp-server",
-        "vangard-daz-mcp"
-      ],
+      "command": "uvx",
+      "args": ["daz-mcp-server"],
       "env": {
         "DAZ_HOST": "localhost",
         "DAZ_PORT": "18811"
@@ -256,6 +249,35 @@ Add to `.vscode/mcp.json` in your workspace:
   }
 }
 ```
+
+---
+
+### Migrating from vangard-daz-mcp
+
+0.8.0 renamed the server. If your MCP client config runs the old command from a
+clone, replace the entry:
+
+```json
+"vangard-daz-mcp": {
+  "command": "uv",
+  "args": ["run", "--project", "/absolute/path/to/daz-mcp-server", "vangard-daz-mcp"],
+  "env": { "DAZ_HOST": "localhost", "DAZ_PORT": "18811" }
+}
+```
+
+with:
+
+```json
+"daz-mcp-server": {
+  "command": "uvx",
+  "args": ["daz-mcp-server"],
+  "env": { "DAZ_HOST": "localhost", "DAZ_PORT": "18811" }
+}
+```
+
+Keep your `env` values. The `vangard-daz-mcp` command no longer exists, so the
+old entry fails to start. Code importing `vangard_daz_mcp` now imports
+`daz_mcp_server`.
 
 ---
 
@@ -277,44 +299,45 @@ If it fails, see the [Troubleshooting](#troubleshooting) section below.
 
 ---
 
-## Domain Reference Files (SKILL files)
+## Agent guides
 
 The repository ships six **SKILL files** — curated knowledge documents that you can ask Claude (or any MCP client) to read before working in a particular area of DAZ Studio. They exist because LLMs have reasonable general knowledge about 3D software but will make confident, wrong assumptions about DAZ Studio specifics — inverted rotation signs, broken API methods, generation-specific bone names, and so on. Loading the right SKILL file before a task corrects those assumptions and produces dramatically better results.
 
 ### How to use them
 
-Ask Claude to read the relevant file at the start of a session or task:
+The guides ship inside the package and are served to the AI as MCP resources:
+`daz://guides` lists them and `daz://guide/<name>` returns one (`actors`,
+`cinema`, `daz_studio`, `dazscript`, `recipe`, `scene`). Clients that don't
+show resources to the model can use the help tool instead:
+`daz_script_help("guides")` and `daz_script_help("guide:<name>")`. Tool
+descriptions point at them by URI, so the AI can fetch the one it needs.
+
+You can also ask for one at the start of a task:
 
 ```
-Read the file SKILL_DAZ_STUDIO.md before we begin.
+Read daz://guide/daz_studio before we begin.
 ```
 
 ```
-Before writing any DazScript code, read SKILL_DAZSCRIPT.md.
-```
-
-You can load more than one if your task spans domains:
-
-```
-Read SKILL_DAZ_STUDIO.md and SKILL_CINEMA.md — we're going to set up a portrait shot.
+Read daz://guide/daz_studio and daz://guide/cinema — we're going to set up a portrait shot.
 ```
 
 ---
 
-### SKILL file reference
+### Guide reference
 
 | File | Domain | Load when… |
 |------|--------|------------|
-| [`SKILL_DAZ_STUDIO.md`](SKILL_DAZ_STUDIO.md) | DAZ Studio conventions | Starting any session — covers coordinate system inversions, camera Y-rotation being backwards, bone rotation limits, and known tool limitations |
-| [`SKILL_DAZSCRIPT.md`](SKILL_DAZSCRIPT.md) | DazScript API | Writing or debugging custom scripts via `daz_execute` — documents verified-working API patterns and a list of broken/wrong methods to avoid |
-| [`SKILL_SCENE.md`](SKILL_SCENE.md) | Scene management | Working with scene hierarchy, content library, spatial layout, materials, or batch operations |
-| [`SKILL_ACTORS.md`](SKILL_ACTORS.md) | Characters & posing | Working with morphs, emotions, body language, gaze direction, wardrobe, or multi-character interactions |
-| [`SKILL_CINEMA.md`](SKILL_CINEMA.md) | Cameras, lighting & rendering | Composing shots, setting up lighting rigs, animating cameras, or running renders |
+| [`src/daz_mcp_server/guides/daz_studio.md`](src/daz_mcp_server/guides/daz_studio.md) | DAZ Studio conventions | Starting any session — covers coordinate system inversions, camera Y-rotation being backwards, bone rotation limits, and known tool limitations |
+| [`src/daz_mcp_server/guides/dazscript.md`](src/daz_mcp_server/guides/dazscript.md) | DazScript API | Writing or debugging custom scripts via `daz_execute` — documents verified-working API patterns and a list of broken/wrong methods to avoid |
+| [`src/daz_mcp_server/guides/scene.md`](src/daz_mcp_server/guides/scene.md) | Scene management | Working with scene hierarchy, content library, spatial layout, materials, or batch operations |
+| [`src/daz_mcp_server/guides/actors.md`](src/daz_mcp_server/guides/actors.md) | Characters & posing | Working with morphs, emotions, body language, gaze direction, wardrobe, or multi-character interactions |
+| [`src/daz_mcp_server/guides/cinema.md`](src/daz_mcp_server/guides/cinema.md) | Cameras, lighting & rendering | Composing shots, setting up lighting rigs, animating cameras, or running renders |
 | [`SKILL_DEVELOPMENT.md`](SKILL_DEVELOPMENT.md) | MCP server internals | Modifying or extending the MCP server itself — module layout, how to add tools, the script registry |
 
 ---
 
-### When to load `SKILL_DAZ_STUDIO.md`
+### When to load `src/daz_mcp_server/guides/daz_studio.md`
 
 This is the most important file and the one most likely to save you from a frustrating session. Key things it corrects:
 
@@ -3688,14 +3711,17 @@ uv run pytest tests/test_server.py::test_daz_status_ok -v
 ### Project Structure
 
 ```
-vangard-daz-mcp/
-├── src/vangard_daz_mcp/
+daz-mcp-server/
+├── src/daz_mcp_server/
 │   ├── server.py              # Entry point: registers tools, applies profile
 │   ├── _mcp.py                # Shared FastMCP instance, lifespan, execute helpers
 │   ├── _profile.py            # Compact-default / expert visibility boundary
 │   ├── _client.py             # dazpy protocol + content-browser clients
 │   ├── _errors.py             # Error handling helpers
 │   ├── _registry.py           # Script pre-registration at startup
+│   ├── _compat.py             # Plugin compatibility from dazpy version checks
+│   ├── _guides.py             # Bundled agent guides (daz://guide/<name>)
+│   ├── guides/                # actors, cinema, daz_studio, dazscript, recipe, scene (.md)
 │   ├── dazscript_docs.json    # DazScript documentation (daz_script_help)
 │   └── tools/
 │       ├── __init__.py        # Imports all modules (registers decorators)

@@ -20,8 +20,8 @@ import httpx
 from fastmcp.exceptions import ToolError
 
 from dazpy.aio import AsyncDazClient
-from vangard_daz_mcp._client import set_async_daz_client
-from vangard_daz_mcp.tools.morph import daz_load_morph_pro
+from daz_mcp_server._client import set_async_daz_client
+from daz_mcp_server.tools.morph import daz_load_morph_pro
 
 BASE_URL = "http://localhost:18811"
 

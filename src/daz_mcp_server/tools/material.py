@@ -267,7 +267,7 @@ async def daz_convert_to_iray_uber(
     **This resets every channel on every zone to shader defaults.** Follow up with
     ``daz_get_material`` / ``daz_set_material_property`` per zone to restore actual
     diffuse/PBR values and texture maps (color values you set afterward should already
-    be in Daz's expected space — see the color-property gotcha in SKILL_DAZSCRIPT.md if
+    be in Daz's expected space — see the color-property gotcha in daz://guide/dazscript if
     you're feeding in already-linear values from another DCC rather than a UI hex color).
 
     Args:

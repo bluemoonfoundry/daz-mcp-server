@@ -13,8 +13,8 @@ import respx
 import httpx
 
 from dazpy.aio import AsyncDazClient
-from vangard_daz_mcp._client import set_async_daz_client
-from vangard_daz_mcp.tools.hair import (
+from daz_mcp_server._client import set_async_daz_client
+from daz_mcp_server.tools.hair import (
     daz_create_strand_hair,
     daz_list_strand_hair_nodes,
 )

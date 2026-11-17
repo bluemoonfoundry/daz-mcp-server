@@ -3,7 +3,7 @@ import re
 
 import pytest
 
-from vangard_daz_mcp._registry import _REGISTRY
+from daz_mcp_server._registry import _REGISTRY
 
 
 @pytest.mark.parametrize(
