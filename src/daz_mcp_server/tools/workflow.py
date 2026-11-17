@@ -11,6 +11,7 @@ from typing import Any, Literal
 from fastmcp.exceptions import ToolError
 from fastmcp.utilities.types import File, Image
 
+from .. import _compat
 from .._guides import guide_index, read_guide
 from .._mcp import mcp
 from .render import (
@@ -32,8 +33,13 @@ async def daz_inspect_scene() -> dict[str, Any]:
 
     Returns the scene file, selected node, figures, cameras, lights, and node
     count.  Use the ``daz://help/{topic}`` resource for static DazScript help.
+    When the Daz Studio plugin is too old for this server, the result also has
+    ``plugin_compatibility`` with upgrade advice.
     """
-    return await daz_scene_info()
+    info = await daz_scene_info()
+    if _compat.incompatible_note() is not None and isinstance(info, dict):
+        info = {**info, "plugin_compatibility": _compat.summary()}
+    return info
 
 
 @mcp.tool(tags=_DEFAULT_TAG)

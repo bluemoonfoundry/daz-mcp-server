@@ -83,11 +83,14 @@ def get_daz_client() -> DazClient:
     """Return the singleton DazClient, creating it on first access."""
     global _daz_client  # pylint: disable=global-statement
     if _daz_client is None:
+        from ._compat import record  # pylint: disable=import-outside-toplevel  # _compat imports this module
+
         _daz_client = DazClient(
             host=DAZ_HOST,
             port=DAZ_PORT,
             token=DAZ_API_TOKEN or None,
             timeout=DAZ_TIMEOUT,
+            on_version_check=record,
         )
     return _daz_client
 

@@ -22,6 +22,7 @@ from .._mcp import (
 from .._client import get_async_daz_client
 from .._errors import handle_dazpy_error
 from .._guides import GUIDE_NAMES, guide_index, read_guide
+from .. import _compat
 
 # ---------------------------------------------------------------------------
 # Module-level state
@@ -50,11 +51,14 @@ _call_stats: dict[str, int] = {}
 
 @mcp.tool()
 async def daz_status() -> dict[str, Any]:
-    """Check DAZ Studio connectivity. Returns server status and version."""
+    """Check DAZ Studio connectivity. Returns server status and version, plus
+    ``plugin_compatibility``: the target host:port, plugin and dazpy versions,
+    the minimum plugin version, and upgrade advice when the plugin is too old."""
     try:
-        return await get_async_daz_client().status()
+        status = await get_async_daz_client().status()
     except daz_exc.DazError as exc:
         handle_dazpy_error(exc)
+    return {**status, "plugin_compatibility": _compat.summary()}
 
 
 @mcp.tool()

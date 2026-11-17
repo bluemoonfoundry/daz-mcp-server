@@ -8,6 +8,7 @@ from fastmcp.exceptions import ToolError
 import dazpy.exceptions as daz_exc
 
 from ._client import DAZ_TIMEOUT, TOKEN_FILE
+from ._compat import incompatible_note
 
 
 def handle_dazpy_error(exc: Exception) -> None:
@@ -42,5 +43,6 @@ def handle_dazpy_error(exc: Exception) -> None:
     if isinstance(exc, (daz_exc.ScriptRuntimeError, daz_exc.ScriptSyntaxError)):
         raise ToolError(exc.diagnostic) from exc
     if isinstance(exc, daz_exc.ServerResponseError):
-        raise ToolError(str(exc)) from exc
+        note = incompatible_note() if exc.status_code == 404 else None
+        raise ToolError(f"{exc}\n{note}" if note else str(exc)) from exc
     raise exc

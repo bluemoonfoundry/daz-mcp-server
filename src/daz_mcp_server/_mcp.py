@@ -24,6 +24,7 @@ from ._client import (
     set_async_daz_client,
     set_content_browser_client,
 )
+from . import _compat
 from ._errors import handle_dazpy_error
 from ._registry import _register_scripts
 
@@ -131,7 +132,11 @@ async def _execute_render_batch(body: dict[str, Any]) -> dict[str, Any]:
 async def _lifespan(server: FastMCP):  # pylint: disable=unused-argument
     # `server` is required by FastMCP's lifespan callback signature.
     async with AsyncDazClient(
-        host=DAZ_HOST, port=DAZ_PORT, token=DAZ_API_TOKEN, timeout=DAZ_TIMEOUT
+        host=DAZ_HOST,
+        port=DAZ_PORT,
+        token=DAZ_API_TOKEN,
+        timeout=DAZ_TIMEOUT,
+        on_version_check=_compat.record,
     ) as client:
         set_async_daz_client(client)
         await _register_scripts(client)
@@ -146,3 +151,4 @@ async def _lifespan(server: FastMCP):  # pylint: disable=unused-argument
 
 # version: what MCP clients see in serverInfo (without it FastMCP reports its own version).
 mcp = FastMCP("daz-mcp-server", version=_package_version("daz-mcp-server"), lifespan=_lifespan)
+mcp.add_middleware(_compat.CompatibilityMiddleware())
