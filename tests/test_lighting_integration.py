@@ -17,15 +17,15 @@ from __future__ import annotations
 import pytest
 from fastmcp.exceptions import ToolError
 
-from vangard_daz_mcp.tools.animation import daz_clear_animation
-from vangard_daz_mcp.tools.camera_light import daz_apply_lighting_preset, daz_list_lights
-from vangard_daz_mcp.tools.cinematic import (
+from daz_mcp_server.tools.animation import daz_clear_animation
+from daz_mcp_server.tools.camera_light import daz_apply_lighting_preset, daz_list_lights
+from daz_mcp_server.tools.cinematic import (
     daz_animate_light,
     daz_apply_visual_style,
     daz_create_light_sequence,
     daz_set_scene_atmosphere,
 )
-from vangard_daz_mcp.tools.transform import daz_delete_node
+from daz_mcp_server.tools.transform import daz_delete_node
 
 
 # ---------------------------------------------------------------------------

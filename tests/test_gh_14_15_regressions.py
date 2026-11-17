@@ -11,8 +11,8 @@ from types import SimpleNamespace
 
 import pytest
 
-from vangard_daz_mcp._registry import _REGISTRY
-from vangard_daz_mcp.tools import animation
+from daz_mcp_server._registry import _REGISTRY
+from daz_mcp_server.tools import animation
 
 
 def test_figure_info_script_uses_element_id_property():

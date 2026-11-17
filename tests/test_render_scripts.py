@@ -1,5 +1,5 @@
 """Guard the DS6 render-option contract in registered DazScript payloads."""
-from vangard_daz_mcp._registry import _REGISTRY
+from daz_mcp_server._registry import _REGISTRY
 
 _RENDER_IDS = (
     "vangard-render",

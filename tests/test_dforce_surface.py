@@ -14,8 +14,8 @@ import respx
 import httpx
 
 from dazpy.aio import AsyncDazClient
-from vangard_daz_mcp._client import set_async_daz_client
-from vangard_daz_mcp.tools.wardrobe import (
+from daz_mcp_server._client import set_async_daz_client
+from daz_mcp_server.tools.wardrobe import (
     daz_get_dforce_surface_properties,
     daz_set_dforce_surface_property,
 )

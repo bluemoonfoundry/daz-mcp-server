@@ -16,13 +16,13 @@ from __future__ import annotations
 import pytest
 from fastmcp.exceptions import ToolError
 
-from vangard_daz_mcp.tools.figure import (
+from daz_mcp_server.tools.figure import (
     daz_interactive_pose,
     daz_look_at_character,
     daz_look_at_point,
     daz_reach_toward,
 )
-from vangard_daz_mcp.tools.morph import daz_list_morphs, daz_search_morphs, daz_set_emotion
+from daz_mcp_server.tools.morph import daz_list_morphs, daz_search_morphs, daz_set_emotion
 
 
 # ---------------------------------------------------------------------------

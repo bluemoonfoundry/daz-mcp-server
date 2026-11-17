@@ -17,13 +17,13 @@ from __future__ import annotations
 import pytest
 from fastmcp.exceptions import ToolError
 
-from vangard_daz_mcp.tools.scene import (
+from daz_mcp_server.tools.scene import (
     daz_list_checkpoints,
     daz_restore_scene_state,
     daz_save_scene_state,
 )
-from vangard_daz_mcp.tools.transform import daz_set_property
-from vangard_daz_mcp.tools.utility import (
+from daz_mcp_server.tools.transform import daz_set_property
+from daz_mcp_server.tools.utility import (
     daz_list_macros,
     daz_replay_macro,
     daz_start_recording,

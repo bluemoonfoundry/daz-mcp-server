@@ -9,7 +9,7 @@ from fastmcp.exceptions import ToolError
 
 import dazpy.exceptions as daz_exc
 
-from vangard_daz_mcp._errors import handle_dazpy_error
+from daz_mcp_server._errors import handle_dazpy_error
 
 
 class TestHandleDazpyErrorBusy:

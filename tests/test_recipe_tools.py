@@ -7,7 +7,7 @@ from types import SimpleNamespace
 import pytest
 from dazpy.exceptions import RecipeNotAppliedError
 
-from vangard_daz_mcp.tools import recipe
+from daz_mcp_server.tools import recipe
 from test_workflow_profile import _profile_snapshot
 
 RECIPE_TOOLS = {

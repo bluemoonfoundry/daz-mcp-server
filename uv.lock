@@ -382,6 +382,39 @@ wheels = [
 ]
 
 [[package]]
+name = "daz-mcp-server"
+version = "0.7.0"
+source = { editable = "." }
+dependencies = [
+    { name = "dazpy" },
+    { name = "fastmcp" },
+    { name = "httpx" },
+    { name = "pywinauto", marker = "sys_platform == 'win32'" },
+]
+
+[package.dev-dependencies]
+dev = [
+    { name = "pytest" },
+    { name = "pytest-asyncio" },
+    { name = "respx" },
+]
+
+[package.metadata]
+requires-dist = [
+    { name = "dazpy", specifier = ">=2.12.0" },
+    { name = "fastmcp", specifier = ">=3.0" },
+    { name = "httpx", specifier = ">=0.27" },
+    { name = "pywinauto", marker = "sys_platform == 'win32'", specifier = ">=0.6.9" },
+]
+
+[package.metadata.requires-dev]
+dev = [
+    { name = "pytest", specifier = ">=8.0" },
+    { name = "pytest-asyncio", specifier = ">=0.24" },
+    { name = "respx", specifier = ">=0.21" },
+]
+
+[[package]]
 name = "dazpy"
 version = "2.12.0"
 source = { registry = "https://pypi.org/simple" }
@@ -1386,39 +1419,6 @@ dependencies = [
 sdist = { url = "https://files.pythonhosted.org/packages/32/ce/eeb58ae4ac36fe09e3842eb02e0eb676bf2c53ae062b98f1b2531673efdd/uvicorn-0.41.0.tar.gz", hash = "sha256:09d11cf7008da33113824ee5a1c6422d89fbc2ff476540d69a34c87fab8b571a", size = 82633, upload-time = "2026-02-16T23:07:24.1Z" }
 wheels = [
     { url = "https://files.pythonhosted.org/packages/83/e4/d04a086285c20886c0daad0e026f250869201013d18f81d9ff5eada73a88/uvicorn-0.41.0-py3-none-any.whl", hash = "sha256:29e35b1d2c36a04b9e180d4007ede3bcb32a85fbdfd6c6aeb3f26839de088187", size = 68783, upload-time = "2026-02-16T23:07:22.357Z" },
-]
-
-[[package]]
-name = "vangard-daz-mcp"
-version = "0.7.0"
-source = { editable = "." }
-dependencies = [
-    { name = "dazpy" },
-    { name = "fastmcp" },
-    { name = "httpx" },
-    { name = "pywinauto", marker = "sys_platform == 'win32'" },
-]
-
-[package.dev-dependencies]
-dev = [
-    { name = "pytest" },
-    { name = "pytest-asyncio" },
-    { name = "respx" },
-]
-
-[package.metadata]
-requires-dist = [
-    { name = "dazpy", specifier = ">=2.12.0" },
-    { name = "fastmcp", specifier = ">=3.0" },
-    { name = "httpx", specifier = ">=0.27" },
-    { name = "pywinauto", marker = "sys_platform == 'win32'", specifier = ">=0.6.9" },
-]
-
-[package.metadata.requires-dev]
-dev = [
-    { name = "pytest", specifier = ">=8.0" },
-    { name = "pytest-asyncio", specifier = ">=0.24" },
-    { name = "respx", specifier = ">=0.21" },
 ]
 
 [[package]]

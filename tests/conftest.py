@@ -27,11 +27,11 @@ import pytest
 import pytest_asyncio
 from dazpy.aio import AsyncDazClient
 
-from vangard_daz_mcp._client import DAZ_API_TOKEN, set_async_daz_client
-from vangard_daz_mcp._registry import _register_scripts
-from vangard_daz_mcp.tools.camera_light import daz_create_camera, daz_create_light
-from vangard_daz_mcp.tools.scene import daz_scene_info
-from vangard_daz_mcp.tools.transform import daz_delete_node
+from daz_mcp_server._client import DAZ_API_TOKEN, set_async_daz_client
+from daz_mcp_server._registry import _register_scripts
+from daz_mcp_server.tools.camera_light import daz_create_camera, daz_create_light
+from daz_mcp_server.tools.scene import daz_scene_info
+from daz_mcp_server.tools.transform import daz_delete_node
 
 BASE_URL = "http://localhost:18811"
 

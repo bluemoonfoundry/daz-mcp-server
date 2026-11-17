@@ -19,7 +19,7 @@ from __future__ import annotations
 import pytest
 from fastmcp.exceptions import ToolError
 
-from vangard_daz_mcp.tools.render import (
+from daz_mcp_server.tools.render import (
     daz_get_render_settings,
     daz_render,
     daz_render_with_camera,

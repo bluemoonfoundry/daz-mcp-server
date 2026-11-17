@@ -145,4 +145,4 @@ async def _lifespan(server: FastMCP):  # pylint: disable=unused-argument
 
 
 # version: what MCP clients see in serverInfo (without it FastMCP reports its own version).
-mcp = FastMCP("vangard-daz-mcp", version=_package_version("vangard-daz-mcp"), lifespan=_lifespan)
+mcp = FastMCP("daz-mcp-server", version=_package_version("daz-mcp-server"), lifespan=_lifespan)

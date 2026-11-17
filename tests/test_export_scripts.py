@@ -1,5 +1,5 @@
 """Guard DS6 export/import contract in registered DazScript payloads."""
-from vangard_daz_mcp._registry import _REGISTRY
+from daz_mcp_server._registry import _REGISTRY
 
 
 def test_export_scene_uses_write_file_not_do_export():

@@ -11,7 +11,7 @@ import pytest
 from fastmcp.exceptions import ToolError
 from fastmcp.utilities.types import File, Image
 
-from vangard_daz_mcp.tools import workflow
+from daz_mcp_server.tools import workflow
 
 
 DEFAULT_TOOLS = {
@@ -31,7 +31,7 @@ DEFAULT_TOOLS = {
 def _profile_snapshot(profile: str) -> dict:
     code = """
 import asyncio, json
-from vangard_daz_mcp.server import ACTIVE_PROFILE, mcp
+from daz_mcp_server.server import ACTIVE_PROFILE, mcp
 async def main():
     tools = await mcp.list_tools(run_middleware=False)
     resources = await mcp.list_resources(run_middleware=False)

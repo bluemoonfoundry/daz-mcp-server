@@ -12,12 +12,12 @@ import respx
 import httpx
 from dazpy.aio import AsyncDazClient
 
-from vangard_daz_mcp._client import (
+from daz_mcp_server._client import (
     CONTENT_BROWSER_URL,
     set_content_browser_client,
     set_async_daz_client,
 )
-from vangard_daz_mcp.tools.content import daz_search_content, daz_load_product
+from daz_mcp_server.tools.content import daz_search_content, daz_load_product
 
 
 DAZ_BASE = "http://localhost:18811"

@@ -11,8 +11,8 @@ import tomllib
 from importlib.metadata import version as installed_version
 from pathlib import Path
 
-import vangard_daz_mcp.tools  # noqa: F401  registers every tool
-from vangard_daz_mcp._mcp import mcp
+import daz_mcp_server.tools  # noqa: F401  registers every tool
+from daz_mcp_server._mcp import mcp
 
 ROOT = Path(__file__).resolve().parent.parent
 VERSION = tomllib.loads((ROOT / "pyproject.toml").read_text(encoding="utf-8"))["project"]["version"]
@@ -27,7 +27,7 @@ def _tools() -> list:
 
 
 def test_installed_package_matches_pyproject():
-    assert installed_version("vangard-daz-mcp") == VERSION
+    assert installed_version("daz-mcp-server") == VERSION
 
 
 def test_server_reports_the_package_version_to_clients():

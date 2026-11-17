@@ -17,7 +17,7 @@ from __future__ import annotations
 import pytest
 from fastmcp.exceptions import ToolError
 
-from vangard_daz_mcp.tools.render import (
+from daz_mcp_server.tools.render import (
     daz_cancel_request,
     daz_get_request_result,
     daz_get_request_status,
