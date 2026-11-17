@@ -214,6 +214,12 @@ Uses dazpy 2.13's `VersionCheck` / `on_version_check` callback.
    any Claude Code MCP entry. The builder prepares the exact snippet; the user
    applies it.
 
+6. After 0.8.0 is on PyPI, in daz-script-server: remove the `vangard_daz_mcp`
+   fallback from the `mcp` stage snippet in `tests/smoke_live.py` (added in
+   2.13.0 so the smoke run worked across the rename), leaving only the
+   `daz_mcp_server` imports, and drop "(formerly vangard-daz-mcp)" from
+   `docs/LIVE_SMOKE.md`. A small PR on that repo; no release needed.
+
 Every outward step (push, PR, merge, tag, PyPI setup) stops for the user's
 go-ahead; the builder verifies results after each.
 
