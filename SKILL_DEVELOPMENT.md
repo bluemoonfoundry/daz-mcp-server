@@ -27,7 +27,7 @@ Technical documentation for server internals and the MCP bridge.
 ## Testing Standards
 - Use `respx` for HTTP transport mocking.
 - Tests call tool functions directly (e.g., `await daz_status()`).
-- Import tool functions from their module (e.g., `from vangard_daz_mcp.tools.utility import daz_status`).
+- Import tool functions from their module (e.g., `from daz_mcp_server.tools.utility import daz_status`).
 - `pytest tests/` alone is safe to run even with DAZ Studio live — `addopts` excludes
   `slow` by default, and a `pytest_collection_modifyitems` hook in `tests/conftest.py`
   auto-tags any test using a live-DAZ fixture (`live_client`, `figure_label`, etc.) with

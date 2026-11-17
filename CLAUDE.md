@@ -7,7 +7,8 @@ Bug-Katalog: `C:\Users\Black-Byte\Development\pinkcharakter\docs\daz-mcp-bridge-
 - `uv sync` - Install dependencies
 - `uv run pytest tests/ -m "not integration and not slow"` - Unit tests only (safe while DAZ Studio is running)
 - `uv run pytest tests/ -v` - All tests. **Integration tests run against DAZ Studio whenever it is reachable on 18811** (they render and add nodes), so close Studio or use the line above unless you mean it.
-- `uv run vangard-daz-mcp` - Run the MCP server
+- `uv run daz-mcp-server` - Run the MCP server (stdio); released builds run with `uvx daz-mcp-server`
+- Release: bump `pyproject.toml`, README badge/compatibility row, `CLAUDE.md` version and `CHANGELOG.md`; merge; push tag `vX.Y.Z` → `.github/workflows/release.yml` publishes to PyPI (Trusted Publishing, environment `pypi`) and creates the GitHub release
 
 ## Skill Modules (Reference with @)
 - **@SKILL_DEVELOPMENT.md**: Server architecture, MCP registry, and testing.
@@ -17,7 +18,7 @@ Bug-Katalog: `C:\Users\Black-Byte\Development\pinkcharakter\docs\daz-mcp-bridge-
 - **@src/daz_mcp_server/guides/cinema.md**: Cameras, lighting, animation, shot composition, and rendering.
 
 ## Architecture Summary
-- **Version:** 0.7.0 (source of truth: `pyproject.toml`; `tests/test_version_consistency.py` checks the docs and the server match it)
+- **Version:** 0.8.0 (source of truth: `pyproject.toml`; `tests/test_version_consistency.py` checks the docs and the server match it)
 - **Bridge:** Connects to DazScriptServer (port 18811)
 - **Registry:** 164 tools registered across 16 tool modules.
 - **Structure:** Modular — `_mcp.py` holds shared FastMCP instance; `tools/__init__.py` imports all 16 modules so `@mcp.tool()` decorators fire at import time.

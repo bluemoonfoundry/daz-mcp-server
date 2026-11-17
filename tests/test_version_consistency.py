@@ -67,3 +67,13 @@ def test_readme_module_tree_lists_every_module_with_its_count():
         line = re.search(rf"│\s+[├└]── {mod}\.py\s+#.*\((\d+) tools?\)", readme)
         assert line, f"README module tree has no line for tools/{mod}.py with a tool count"
         assert int(line.group(1)) == n, f"tools/{mod}.py: README says {line.group(1)}, registry has {n}"
+
+
+def test_readme_compatibility_row():
+    # README "Compatibility" table: | daz-mcp-server | dazpy | Daz Studio plugin |
+    deps = tomllib.loads(_read("pyproject.toml"))["project"]["dependencies"]
+    floor = next(d.split(">=", 1)[1] for d in deps if d.startswith("dazpy>="))
+    row = re.search(rf"^\|\s*{re.escape(VERSION)}\s*\|\s*>=\s*([\d.]+)\s*\|\s*>=\s*([\d.]+)\s*\|",
+                    _read("README.md"), re.M)
+    assert row, f"README Compatibility table has no row for {VERSION}"
+    assert row.group(1) == floor
