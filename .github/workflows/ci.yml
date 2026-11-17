@@ -1,0 +1,53 @@
+name: CI
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  ci:
+    name: ci (${{ matrix.python-version }})
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        python-version: ["3.11", "3.12"]
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: astral-sh/setup-uv@v6
+        with:
+          python-version: ${{ matrix.python-version }}
+
+      - name: Install
+        run: uv sync
+
+      - name: Unit tests
+        # No Daz Studio in CI; integration tests also skip themselves when
+        # Studio is unreachable, but the marker keeps the selection explicit.
+        run: uv run pytest tests/ -m "not integration and not slow" -q
+
+      - name: Pylint
+        run: |
+          # tests/ gets extra disables: redefined-outer-name/unused-argument for
+          # the standard pytest-fixture-as-parameter idiom (daz-mcp-server-0t0),
+          # and missing-function/class-docstring since 99% of the 467 hits there
+          # are self-descriptively-named test_* functions and TestXxx grouping
+          # classes (daz-mcp-server-dk7) -- module docstrings stay required.
+          # import-outside-toplevel is also disabled for tests/: nearly every test
+          # file imports `fastmcp.exceptions.ToolError` or `json` inside the test
+          # function right next to its usage, a consistent, deliberate convention
+          # across the whole suite (not incidental to any one file) rather than a
+          # real defect (daz-mcp-server-e2v).
+          # --fail-under: pass CI on rating >=7.0 despite warnings/refactors/conventions.
+          uv run --with pylint pylint --fail-under=7.0 $(git ls-files '*.py' | grep -v '^tests/')
+          uv run --with pylint pylint --fail-under=7.0 --disable=redefined-outer-name,unused-argument,missing-function-docstring,missing-class-docstring,import-outside-toplevel $(git ls-files 'tests/*.py')
+
+      - name: Build
+        run: uv build
+
+      - name: Smoke-test the built wheel in a clean venv
+        run: |
+          uv venv /tmp/smoke
+          VIRTUAL_ENV=/tmp/smoke uv pip install dist/*.whl
+          /tmp/smoke/bin/python -I scripts/smoke_wheel.py
