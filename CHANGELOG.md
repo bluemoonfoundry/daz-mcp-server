@@ -3,7 +3,18 @@
 All notable changes to daz-mcp-server are documented here.
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
-## [Unreleased]
+## [0.9.0] - Unreleased
+
+Requires dazpy 2.15.0 or later.
+
+### Added
+
+- `daz_cover_conversation`: cut a two-person conversation from dialogue beats
+  (`{speaker, start, end, line}`), one over-the-shoulder or single shot per
+  beat with an optional opening master, or set up master / two-shot / OTS /
+  singles coverage when no beats are given. Built on
+  `dazpy.shot_library.conversation` / `dialogue_coverage` / `check_plan`;
+  returns the cameras, the cut list and any continuity issues.
 
 ### Changed
 
