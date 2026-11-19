@@ -1,5 +1,5 @@
 # Skill: DazScript Specialist
-Rules for writing DazScript for DAZ Studio 4.24+.
+Rules for writing DazScript for DAZ Studio 4.24+ and Studio 6.
 
 ## Globals & Environment
 - `Scene` (DzScene), `App` (DzApp), `MainWindow`.
@@ -37,8 +37,10 @@ var shape = node.getObject().getCurrentShape();  // DzShape — has getNumMateri
 ### Bounding box
 ```javascript
 var bbox = node.getWSBoundingBox();          // returns DzBox3
-var cx = (bbox.minX + bbox.maxX) / 2;       // compute center manually
-// BROKEN: node.getBoundingBox(), bbox.getCenter()
+var cx = (bbox.minX + bbox.maxX) / 2;       // compute center manually: works on every version
+// BROKEN: node.getBoundingBox() (undefined)
+// bbox.getCenter() works on Studio 6.26 but was reported broken on 4.24 --
+// compute the center manually in scripts that must run on both.
 ```
 
 ### Render options — property assignment, no setter methods
@@ -51,7 +53,7 @@ opts.aspectHeight = h;
 ```
 
 ### Bone naming by generation
-**Authoritative** — probed live from DAZ Studio 4.24. Full reference: `src/vangard_daz_mcp/genesis_bones.json`.
+**Authoritative** — probed live from DAZ Studio 4.24. Full reference: `genesis_bones.json` in the `daz_mcp_server` package.
 
 Genesis 3 and Genesis 8 share identical internal bone names. Genesis 9 uses a completely different `l_`/`r_` underscore scheme.
 
@@ -130,9 +132,9 @@ prop.deleteAllKeys();
 ```
 
 ### Camera controls — always use dedicated control accessors (DzBasicCamera)
-Never use `findProperty("Focal Length")` etc. on cameras. Use the typed control methods defined
-in `DzBasicCamera` — they always return a `DzFloatProperty` / `DzBoolProperty` you can
-call `.setValue()` on:
+Don't look camera controls up by name with `findProperty()`: some names resolve and others don't.
+Use the typed control methods defined in `DzBasicCamera` — they always return a
+`DzFloatProperty` / `DzBoolProperty` you can call `.setValue()` on:
 
 ```javascript
 var time = frame * Scene.getTimeStep();
@@ -145,8 +147,8 @@ camera.getFStopControl().setValue(2.8);               // aperture / F-stop
 camera.getFocalPointScaleControl().setValue(1.0);     // focal point scale
 
 // BROKEN: cam.findProperty("Focal Distance")  — returns null on a bare DzBasicCamera
-// BROKEN: cam.findProperty("Focal Length")    — same; use getFocalLengthControl()
-// BROKEN: cam.findProperty("F/Stop")          — use getFStopControl()
+// BROKEN: cam.findProperty("F/Stop")          — same; use getFStopControl()
+// cam.findProperty("Focal Length") does resolve (Studio 6.26), but use getFocalLengthControl()
 ```
 
 ### Materials — DzDefaultMaterial vs DzUberIrayMaterial
