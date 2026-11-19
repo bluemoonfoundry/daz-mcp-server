@@ -175,6 +175,73 @@ async def test_shot_coverage(scene):
     assert all(aim_of(cam).y == pytest.approx(150) for _, cam in scene.created[:1])
 
 
+BEATS = [
+    {"speaker": "Alice", "start": 0, "end": 59, "line": "You came back."},
+    {"speaker": "Bob", "start": 60, "end": 119, "line": "I had to."},
+    {"speaker": "Alice", "start": 120, "end": 179},
+]
+
+
+async def test_cover_conversation_cuts_beats_on_one_side(scene):
+    for side in (1, -1):
+        scene.created.clear()
+        out = await cinematic.daz_cover_conversation("Alice", "Bob", BEATS, side=side,
+                                                     establish_frames=24)
+        assert out["mode"] == "conversation" and out["continuity"] == []
+        cut = [(c.pop("shot"), c.pop("camera"), c) for c in out["cutList"]]
+        assert all(shot == cam for shot, cam, _ in cut)
+        assert [(shot, rest) for shot, _, rest in cut] == [
+            ("000_MST_Alice-Bob", {"start": 0, "end": 23}),
+            ("001_OTS_Alice_over_Bob",
+             {"start": 24, "end": 59, "speaker": "Alice", "line": "You came back."}),
+            ("002_OTS_Bob_over_Alice",
+             {"start": 60, "end": 119, "speaker": "Bob", "line": "I had to."}),
+            ("003_OTS_Alice_over_Bob", {"start": 120, "end": 179, "speaker": "Alice"}),
+        ]
+        line = sl.LineOfAction("Alice", "Bob", Vec3(0, 0, 0), Vec3(0, 0, -120), side)
+        assert len(scene.created) == 4
+        assert all(line.side_of(pos_of(cam)) == side for _, cam in scene.created)
+
+
+async def test_cover_conversation_singles_and_lens(scene):
+    out = await cinematic.daz_cover_conversation("Alice", "Bob", BEATS[:2], style="singles",
+                                                 single_size="close-up", focal_length=85)
+    assert [c["shot"] for c in out["cutList"]] == ["001_CU_Alice", "002_CU_Bob"]
+    assert {c["focalLength"] for c in out["cameras"]} == {85}
+
+
+async def test_cover_conversation_reports_jump_cuts(scene):
+    # Same speaker twice in a row: the second cut barely moves the camera.
+    beats = [{"speaker": "Alice", "start": 0, "end": 29},
+             {"speaker": "Alice", "start": 30, "end": 59}]
+    out = await cinematic.daz_cover_conversation("Alice", "Bob", beats)
+    assert [i["kind"] for i in out["continuity"]] == ["thirty_degree"]
+    assert out["continuity"][0]["previousShot"] == "001_OTS_Alice_over_Bob"
+
+
+async def test_cover_conversation_without_beats_sets_up_coverage(scene):
+    out = await cinematic.daz_cover_conversation("Alice", "Bob", include=["master", "singles"])
+    assert out["mode"] == "coverage" and "cutList" not in out
+    assert [c["label"] for c in out["cameras"]] == ["MST_Alice-Bob", "MCU_Alice", "MCU_Bob"]
+    assert out["continuity"] == []
+
+
+@pytest.mark.parametrize("kwargs, message", [
+    ({"beats": [{"speaker": "Carol", "start": 0, "end": 10}]}, "must be 'Alice' or 'Bob'"),
+    ({"beats": [{"speaker": "Alice", "start": 0}]}, "missing field"),
+    ({"beats": [{"speaker": "Alice", "start": 0, "end": 30},
+                {"speaker": "Bob", "start": 30, "end": 60}]}, "before beat 1 ends"),
+    ({"style": "wide"}, "style must be"),
+    ({"side": 0}, "side must be"),
+    ({"include": ["closeups"]}, "Unknown include"),
+    ({"single_size": "huge"}, "single_size must be"),
+])
+async def test_cover_conversation_rejects_bad_input(scene, kwargs, message):
+    with pytest.raises(ToolError, match=message):
+        await cinematic.daz_cover_conversation("Alice", "Bob", **kwargs)
+    assert not scene.created
+
+
 async def test_camera_movement_chains_and_pans_right(scene):
     q = Quat.from_euler(0, 30, 0, order="ZYX").conjugate()  # as Studio's getWSRot reports it
     cam = FakeCamera(quat=(q.x, q.y, q.z, q.w))

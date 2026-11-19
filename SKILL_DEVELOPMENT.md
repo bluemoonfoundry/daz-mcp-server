@@ -10,7 +10,7 @@ Technical documentation for server internals and the MCP bridge.
 - `_client.py` — httpx client singleton + env config (`DAZ_HOST`, `DAZ_PORT`, `DAZ_TIMEOUT`, `DAZ_API_TOKEN`, `DAZ_CONTENT_BROWSER_URL`)
 - `_errors.py` — `handle_network_error()`, `check_response()`
 - `_registry.py` — `_register_scripts()` with all pre-registered script payloads
-- `tools/__init__.py` — imports all 16 tool modules (164 tools total)
+- `tools/__init__.py` — imports all 16 tool modules (165 tools total)
 - `tools/<module>.py` — each module imports `mcp` from `_mcp` and registers `@mcp.tool()` functions
 
 ## Adding a New Tool

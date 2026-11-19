@@ -23,6 +23,7 @@ Tools for visual storytelling and rendering.
 - `daz_render_animation`: Batch render frame sequences.
 - `daz_batch_render_cameras`: Multi-angle product/portrait renders.
 - `daz_setup_shot_coverage`: Single-subject coverage presets (`standard`, `interview`, `dramatic`, `action`).
+- `daz_cover_conversation`: Two-person dialogue — cut one OTS/single shot per `beats` entry (`{speaker, start, end, line}`, optional opening master via `establish_frames`) and get the `cutList`, or omit `beats` for master/two-shot/OTS/singles coverage. Every camera stays on one side of the line; `continuity` reports axis crossings and jump cuts.
 - `daz_create_shot_sequence`: Establishing → medium → close-up, shot/reverse-shot (180-degree rule kept, `side` picks the side), orbit, push-in.
 
 ## Conventions
