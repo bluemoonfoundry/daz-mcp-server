@@ -1,0 +1,230 @@
+"""Unit tests for the cinematic tools that run on dazpy.shot_library (no Studio)."""
+from __future__ import annotations
+
+import math
+
+import pytest
+from dazpy import shot_library as sl
+from dazpy.exceptions import NodeNotFoundError
+from dazpy.math3 import Quat, Vec3
+from dazpy.shots import framing_distance
+from fastmcp.exceptions import ToolError
+
+from daz_mcp_server.tools import camera_light, cinematic
+
+
+class FakeNode:
+    def __init__(self, pos, height=175.0, figure=True):
+        self.position = {"x": pos[0], "y": pos[1], "z": pos[2]}
+        self._bb = {"min": {"x": pos[0] - 25, "y": pos[1], "z": pos[2] - 15},
+                    "max": {"x": pos[0] + 25, "y": pos[1] + height, "z": pos[2] + 15}}
+        self.figure = figure
+
+    def bounding_box(self):
+        return self._bb
+
+
+class FakeCamera:
+    """Records every call; exposes a pose like a DazCamera."""
+
+    def __init__(self, pos=(0.0, 150.0, 300.0), quat=(0.0, 0.0, 0.0, 1.0), focal_length=50.0):
+        d = self.__dict__
+        d["calls"] = []
+        d["position"] = {"x": pos[0], "y": pos[1], "z": pos[2]}
+        d["rotation"] = dict(zip("xyzw", quat))
+        d["focal_length"] = focal_length
+        d["f_stop"] = 8.0
+
+    def __setattr__(self, name, value):
+        self.calls.append(("set", name, value))
+        self.__dict__[name] = value
+
+    def __getattr__(self, name):
+        if name.startswith("_"):
+            raise AttributeError(name)
+        return lambda *a: self.calls.append((name,) + a)
+
+    def call(self, name):
+        return [c for c in self.calls if c[0] == name]
+
+    def last_set(self, name):
+        return [c[2] for c in self.calls if c[:2] == ("set", name)][-1]
+
+
+class FakeScene:
+    def __init__(self, nodes, cameras=None):
+        self.nodes, self.cameras, self.created = nodes, dict(cameras or {}), []
+
+    def find_skeleton_by_label(self, label):
+        n = self.nodes.get(label)
+        if n is None or not n.figure:
+            raise NodeNotFoundError(label)
+        return n
+
+    def find_node_by_label(self, label):
+        if label not in self.nodes:
+            raise NodeNotFoundError(label)
+        return self.nodes[label]
+
+    find_node = find_node_by_label
+
+    def find_camera_by_label(self, label):
+        if label not in self.cameras:
+            raise NodeNotFoundError(label)
+        return self.cameras[label]
+
+    def create_camera(self, name=None):
+        cam = FakeCamera()
+        self.created.append((name, cam))
+        return cam
+
+    def set_anim_range(self, *a):
+        pass
+
+
+@pytest.fixture
+def scene(monkeypatch):
+    sc = FakeScene({"Alice": FakeNode((0, 0, 0)), "Bob": FakeNode((0, 0, -120)),
+                    "Cup": FakeNode((30, 90, -60), height=10, figure=False)},
+                   {"Camera 1": FakeCamera()})
+    monkeypatch.setattr(camera_light, "get_scene", lambda: sc)
+    monkeypatch.setattr(cinematic, "get_scene", lambda: sc)
+    return sc
+
+
+def pos_of(cam):
+    return Vec3(*cam.call("set_position")[-1][1:])
+
+
+def aim_of(cam):
+    return Vec3(*cam.call("aim_at")[-1][1:])
+
+
+async def test_frame_shot_fits_size_to_current_lens(scene):
+    out = await camera_light.daz_frame_shot("Camera 1", "Alice", "close-up")
+    cam = scene.cameras["Camera 1"]
+    p, aim = pos_of(cam), aim_of(cam)
+    assert p.z > 0 and abs(p.x) < 1e-6  # in front of a +Z-facing figure
+    assert p.distance(aim) == pytest.approx(framing_distance("close_up", 50.0))
+    assert aim.y == pytest.approx(sl.SHOT_SIZES["close_up"][1])
+    assert out["framing"] == "face and head" and out["shot"]["id"] == "CU_Alice"
+    assert cam.last_set("focal_length") == 50.0  # lens kept
+
+
+async def test_frame_shot_prop_aims_at_centre(scene):
+    await camera_light.daz_frame_shot("Camera 1", "Cup", "extreme-close-up")
+    assert aim_of(scene.cameras["Camera 1"]) == Vec3(30, 95, -60)
+
+
+async def test_composition_rule_places_eyes_on_the_rule(scene):
+    out = await camera_light.daz_apply_composition_rule("Camera 1", "Alice", "golden-ratio")
+    cam = scene.cameras["Camera 1"]
+    p, aim = pos_of(cam), aim_of(cam)
+    eye = Vec3(0, sl.EYE_HEIGHT_CM, 0)
+    fwd = (aim - p).normalize()
+    right = fwd.cross(Vec3(0, 1, 0)).normalize()
+    x = (eye - p).dot(right) / (eye - p).dot(fwd) / (36 / 50 / 2)
+    assert x == pytest.approx(sl.GOLDEN_X, abs=1e-6)
+    assert math.hypot(p.x, p.z) == pytest.approx(300, abs=1e-6)  # kept its distance
+    assert out["rule"] == "golden-ratio"
+
+
+async def test_dutch_angle_rolls_about_the_lens_axis(scene):
+    await camera_light.daz_apply_camera_angle("Camera 1", "Alice", "dutch-angle")
+    cam = scene.cameras["Camera 1"]
+    rot = cam.call("set_rotation")[-1][1:]
+    p = pos_of(cam)
+    assert sl.forward_from_rotation(rot).dot((Vec3(0, sl.EYE_HEIGHT_CM, 0) - p).normalize()) == pytest.approx(1)
+    assert math.degrees(math.acos(sl.camera_up(rot).dot(Vec3(0, 1, 0)))) == pytest.approx(15, abs=1e-6)
+
+
+async def test_over_shoulder_angle_stands_behind_subject(scene):
+    out = await camera_light.daz_apply_camera_angle("Camera 1", "Alice", "over-shoulder")
+    assert out["camera_position"]["z"] < 0  # behind a +Z-facing figure
+
+
+async def test_shot_reverse_shot_keeps_cameras_on_one_side(scene):
+    for side in (1, -1):
+        scene.created.clear()
+        out = await cinematic.daz_create_shot_sequence("shot-reverse-shot", ["Alice", "Bob"], 240, side=side)
+        assert [c["label"] for c in out["cameras"]] == ["OTS_Bob_over_Alice", "OTS_Alice_over_Bob"]
+        assert [c["frameRange"] for c in out["cameras"]] == [{"start": 0, "end": 119},
+                                                             {"start": 120, "end": 239}]
+        assert out["continuity"] == []
+        line = sl.LineOfAction("Alice", "Bob", Vec3(0, 0, 0), Vec3(0, 0, -120), side)
+        assert all(line.side_of(pos_of(cam)) == side for _, cam in scene.created)
+        assert [n for n, _ in scene.created] == ["OTS_Bob_over_Alice", "OTS_Alice_over_Bob"]
+
+
+async def test_establishing_and_moves(scene):
+    est = await cinematic.daz_create_shot_sequence("establishing-medium-closeup", ["Alice"], 180)
+    assert [(c["label"], c["frameRange"]["start"]) for c in est["cameras"]] == [
+        ("WS_Alice", 0), ("MS_Alice", 60), ("CU_Alice", 120)]
+    orbit = await cinematic.daz_create_shot_sequence("orbit", ["Alice"], 300)
+    assert orbit["cameras"][0]["animated"]
+    assert len(scene.created[-1][1].call("set_position_at_frame")) == 25  # every 15 degrees
+    push = await cinematic.daz_create_shot_sequence("push-in", [], 120)
+    assert push["subject"] is None and push["cameras"][0]["label"] == "PUSH_origin"
+
+
+async def test_shot_coverage(scene):
+    out = await cinematic.daz_setup_shot_coverage("Alice", "dramatic", camera_height=150)
+    assert [c["label"] for c in out["cameras"]] == ["WS_Alice", "MS_low_Alice", "MS_high_Alice",
+                                                    "MCU_profile_Alice"]
+    assert out["cameraCount"] == 4
+    assert all(aim_of(cam).y == pytest.approx(150) for _, cam in scene.created[:1])
+
+
+async def test_camera_movement_chains_and_pans_right(scene):
+    q = Quat.from_euler(0, 30, 0, order="ZYX").conjugate()  # as Studio's getWSRot reports it
+    cam = FakeCamera(quat=(q.x, q.y, q.z, q.w))
+    scene.cameras["Cam"] = cam
+    out = await cinematic.daz_animate_camera_movement("Cam", "pan-right", 10, 40, intensity=0.5)
+    rots = cam.call("set_rotation_at_frame")
+    assert [r[1] for r in rots] == [10, 40]
+    assert rots[0][3] == pytest.approx(30) and rots[1][3] == pytest.approx(30 - 22.5)
+    assert not cam.call("clear_position_keys") and not cam.call("clear_rotation_keys")
+    assert out["keyframesSet"] == 2 and "22" in out["description"]
+
+
+async def test_handheld_is_repeatable(scene):
+    a = await cinematic.daz_animate_camera_movement("Camera 1", "handheld-shake", 0, 30)
+    b = await cinematic.daz_animate_camera_movement("Camera 1", "handheld-shake", 0, 30)
+    assert a == b and a["keyframesSet"] == 11
+
+
+async def test_focus_point_on_eyes(scene):
+    out = await cinematic.daz_set_focus_point("Camera 1", target_label="Bob", f_stop=2.8)
+    expected = Vec3(0, 150, 300).distance(Vec3(0, sl.EYE_HEIGHT_CM, -120))
+    assert out["focalDistance"] == pytest.approx(expected, abs=0.05)
+    near, far = sl.depth_of_field_limits(50, 2.8, out["focalDistance"])
+    assert out["dofPreview"]["nearSharp"] == pytest.approx(near, abs=0.05)
+    assert scene.cameras["Camera 1"].last_set("depth_of_field") is True
+
+
+async def test_focus_pull_keys_and_phases(scene):
+    out = await cinematic.daz_animate_focus_pull("Camera 1", from_target="Alice", to_distance=500,
+                                                 start_frame=0, end_frame=60,
+                                                 hold_from_frames=10, hold_to_frames=10)
+    keys = scene.cameras["Camera 1"].call("set_focal_distance_at_frame")
+    assert [k[1] for k in keys] == [0, 10, 50, 60]
+    assert [k["phase"] for k in out["keyframes"]] == ["hold-from", "pull-start", "pull-end", "hold-to"]
+    assert out["toDistance"] == 500 and out["pullDurationFrames"] == 40
+    plain = await cinematic.daz_animate_focus_pull("Camera 1", from_distance=100, to_distance=200)
+    assert [k["phase"] for k in plain["keyframes"]] == ["pull-start", "pull-end"]
+
+
+@pytest.mark.parametrize("call", [
+    lambda: camera_light.daz_frame_shot("Camera 1", "Alice", "cowboy"),
+    lambda: camera_light.daz_apply_camera_angle("Camera 1", "Alice", "sideways"),
+    lambda: camera_light.daz_frame_shot("Camera 1", "Nobody"),
+    lambda: camera_light.daz_frame_shot("No Cam", "Alice"),
+    lambda: cinematic.daz_create_shot_sequence("shot-reverse-shot", ["Alice"]),
+    lambda: cinematic.daz_create_shot_sequence("shot-reverse-shot", ["Alice", "Alice"]),
+    lambda: cinematic.daz_create_shot_sequence("orbit", ["Alice"], side=0),
+    lambda: cinematic.daz_animate_camera_movement("Camera 1", "zoom"),
+    lambda: cinematic.daz_animate_focus_pull("Camera 1", from_distance=-1, to_distance=10),
+])
+async def test_errors_are_tool_errors(scene, call):
+    with pytest.raises(ToolError):
+        await call()

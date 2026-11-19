@@ -30,7 +30,9 @@ def test_tag_mismatch_fails():
 def test_compat_block():
     result = _run("scripts/compat_block.py")
     assert result.returncode == 0, result.stderr
-    assert "dazpy >= 2.13.0" in result.stdout
+    deps = tomllib.loads((ROOT / "pyproject.toml").read_text(encoding="utf-8"))["project"]["dependencies"]
+    floor = next(d.split(">=", 1)[1] for d in deps if d.startswith("dazpy>="))
+    assert f"dazpy >= {floor}" in result.stdout
     assert f"plugin (DazScriptServer) >= {dazpy.MIN_SERVER_VERSION}" in result.stdout
     assert "daz-script-server/releases" in result.stdout
 

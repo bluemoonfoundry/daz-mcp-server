@@ -6,7 +6,13 @@ from typing import Any
 
 from fastmcp.exceptions import ToolError
 
+from dazpy import shot_library as sl
+from dazpy.math3 import Vec3
+from dazpy.shots import CAMERA_ANGLES, Framing, Lens, Placement, Shot, apply_shot, framing_transform
+
 from .._mcp import mcp, _execute_by_id, _execute
+from .._client import get_scene
+from .. import _shots
 
 
 # ---------------------------------------------------------------------------
@@ -320,6 +326,37 @@ async def daz_apply_lighting_preset(
     return await _execute_by_id("vangard-apply-lighting-preset", args)
 
 
+_COMPOSITION_RULES: dict[str, tuple[float, float, str]] = {
+    # rule: (screen x of the subject, camera elevation deg, explanation)
+    "rule-of-thirds": (sl.THIRD_X, 0.0, "Subject on the right vertical third at eye level"),
+    "golden-ratio": (sl.GOLDEN_X, 0.0, "Subject on the right golden section (0.382 / 0.618 split)"),
+    "center-frame": (0.0, 0.0, "Subject centred in frame"),
+    "leading-lines": (-sl.THIRD_X, -10.0,
+                      "Low angle, subject on the left third: the frame leads in diagonally"),
+}
+
+#: angle: (camera elevation deg, roll deg, note)
+_CAMERA_ANGLES: dict[str, tuple[float, float, str]] = {
+    "eye-level": (CAMERA_ANGLES["eye_level"], 0.0, "Camera at eye height — neutral perspective"),
+    "high-angle": (CAMERA_ANGLES["high"], 0.0,
+                   "Camera above subject — creates vulnerable or diminished feel"),
+    "low-angle": (CAMERA_ANGLES["low"], 0.0,
+                  "Camera below eye level — creates powerful or dominant feel"),
+    "dutch-angle": (0.0, 15.0, "Camera rolled 15° about the lens axis — unease or tension"),
+    "overhead": (89.0, 0.0, "Bird's eye view from directly overhead"),
+    "worms-eye": (CAMERA_ANGLES["worms_eye"], 0.0, "Low looking up — extreme dramatic low angle"),
+    "over-shoulder": (0.0, 0.0, "Over-the-shoulder perspective — conversation/reaction shot"),
+}
+
+
+def _orbit_pose(target: Vec3, azimuth: float, elevation: float, distance: float,
+                focal_length: float) -> Vec3:
+    """Camera position *distance* from *target* at the given angles (dazpy framing math)."""
+    framing = Framing(subjects=(target,), azimuth_deg=azimuth, elevation_deg=elevation,
+                      distance_cm=distance)
+    return framing_transform([(target, False)], framing, focal_length)[0]
+
+
 @mcp.tool()
 async def daz_apply_composition_rule(
     camera_label: str,
@@ -328,26 +365,45 @@ async def daz_apply_composition_rule(
 ) -> dict[str, Any]:
     """Position camera so subject is framed according to a photography composition rule.
 
-    The camera maintains approximately its current horizontal distance from the subject
-    while adjusting position and aim to satisfy the chosen rule.
+    The camera keeps its current direction and distance from the subject
+    (250 cm on the subject's +Z side if it is closer than 50 cm) and its lens;
+    it turns so the subject's eyes (a prop's centre) land on the rule's
+    position. Built with ``dazpy.shot_library.compose_aim``.
 
     Args:
         camera_label: Node label of the camera to reposition.
         subject_label: Node label of the subject to frame.
         rule: One of:
             - "rule-of-thirds"  — Subject on right vertical third at eye level (default)
-            - "golden-ratio"    — Subject at the golden section (1.618 proportion)
+            - "golden-ratio"    — Subject at the golden section (0.382 / 0.618 split)
             - "center-frame"    — Subject centred, symmetric framing
-            - "leading-lines"   — Low angle with diagonal offset toward subject
+            - "leading-lines"   — Low angle, subject on the left third
 
     Returns:
-        Dict with camera, subject, rule, camera_position, and explanation string.
+        Dict with camera, subject, rule, camera_position, explanation and the
+        applied shot (``dazpy.shots.Shot.to_dict()``).
     """
-    return await _execute_by_id("vangard-apply-composition-rule", {
-        "cameraLabel": camera_label,
-        "subjectLabel": subject_label,
-        "rule": rule,
-    })
+    if rule not in _COMPOSITION_RULES:
+        raise ToolError(f"Unknown rule: {rule}. Valid: {', '.join(_COMPOSITION_RULES)}")
+    screen_x, elevation, explanation = _COMPOSITION_RULES[rule]
+
+    def _run() -> dict[str, Any]:
+        scene = get_scene()
+        subj = _shots.subject(scene, subject_label)
+        cam = _shots.camera(scene, camera_label)
+        lens = Lens(focal_length=cam.focal_length or 50.0)
+        target = subj.focus_point
+        azimuth, distance = _shots.horizontal_view(Vec3.from_dict(cam.position), target)
+        position = _orbit_pose(target, azimuth, elevation, distance, lens.focal_length)
+        aim = sl.compose_aim(position, target, screen_x, lens.focal_length)
+        shot = Shot(id=sl.shot_name("medium", subject_label, tag=rule), lens=lens,
+                    camera=Placement(position=position, look_at=aim))
+        apply_shot(scene, shot, camera=cam)
+        return {"camera": camera_label, "subject": subject_label, "rule": rule,
+                "camera_position": _shots.vec(position), "explanation": explanation,
+                "shot": shot.to_dict()}
+
+    return await _shots.run(_run)
 
 
 @mcp.tool()
@@ -358,30 +414,50 @@ async def daz_frame_shot(
 ) -> dict[str, Any]:
     """Frame camera to subject using a standard cinematic shot type.
 
-    Calculates camera distance and height from the subject's bounding box,
-    then positions and aims the camera accordingly. Genesis figures face +Z,
-    so the camera is placed in front (positive Z direction).
+    Fits the shot size to the camera's current lens (``dazpy.shots.Framing``):
+    the camera stands in front of the subject (Genesis figures face +Z) at the
+    distance where the size fills the frame height, aimed at the size's
+    height on a standing figure. A prop is framed around its centre.
 
     Args:
         camera_label: Node label of the camera to reposition.
         subject_label: Node label of the subject to frame.
         shot_type: One of:
-            - "extreme-close-up"  — Eyes/mouth detail (~25 cm)
-            - "close-up"          — Face and head (~50 cm)
-            - "medium-close-up"   — Head and shoulders (~90 cm)
-            - "medium-shot"       — Waist up (~140 cm)
-            - "medium-full"       — Knees up (~200 cm)
-            - "full-shot"         — Entire body (~400 cm)
-            - "wide-shot"         — Body within environment (~700 cm)
+            - "extreme-close-up"  — Eyes/mouth detail
+            - "close-up"          — Face and head
+            - "medium-close-up"   — Head and shoulders
+            - "medium-shot"       — Waist up
+            - "medium-full"       — Knees up
+            - "full-shot"         — Entire body
+            - "wide-shot"         — Body within environment
+            - "extreme-wide"      — Figure small in a wide environment
 
     Returns:
-        Dict with camera, subject, shot_type, distance, camera_height, and framing description.
+        Dict with camera, subject, shot_type, distance, camera_height, framing
+        description and the applied shot (``Shot.to_dict()``).
     """
-    return await _execute_by_id("vangard-frame-shot", {
-        "cameraLabel": camera_label,
-        "subjectLabel": subject_label,
-        "shotType": shot_type,
-    })
+    if shot_type not in _shots.SHOT_TYPES:
+        raise ToolError(f"Unknown shot type: {shot_type}. Valid: {', '.join(_shots.SHOT_TYPES)}")
+    size = _shots.SHOT_TYPES[shot_type]
+
+    def _run() -> dict[str, Any]:
+        scene = get_scene()
+        subj = _shots.subject(scene, subject_label)
+        cam = _shots.camera(scene, camera_label)
+        lens = Lens(focal_length=cam.focal_length or 50.0)
+        target = subject_label if subj.is_figure else subj.center
+        positions = {subject_label: subj.root}
+        shot = Shot(id=sl.shot_name(size, subject_label), lens=lens,
+                    camera=Framing(subjects=(target,), size=size))
+        apply_shot(scene, shot, camera=cam, subjects=positions)
+        position = sl.camera_position(shot, positions)
+        _, aim = framing_transform([(subj.root, True) if subj.is_figure else (subj.center, False)],
+                                   shot.camera, lens.focal_length)
+        return {"camera": camera_label, "subject": subject_label, "shot_type": shot_type,
+                "distance": round(position.distance(aim), 1), "camera_height": round(position.y, 1),
+                "framing": _shots.FRAMING_NOTES[size], "shot": shot.to_dict()}
+
+    return await _shots.run(_run)
 
 
 @mcp.tool()
@@ -392,30 +468,58 @@ async def daz_apply_camera_angle(
 ) -> dict[str, Any]:
     """Apply a standard camera angle preset relative to a subject.
 
-    Maintains the camera's current horizontal distance from the subject while
-    adjusting vertical position and aim to achieve the specified angle. If the
-    camera is closer than 50 cm it defaults to 250 cm.
+    Keeps the camera's current direction and distance from the subject (250 cm
+    on the subject's +Z side if it is closer than 50 cm) and its lens, and
+    aims at the subject's eyes (a prop's centre). Built with
+    ``dazpy.shot_library``.
 
     Args:
         camera_label: Node label of the camera to reposition.
         subject_label: Node label of the subject.
         angle: One of:
             - "eye-level"      — Camera at subject's eye height (neutral, default)
-            - "high-angle"     — Camera above subject (~1.5× head height), looking down
-            - "low-angle"      — Camera at shin level, looking up (powerful/dominant)
-            - "dutch-angle"    — Eye level with 15° Z-roll (unsettling, tense)
-            - "overhead"       — Camera directly above (bird's-eye view)
-            - "worms-eye"      — Camera at ground level looking straight up
-            - "over-shoulder"  — Camera behind and to one side of subject
+            - "high-angle"     — 30° above the eyes, looking down
+            - "low-angle"      — 20° below the eyes, looking up (powerful/dominant)
+            - "dutch-angle"    — Eye level, rolled 15° about the lens axis (unsettling, tense)
+            - "overhead"       — Directly above (bird's-eye view)
+            - "worms-eye"      — 45° below the eyes looking up
+            - "over-shoulder"  — Behind the subject's shoulder, looking where they face (+Z)
 
     Returns:
-        Dict with camera, subject, angle, camera_position, and descriptive note.
+        Dict with camera, subject, angle, camera_position, descriptive note and
+        the applied shot (``Shot.to_dict()``).
     """
-    return await _execute_by_id("vangard-apply-camera-angle", {
-        "cameraLabel": camera_label,
-        "subjectLabel": subject_label,
-        "angle": angle,
-    })
+    if angle not in _CAMERA_ANGLES:
+        raise ToolError(f"Unknown angle: {angle}. Valid: {', '.join(_CAMERA_ANGLES)}")
+    elevation, roll, note = _CAMERA_ANGLES[angle]
+
+    def _run() -> dict[str, Any]:
+        scene = get_scene()
+        subj = _shots.subject(scene, subject_label)
+        cam = _shots.camera(scene, camera_label)
+        lens = Lens(focal_length=cam.focal_length or 50.0)
+        target = subj.focus_point
+        azimuth, distance = _shots.horizontal_view(Vec3.from_dict(cam.position), target)
+        if angle == "over-shoulder":
+            view = "_view"
+            ahead = subj.root + Vec3(0.0, 0.0, distance)  # Genesis figures face +Z
+            line = sl.LineOfAction(subject_label, view, subj.root, ahead)
+            shot = sl.over_the_shoulder(line, subject_label, view, lens=lens)
+        else:
+            position = _orbit_pose(target, azimuth, elevation, distance, lens.focal_length)
+            if roll:
+                placement = Placement(position=position,
+                                      rotation=sl.look_rotation(position, target, roll))
+            else:
+                placement = Placement(position=position, look_at=target)
+            shot = Shot(id=sl.shot_name("medium", subject_label, tag=angle), camera=placement,
+                        lens=lens)
+        apply_shot(scene, shot, camera=cam)
+        return {"camera": camera_label, "subject": subject_label, "angle": angle,
+                "camera_position": _shots.vec(shot.camera.position), "note": note,
+                "shot": shot.to_dict()}
+
+    return await _shots.run(_run)
 
 
 # ---------------------------------------------------------------------------

@@ -383,7 +383,7 @@ wheels = [
 
 [[package]]
 name = "daz-mcp-server"
-version = "0.8.0"
+version = "0.9.0"
 source = { editable = "." }
 dependencies = [
     { name = "dazpy" },
@@ -401,7 +401,7 @@ dev = [
 
 [package.metadata]
 requires-dist = [
-    { name = "dazpy", specifier = ">=2.13.0" },
+    { name = "dazpy", specifier = ">=2.15.0" },
     { name = "fastmcp", specifier = ">=3.0" },
     { name = "httpx", specifier = ">=0.27" },
     { name = "pywinauto", marker = "sys_platform == 'win32'", specifier = ">=0.6.9" },
@@ -416,14 +416,14 @@ dev = [
 
 [[package]]
 name = "dazpy"
-version = "2.13.0"
+version = "2.15.0"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "requests" },
 ]
-sdist = { url = "https://files.pythonhosted.org/packages/0e/5a/86c687dcdf725892af6b097303c31a207fcb22ae53ba877771dc50e966fc/dazpy-2.13.0.tar.gz", hash = "sha256:86fc41748ff28c100c1ef7a9a853f113be6be67464d730876050bec0f7d31fb7", size = 456829, upload-time = "2026-11-17T03:59:45.367Z" }
+sdist = { url = "https://files.pythonhosted.org/packages/41/44/edb651cee28bd9754fe0466fa31f2678e87005a41f69027b63c4f758cf6d/dazpy-2.15.0.tar.gz", hash = "sha256:a471b0930f28f1991d2d6fc0ca9412f55ed9f417b09b41b72f1dc93d2eb03609", size = 496602, upload-time = "2026-11-19T05:35:44.122Z" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/ec/f1/277605eeb776dd36ff6cd4239dd04f488d0291178971a33067c761392ff7/dazpy-2.13.0-py3-none-any.whl", hash = "sha256:10ab35698ac29a9f6b4ee7f8add7548ee4709cb1364fe40f031af66210c20efb", size = 240315, upload-time = "2026-11-17T03:59:43.538Z" },
+    { url = "https://files.pythonhosted.org/packages/73/34/82ca13fdcb1a886c1c15c164663112c02663d0eadafb88a88a5c923435af/dazpy-2.15.0-py3-none-any.whl", hash = "sha256:cb7ffb200a1d53981c95c02ce7ee5de5c7e2b125faecf97f2d12c7b721318e8d", size = 268159, upload-time = "2026-11-19T05:35:42.496Z" },
 ]
 
 [[package]]

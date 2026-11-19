@@ -1,6 +1,6 @@
 # daz-mcp-server
 
-**Version 0.8.0** | MCP Server for DAZ Studio
+**Version 0.9.0** | MCP Server for DAZ Studio
 
 A [Model Context Protocol (MCP)](https://modelcontextprotocol.io) server that exposes DAZ Studio operations to Claude and other MCP clients. Built on [FastMCP](https://github.com/jlowin/fastmcp) and wraps the [DazScriptServer](https://github.com/bluemoonfoundry/daz-script-server) HTTP plugin.
 
@@ -109,6 +109,7 @@ matching dazpy; the plugin is installed separately in Daz Studio
 
 | daz-mcp-server | dazpy | Daz Studio plugin |
 |---|---|---|
+| 0.9.0 | >= 2.15.0 | >= 2.12 |
 | 0.8.0 | >= 2.13.0 | >= 2.12 |
 
 If the plugin at `DAZ_HOST:DAZ_PORT` is older than required, the server still

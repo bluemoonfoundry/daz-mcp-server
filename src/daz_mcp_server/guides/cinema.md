@@ -22,5 +22,11 @@ Tools for visual storytelling and rendering.
 ## Production & Rendering
 - `daz_render_animation`: Batch render frame sequences.
 - `daz_batch_render_cameras`: Multi-angle product/portrait renders.
-- `daz_setup_shot_coverage`: Standard 3-camera dialogue setups.
+- `daz_setup_shot_coverage`: Single-subject coverage presets (`standard`, `interview`, `dramatic`, `action`).
+- `daz_create_shot_sequence`: Establishing → medium → close-up, shot/reverse-shot (180-degree rule kept, `side` picks the side), orbit, push-in.
+
+## Conventions
+- Shots come from `dazpy.shot_library`; cameras are labelled with shot ids (`CU_Alice`, `OTS_Bob_over_Alice`).
+- Two-person coverage keeps every camera on one side of the line between the actors so eyelines match across cuts.
+- Shot sizes fit the camera's current lens; set the lens first if it matters.
 - `daz_create_camera_rig`: Multi-camera bullet-time/orbit rigs.
