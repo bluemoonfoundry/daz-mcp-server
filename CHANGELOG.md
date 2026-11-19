@@ -3,7 +3,9 @@
 All notable changes to daz-mcp-server are documented here.
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
-## [Unreleased]
+## [0.9.0] - Unreleased
+
+Requires dazpy 2.15.0 or later.
 
 ### Added
 

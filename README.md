@@ -77,7 +77,7 @@ clone or install by hand. Point your MCP client at it (see
 uvx daz-mcp-server   # starts the stdio MCP server; your MCP client normally runs this
 ```
 
-`uvx` picks up new releases automatically; pin one with `uvx daz-mcp-server@0.8.0`.
+`uvx` picks up new releases automatically; pin one with `uvx daz-mcp-server@0.9.0`.
 
 ### Using pip (alternative)
 
@@ -152,6 +152,11 @@ so its large catalogue and examples do not consume the always-visible tool
 surface. Low-level primitives remain available for development and unusual
 scene surgery by setting `DAZ_MCP_PROFILE=expert` in the MCP server's `env`
 configuration and restarting the MCP client.
+
+### Changes in 0.9.0
+
+- The camera and shot tools build their shots with `dazpy.shot_library` (requires dazpy 2.15.0): two-person coverage keeps the 180-degree rule, shots fit the camera's lens, and cameras are labelled with shot ids (`WS_Alice`, `OTS_Bob_over_Alice`). See the [changelog](CHANGELOG.md) for behaviour changes.
+- New `daz_cover_conversation`: cut a two-person conversation from dialogue beats, or set up master / two-shot / OTS / singles coverage, with continuity checks.
 
 ### Changes in 0.8.0
 
