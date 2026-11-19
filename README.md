@@ -2331,24 +2331,27 @@ daz_import_node_config("C:/shots/crowd.json", node_labels=["Alice"])
 ### 🗺️ Scene Layout & Proximity
 
 #### `daz_get_scene_layout`
-Full spatial map of all scene nodes with positions and bounding boxes.
+Spatial map of all scene nodes with world positions and rotations.
 
 **Arguments:**
-- `include_types` (list, optional): Filter by type. Values: `"figures"`, `"cameras"`, `"lights"`, `"props"`. Omit for all types.
+- `include_types` (list, optional): Filter by type. Values: `"figures"`, `"wearables"` (follower figures such as clothing), `"bones"`, `"cameras"`, `"lights"`, `"props"` (everything else). Omit for all types; an unknown value is an error.
 
 **Returns:**
 ```json
 {
   "nodes": [
     {
-      "label": "Genesis 9", "type": "DzFigure",
+      "label": "Genesis 9", "type": "figures",
       "position": {"x": 0, "y": 0, "z": 0},
-      "boundingBox": {"min": {...}, "max": {...}, "center": {...}}
+      "rotation": {"x": 0, "y": 0, "z": 0},
+      "visible": true
     }
   ],
   "count": 8
 }
 ```
+
+A Genesis figure's bones are scene nodes, so an unfiltered layout is dominated by `"bones"` entries; pass e.g. `["figures", "cameras", "lights", "props"]` for an overview.
 
 **Use when:** Getting a complete overview of scene spatial layout before adding or moving objects.
 
@@ -2358,24 +2361,24 @@ Full spatial map of all scene nodes with positions and bounding boxes.
 Find all nodes within a radius of a target node.
 
 **Arguments:**
-- `target_label` (string): Center node to search around
-- `radius` (float, default `200.0`): Search radius in cm
-- `include_types` (list, optional): Filter by type: `"figures"`, `"cameras"`, `"lights"`, `"props"`
+- `node_label` (string): Center node to search around
+- `radius` (float, default `100.0`): Search radius in cm
+- `include_types` (list, optional): Filter by type, same values as `daz_get_scene_layout`
 
-**Returns:**
+**Returns:** nearest first.
 ```json
 {
-  "target": "Alice",
+  "center_node": "Alice",
   "radius": 200,
-  "nearby": [
-    {"label": "Bob", "type": "DzFigure", "distance": 120.5, "direction": "front-right"},
-    {"label": "Chair", "type": "prop", "distance": 85.0, "direction": "right"}
+  "nearby_nodes": [
+    {"label": "Chair", "type": "props", "distance": 85.0, "direction": "right"},
+    {"label": "Bob", "type": "figures", "distance": 120.5, "direction": "front"}
   ],
   "count": 2
 }
 ```
 
-**Direction labels:** `front`, `front-right`, `right`, `back-right`, `back`, `back-left`, `left`, `front-left`
+**Direction labels:** `front`, `back`, `left`, `right` (the dominant horizontal axis; +Z is front)
 
 **Use when:** Finding all characters or props near a subject, checking interaction range.
 
