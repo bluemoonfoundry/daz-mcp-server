@@ -2,12 +2,19 @@
 from __future__ import annotations
 
 import json
+from dataclasses import replace
 from pathlib import Path
 from typing import Any
 
 from fastmcp.exceptions import ToolError
 
+from dazpy import shot_library as sl
+from dazpy.math3 import Vec3
+from dazpy.shots import Lens, apply_shot
+
 from .._mcp import mcp, _execute_by_id
+from .._client import get_scene
+from .. import _shots
 from .._emotions import _EMOTION_DEFINITIONS
 
 _VALID_SHOT_TYPES = frozenset({
@@ -42,106 +49,90 @@ async def daz_create_shot_sequence(
     sequence_type: str,
     characters: list[str],
     duration: int = 120,
+    side: int = 1,
 ) -> dict[str, Any]:
     """Create a multi-camera shot sequence for cinematic storytelling.
 
-    Automatically creates and positions multiple cameras with keyframe animations
-    for standard cinematic sequences. Useful for:
-    - Conversations (shot-reverse-shot)
-    - Establishing shots (wide → medium → close-up)
-    - Product showcases (orbit)
-    - Dramatic reveals (push-in)
+    Builds the shots with ``dazpy.shot_library`` and creates one camera per
+    shot, labelled with its shot id (e.g. ``WS_Alice``, ``OTS_Bob_over_Alice``).
 
     Args:
         sequence_type: Type of sequence to create. Options:
-            - "establishing-medium-closeup": Three cameras at different distances
-              (wide → medium → close-up). Frames divided equally into thirds.
-            - "shot-reverse-shot": Two cameras for conversation, alternating between
-              over-shoulder angles. Requires 2 characters. Frames split 50/50.
-            - "orbit": Single camera orbiting 360° around subject with keyframe animation.
-            - "push-in": Single camera dollying from wide shot to close-up with smooth animation.
-
-        characters: List of character labels (1-2 depending on sequence).
-            First character is primary subject. Second character used for shot-reverse-shot.
-
-        duration: Total duration in frames (default: 120 frames = 4 seconds at 30fps).
+            - "establishing-medium-closeup": Wide (35mm) -> medium (50mm) ->
+              close-up (85mm) of the first character, frames split in thirds.
+            - "shot-reverse-shot": Over-the-shoulder pair for a conversation.
+              Requires 2 characters. Both cameras stay on one side of the line
+              between them (the 180-degree rule), so eyelines match across the
+              cut; frames split 50/50.
+            - "orbit": One camera circling the subject 360 degrees, keyed every 15.
+            - "push-in": One camera dollying from a wide shot to a close-up.
+        characters: Character labels (1-2 depending on sequence). The first is
+            the primary subject. With none, cameras frame the scene origin.
+        duration: Total duration in frames (default: 120 = 4 seconds at 30fps).
+        side: Which side of the line of action the shot-reverse-shot cameras
+            stand on: 1 (default) = the first character's right as they face
+            the second, -1 = the other side.
 
     Returns:
         Dict with:
-        - cameras: List of created cameras with position and frame range info
-        - totalFrames: Total duration
-        - sequenceType: Confirmed sequence type
-        - subject: Primary subject character label
+        - cameras: list of {label, shotId, position, focalLength, frameRange, animated}
+        - totalFrames, sequenceType, subject
+        - continuity: 180-degree-rule issues (empty when every camera is on one side)
 
     Example:
-        # Establishing sequence for single character
-        daz_create_shot_sequence(
-            "establishing-medium-closeup",
-            ["Genesis 9"],
-            duration=180
-        )
-        # Creates: Wide Shot (0-59), Medium Shot (60-119), Close-up Shot (120-179)
-
-        # Conversation between two characters
-        daz_create_shot_sequence(
-            "shot-reverse-shot",
-            ["Alice", "Bob"],
-            duration=240
-        )
-        # Creates: Over Shoulder 1 (0-119), Over Shoulder 2 (120-239)
-
-        # 360° orbit around character
-        daz_create_shot_sequence(
-            "orbit",
-            ["Genesis 9"],
-            duration=300
-        )
-        # Creates animated camera orbiting over 300 frames
-
-        # Dolly push-in
-        daz_create_shot_sequence(
-            "push-in",
-            ["Genesis 9"],
-            duration=120
-        )
-        # Creates animated camera moving from wide to close-up
+        daz_create_shot_sequence("shot-reverse-shot", ["Alice", "Bob"], duration=240)
+        # OTS_Bob_over_Alice (0-119), OTS_Alice_over_Bob (120-239)
 
     Notes:
-        - Cameras are automatically aimed at subject's eye level
-        - For animated sequences (orbit, push-in), keyframes are set automatically
-        - For multi-shot sequences (establishing, shot-reverse-shot), use frame ranges
-          to determine which camera to render for each frame
+        - Multi-shot sequences use frame ranges: render each camera for its range
         - Use daz_set_active_camera() to preview each camera angle
-        - Use daz_set_frame() to scrub through animation timeline
     """
-    # Validate sequence type
-    valid_types = [
-        "establishing-medium-closeup",
-        "shot-reverse-shot",
-        "orbit",
-        "push-in",
-    ]
+    valid_types = ["establishing-medium-closeup", "shot-reverse-shot", "orbit", "push-in"]
     if sequence_type not in valid_types:
         raise ToolError(
-            f"Invalid sequence_type '{sequence_type}'. "
-            f"Valid options: {', '.join(valid_types)}"
+            f"Invalid sequence_type '{sequence_type}'. Valid options: {', '.join(valid_types)}"
         )
-
-    # Characters are optional — cameras aim at scene origin when none provided
-
     if sequence_type == "shot-reverse-shot" and len(characters) < 2:
         raise ToolError("shot-reverse-shot requires 2 characters")
-
-    # Validate duration
     if duration < 10 or duration > 10000:
         raise ToolError("Duration must be between 10 and 10000 frames")
+    if side not in (1, -1):
+        raise ToolError("side must be 1 or -1")
 
-    return await _execute_by_id("vangard-create-shot-sequence", {
-        "sequenceType": sequence_type,
-        "characters": characters,
-        "duration": duration,
-        "fps": 30,
-    })
+    def _run() -> dict[str, Any]:
+        scene = get_scene()
+        if characters:
+            names = characters[:2] if sequence_type == "shot-reverse-shot" else characters[:1]
+            positions = {n: _shots.subject(scene, n).root for n in names}
+            key = characters[0]
+        else:
+            key, positions = "origin", {"origin": Vec3(0.0, 0.0, 0.0)}
+        end = duration - 1
+        continuity: list[dict[str, Any]] = []
+        if sequence_type == "establishing-medium-closeup":
+            third = duration // 3
+            ranges = [(0, third - 1), (third, 2 * third - 1), (2 * third, end)]
+            shots = [replace(s, frame_range=r) for s, r in
+                     zip(sl.subject_coverage(key, preset="standard").all_shots(), ranges)]
+        elif sequence_type == "shot-reverse-shot":
+            line = sl.LineOfAction.between(positions, characters[0], characters[1], side)
+            half = duration // 2
+            shots = list(sl.shot_reverse_shot(line, frame_ranges=((0, half - 1), (half, end))))
+            continuity = _shots.issues(sl.check_axis(shots, line, positions))
+        elif sequence_type == "orbit":
+            shots = [sl.arc(key, start=0, end=end, radius=250.0, step_deg=15.0, positions=positions)]
+        else:
+            shots = [sl.push_in(positions, key, start=0, end=end, from_size="wide", to_size="close_up")]
+        cams = sl.apply_coverage(scene, shots, subjects=positions)
+        return {
+            "cameras": [_shots.shot_summary(s, label, positions) for s, label in zip(shots, cams)],
+            "totalFrames": duration,
+            "sequenceType": sequence_type,
+            "subject": characters[0] if characters else None,
+            "continuity": continuity,
+        }
+
+    return await _shots.run(_run)
 
 
 @mcp.tool()
@@ -409,6 +400,16 @@ async def daz_create_scene(
 # ---------------------------------------------------------------------------
 
 
+#: MCP movement type -> (dazpy.shot_library.camera_move kind, amount at intensity 1).
+_CAMERA_MOVES: dict[str, tuple[str, float]] = {
+    "dolly-in": ("dolly_in", 200.0), "dolly-out": ("dolly_out", 200.0),
+    "pan-left": ("pan_left", 45.0), "pan-right": ("pan_right", 45.0),
+    "tilt-up": ("tilt_up", 30.0), "tilt-down": ("tilt_down", 30.0),
+    "crane-up": ("crane_up", 100.0), "crane-down": ("crane_down", 100.0),
+    "handheld-shake": ("handheld", 5.0),
+}
+
+
 @mcp.tool()
 async def daz_animate_camera_movement(
     camera_label: str,
@@ -419,97 +420,81 @@ async def daz_animate_camera_movement(
 ) -> dict[str, Any]:
     """Animate common camera movements with keyframes.
 
-    Creates keyframe animation for standard cinematic camera moves. Perfect for
-    adding professional camera motion without manual keyframing.
+    Starts from the camera's current position and rotation and keys the move
+    at *start_frame* and *end_frame* (``dazpy.shot_library.camera_move``).
+    Existing keys outside the move are kept, so moves on one camera chain.
 
     Args:
         camera_label: Label of camera to animate
         movement_type: Type of camera movement. Options:
-            - "dolly-in": Move camera forward toward aim point
-            - "dolly-out": Move camera backward away from aim point
-            - "pan-left": Rotate camera left (horizontal)
-            - "pan-right": Rotate camera right (horizontal)
-            - "tilt-up": Rotate camera up (vertical)
-            - "tilt-down": Rotate camera down (vertical)
+            - "dolly-in": Move camera forward along its horizontal view direction
+            - "dolly-out": Move camera backward
+            - "pan-left": Turn camera left (horizontal)
+            - "pan-right": Turn camera right (horizontal)
+            - "tilt-up": Tilt camera up (vertical)
+            - "tilt-down": Tilt camera down (vertical)
             - "crane-up": Move camera vertically upward
             - "crane-down": Move camera vertically downward
-            - "handheld-shake": Procedural shake animation
+            - "handheld-shake": Repeatable procedural shake, keyed every 3 frames
         start_frame: Animation start frame (default: 0)
         end_frame: Animation end frame (default: 120)
-        intensity: Movement amount multiplier 0.0-2.0 (default: 1.0)
-            - dolly/crane: Distance in cm (200cm * intensity)
-            - pan/tilt: Rotation in degrees (45° * intensity for pan, 30° for tilt)
-            - shake: Amplitude (5cm * intensity)
+        intensity: Movement amount multiplier 0.0-10.0 (default: 1.0)
+            - dolly: 200cm * intensity; crane: 100cm * intensity
+            - pan: 45 deg * intensity; tilt: 30 deg * intensity
+            - shake: 5cm * intensity (rotation jitter half that, in degrees)
 
     Returns:
         Dict with:
         - camera: Camera label
         - movementType: Type of movement applied
-        - keyframesSet: Number of keyframes created
+        - keyframesSet: Number of camera keyframes created
         - frameRange: {start, end} frame range
         - description: Human-readable description of movement
         - intensity: Applied intensity value
+        - endPosition: Camera position at end_frame
 
     Example:
-        # Slow dolly-in
         daz_animate_camera_movement("Camera 1", "dolly-in", 0, 180, intensity=1.0)
-
-        # Quick pan right
-        daz_animate_camera_movement("Camera 1", "pan-right", 0, 60, intensity=1.5)
-
-        # Subtle handheld shake
         daz_animate_camera_movement("Camera 1", "handheld-shake", 0, 300, intensity=0.3)
-
-        # Dramatic crane up
-        daz_animate_camera_movement("Camera 1", "crane-up", 60, 150, intensity=2.0)
-
-    Notes:
-        - Creates smooth motion by default
-        - Dolly moves camera along current aim direction
-        - Pan/tilt preserve camera position
-        - Crane moves only vertically
-        - Shake creates randomized keyframes every 3 frames
-        - All movements create proper keyframe animations
-        - Intensity scales movement amount (useful for subtle vs dramatic moves)
-        - Handheld shake uses random offsets for natural camera shake
     """
-    # Validate camera label
     if not camera_label:
         raise ToolError("camera_label is required")
-
-    # Validate movement type
-    valid_movements = [
-        "dolly-in", "dolly-out",
-        "pan-left", "pan-right",
-        "tilt-up", "tilt-down",
-        "crane-up", "crane-down",
-        "handheld-shake"
-    ]
-    if movement_type not in valid_movements:
+    if movement_type not in _CAMERA_MOVES:
         raise ToolError(
-            f"Invalid movement_type '{movement_type}'. "
-            f"Valid options: {', '.join(valid_movements)}"
+            f"Invalid movement_type '{movement_type}'. Valid options: {', '.join(_CAMERA_MOVES)}"
         )
-
-    # Validate frame range
     if start_frame < 0:
         raise ToolError("start_frame must be >= 0")
     if end_frame <= start_frame:
         raise ToolError(f"end_frame ({end_frame}) must be > start_frame ({start_frame})")
     if end_frame - start_frame > 10000:
         raise ToolError("Frame range too large (max 10000 frames)")
-
-    # Validate intensity
     if intensity < 0 or intensity > 10:
         raise ToolError("intensity must be between 0 and 10")
+    kind, base = _CAMERA_MOVES[movement_type]
+    amount = base * intensity
 
-    return await _execute_by_id("vangard-animate-camera-movement", {
-        "cameraLabel": camera_label,
-        "movementType": movement_type,
-        "startFrame": start_frame,
-        "endFrame": end_frame,
-        "intensity": intensity,
-    })
+    def _run() -> dict[str, Any]:
+        scene = get_scene()
+        cam = _shots.camera(scene, camera_label)
+        position, rotation = _shots.camera_pose(cam)
+        shot = sl.camera_move(kind, position, rotation, start=start_frame, end=end_frame,
+                              amount=amount, lens=Lens(focal_length=cam.focal_length or 50.0))
+        apply_shot(scene, shot, camera=cam, clear_keys=False)
+        keys = shot.movement.keyframes
+        unit = " deg" if kind.startswith(("pan", "tilt")) else "cm"
+        what = "amplitude " if kind == "handheld" else ""
+        return {
+            "camera": camera_label,
+            "movementType": movement_type,
+            "keyframesSet": len(keys),
+            "frameRange": {"start": start_frame, "end": end_frame},
+            "description": f"{movement_type.replace('-', ' ').capitalize()} ({what}{amount:.0f}{unit})",
+            "intensity": intensity,
+            "endPosition": _shots.vec(keys[-1].position),
+        }
+
+    return await _shots.run(_run)
 
 
 @mcp.tool()
@@ -1020,98 +1005,70 @@ async def daz_choreograph_action(
 async def daz_setup_shot_coverage(
     subject_label: str,
     coverage_type: str = "standard",
-    camera_height: float = 160.0,
+    camera_height: float | None = None,
     auto_aim: bool = True,
 ) -> dict[str, Any]:
     """Create multiple camera angles for cinematic coverage of a subject.
 
-    Automatically positions multiple cameras for professional shot coverage (master,
-    medium, closeup, etc.) based on cinematic conventions. All cameras aim at the
-    subject and use appropriate focal lengths for each shot type.
+    Builds the coverage with ``dazpy.shot_library.subject_coverage``: each
+    camera frames the subject at its shot size, fitted to its lens, from the
+    front (Genesis figures face +Z). Cameras are labelled with their shot ids.
 
     Args:
         subject_label: Label of subject node (character, prop, etc.)
         coverage_type: Type of coverage to set up:
-            - "standard": Master (wide), Medium, Closeup (3 cameras)
-            - "interview": Two-shot + two singles at angles (3 cameras)
-            - "dramatic": Master, Low Angle, High Angle, Profile (4 cameras)
-            - "action": Wide, Medium, Tracking, Hero Low (4 cameras)
-        camera_height: Height of cameras in cm (default: 160 = eye level)
-        auto_aim: Automatically point cameras at subject (default: True)
+            - "standard": Wide (35mm), Medium (50mm), Close-up (85mm)
+            - "interview": Medium (50mm) + medium close-ups at -30 / +30 deg (85mm)
+            - "dramatic": Wide, Low-angle medium, High-angle medium, Profile MCU
+            - "action": Wide (28mm), Medium, Three-quarter medium-wide, Hero low
+        camera_height: Optional aim height in cm above the subject's base for
+            every shot. Default: each shot size's own aim height (eyes for a
+            close-up, chest for a medium, mid-body for a wide).
+        auto_aim: Kept for compatibility; cameras are always aimed at the subject.
 
     Returns:
         Dict with:
-        - coverageType: Type of coverage used
-        - subject: Subject label
-        - subjectPosition: {x, y, z} position of subject
-        - cameras: List of dicts with name, label, position, focalLength, distance, angle
-        - cameraCount: Number of cameras created
-        - suggestions: List of recommended next steps
+        - coverageType, subject, subjectPosition
+        - cameras: list of {name, label, shotId, position, focalLength, size}
+        - cameraCount
+        - suggestions: recommended next steps
 
     Example:
-        # Standard 3-camera coverage for dialogue scene
-        result = daz_setup_shot_coverage(
-            "Alice",
-            coverage_type="standard",
-            camera_height=165,
-            auto_aim=True
-        )
-        # Creates Master (35mm, 400cm), Medium (50mm, 200cm), Closeup (85mm, 100cm)
-
-        # Interview setup with two-shot + singles
-        result = daz_setup_shot_coverage(
-            "Interviewer",
-            coverage_type="interview",
-            camera_height=160
-        )
-        # Creates TwoShot (50mm), SingleA (85mm, -30°), SingleB (85mm, +30°)
-
-        # Dramatic multi-angle coverage
-        result = daz_setup_shot_coverage(
-            "Hero",
-            coverage_type="dramatic",
-            camera_height=170
-        )
-        # Creates Master, LowAngle (-80cm), HighAngle (+120cm), Profile (90°)
-
-        # Action scene with dynamic angles
-        result = daz_setup_shot_coverage(
-            "Stunt_Character",
-            coverage_type="action",
-            camera_height=150
-        )
-        # Creates WideAction (28mm), MediumAction, TrackingShot (-45°), HeroLow
-
-    Notes:
-        - All cameras automatically created and positioned
-        - Focal lengths chosen for each shot type (28-85mm range)
-        - Standard coverage: 3 cameras (most common setup)
-        - Interview: 3 cameras (two-shot + singles)
-        - Dramatic: 4 cameras (varied angles and heights)
-        - Action: 4 cameras (wide coverage + low angles)
-        - Cameras named by shot type (Master_Camera, Closeup_Camera, etc.)
-        - Switch active camera to render different angles
-        - Use with daz_animate_camera_movement for dynamic shots
-        - Combine with daz_render_animation to output multiple angles
+        daz_setup_shot_coverage("Alice", coverage_type="interview")
     """
-    # Validate coverage type
-    valid_types = ["standard", "interview", "dramatic", "action"]
+    del auto_aim  # always aimed
+    valid_types = list(sl.COVERAGE_PRESETS)
     if coverage_type not in valid_types:
         raise ToolError(
-            f"Invalid coverage_type '{coverage_type}'. "
-            f"Valid options: {', '.join(valid_types)}"
+            f"Invalid coverage_type '{coverage_type}'. Valid options: {', '.join(valid_types)}"
         )
-
-    # Validate camera height
-    if camera_height < 0 or camera_height > 500:
+    if camera_height is not None and (camera_height < 0 or camera_height > 500):
         raise ToolError("camera_height must be between 0 and 500 cm")
 
-    return await _execute_by_id("vangard-setup-shot-coverage", {
-        "subjectLabel": subject_label,
-        "coverageType": coverage_type,
-        "cameraHeight": camera_height,
-        "autoAim": auto_aim,
-    })
+    def _run() -> dict[str, Any]:
+        scene = get_scene()
+        subj = _shots.subject(scene, subject_label)
+        positions = {subject_label: subj.root}
+        shots = list(sl.subject_coverage(subject_label, preset=coverage_type).all_shots())
+        if camera_height is not None:
+            shots = [replace(s, camera=replace(s.camera, anchor_cm=camera_height)) for s in shots]
+        cams = sl.apply_coverage(scene, shots, subjects=positions)
+        cameras = [{"name": label, **_shots.shot_summary(s, label, positions)}
+                   for s, label in zip(shots, cams)]
+        return {
+            "coverageType": coverage_type,
+            "subject": subject_label,
+            "subjectPosition": _shots.vec(subj.root),
+            "cameras": cameras,
+            "cameraCount": len(cameras),
+            "suggestions": [
+                "Switch between cameras to render different angles",
+                "Use daz_animate_camera_movement for dynamic shots",
+                "Use daz_create_shot_sequence('shot-reverse-shot', ...) to cover a two-person scene",
+            ],
+        }
+
+    return await _shots.run(_run)
 
 
 @mcp.tool()
@@ -1672,60 +1629,36 @@ async def daz_set_focus_point(
 ) -> dict:
     """Set depth-of-field focus distance and aperture on a camera.
 
-    Either aims focus at a named scene node (auto-calculating distance) or sets
-    an explicit focal distance in centimetres. Optionally enables DOF rendering
-    and sets the F/Stop (aperture) for blur amount control.
+    Either focuses on a named scene node (distance measured from the camera)
+    or sets an explicit focal distance in centimetres. Optionally enables DOF
+    rendering and sets the F/Stop.
 
     Args:
         camera_label: Label of the camera node to configure (e.g. "Camera 1").
-        target_label: Scene node to focus on. Distance is auto-calculated from
-            the camera to the node. For figures, eye-level (+130 cm) is used as
-            the aim point. Mutually exclusive with focal_distance — if both are
-            given, target_label takes precedence.
+        target_label: Scene node to focus on: a figure's eyes, or another
+            node's bounding-box centre. Takes precedence over focal_distance.
         focal_distance: Explicit focus distance in centimetres from the camera.
             Required if target_label is not provided.
         f_stop: Lens aperture (F/Stop value). Controls depth-of-field blur:
-            - 1.4–2.8 → very shallow DOF (cinematic portrait blur)
-            - 4–5.6   → moderate blur (standard portrait)
-            - 8–11    → deep DOF (landscape / group shots)
-            - 16+     → near-infinite focus (everything sharp)
+            - 1.4-2.8 -> very shallow DOF (cinematic portrait blur)
+            - 4-5.6   -> moderate blur (standard portrait)
+            - 8-11    -> deep DOF (landscape / group shots)
             If None, F/Stop is left unchanged.
         enable_dof: Whether to enable depth-of-field rendering on the camera
             (default True). Set False to only update distance without enabling DOF.
 
     Returns:
         dict with keys: camera, target, focalDistance, fStop, dofEnabled,
-        propertiesSet (details of which properties were found and set),
-        dofPreview (estimated near/far blur boundaries), suggestions.
+        propertiesSet, dofPreview (near/far limits of sharpness in cm from
+        the thin-lens hyperfocal formula; far is null for infinity), suggestions.
 
     Examples:
-        # Focus on Genesis 9 (auto-distance), cinematic shallow DOF
-        result = daz_set_focus_point(
-            "Camera 1", target_label="Genesis 9", f_stop=1.8
-        )
-
-        # Manual distance — product shot with moderate blur
-        result = daz_set_focus_point(
-            "Camera 1", focal_distance=150, f_stop=4.0
-        )
-
-        # Portrait with narrow aperture (everything sharp)
-        result = daz_set_focus_point(
-            "Portrait Cam", target_label="Alice", f_stop=11.0
-        )
-
-        # Update distance only, keep existing F/Stop and DOF state
-        result = daz_set_focus_point(
-            "Camera 1", focal_distance=200, enable_dof=False
-        )
+        daz_set_focus_point("Camera 1", target_label="Genesis 9", f_stop=1.8)
+        daz_set_focus_point("Camera 1", focal_distance=150, f_stop=4.0)
 
     Notes:
-        - DAZ Studio uses multiple property name conventions across versions;
-          this tool tries "Focal Distance", "Focus Distance", "focalDistance"
-        - If a property is not found, a note is returned but no error is raised
         - DOF effect is only visible in Iray/3Delight renders, not the viewport
         - Use daz_animate_focus_pull to animate a rack focus between subjects
-        - Combine with daz_render or daz_render_animation to render with DOF
     """
     if target_label is None and focal_distance is None:
         raise ToolError("Either target_label or focal_distance must be provided")
@@ -1734,13 +1667,47 @@ async def daz_set_focus_point(
     if f_stop is not None and (f_stop < 0.7 or f_stop > 64):
         raise ToolError("f_stop must be between 0.7 and 64")
 
-    return await _execute_by_id("vangard-set-focus-point", {
-        "cameraLabel": camera_label,
-        "targetLabel": target_label,
-        "focalDistance": focal_distance,
-        "fStop": f_stop,
-        "enableDof": enable_dof,
-    })
+    def _run() -> dict[str, Any]:
+        scene = get_scene()
+        cam = _shots.camera(scene, camera_label)
+        distance = focal_distance
+        if target_label is not None:
+            cam_pos = Vec3.from_dict(cam.position)
+            point = _shots.subject(scene, target_label).focus_point
+            distance = round(max(1.0, cam_pos.distance(point)), 1)
+        props: dict[str, Any] = {}
+        if enable_dof:
+            cam.depth_of_field = True
+            props["dofEnabled"] = True
+        cam.focal_distance = distance
+        props["focalDistance"] = distance
+        if f_stop is not None:
+            cam.f_stop = f_stop
+            props["fStop"] = f_stop
+        aperture = f_stop if f_stop is not None else cam.f_stop
+        preview: dict[str, Any] = {"focalDistance": distance, "fStop": aperture,
+                                   "nearSharp": None, "farSharp": None}
+        if aperture:
+            near, far = sl.depth_of_field_limits(cam.focal_length or 50.0, aperture, distance)
+            preview.update(nearSharp=round(near, 1),
+                           farSharp=None if far is None else round(far, 1))
+        return {
+            "camera": camera_label,
+            "target": target_label,
+            "focalDistance": distance,
+            "fStop": f_stop,
+            "dofEnabled": enable_dof,
+            "propertiesSet": props,
+            "dofPreview": preview,
+            "suggestions": [
+                "Use daz_animate_focus_pull to rack focus between subjects",
+                "Lower F/Stop (e.g. 1.4) = shallower depth of field (more blur)",
+                "Higher F/Stop (e.g. 11) = deeper depth of field (more in focus)",
+                "Render with daz_render to see DOF effect",
+            ],
+        }
+
+    return await _shots.run(_run)
 
 
 @mcp.tool()
@@ -1758,70 +1725,39 @@ async def daz_animate_focus_pull(
 ) -> dict:
     """Animate a rack focus (focus pull) between two subjects or distances.
 
-    Creates keyframes on the camera's focal distance property to smoothly shift
-    focus from one point to another over a frame range. Supports optional hold
-    periods at the start and end, letting you hold sharp on subject A, pull to
-    subject B, and hold there.
+    Keys the camera's focal distance (``dazpy.shot_library.rack_focus``):
+    hold sharp on subject A, pull to subject B, hold there. A figure is
+    focused at its eyes, another node at its bounding-box centre, measured
+    from the camera's current position. Existing focal-distance keys outside
+    the pull are kept.
 
     Args:
         camera_label: Label of the camera node to animate (e.g. "Camera 1").
         from_target: Scene node label to focus at the start of the pull.
-            Distance is auto-calculated from camera to node.
         to_target: Scene node label to focus at the end of the pull.
-            Distance is auto-calculated from camera to node.
-        from_distance: Explicit start focal distance in cm. Used when
-            from_target is not provided.
-        to_distance: Explicit end focal distance in cm. Used when
-            to_target is not provided.
+        from_distance: Explicit start focal distance in cm (when no from_target).
+        to_distance: Explicit end focal distance in cm (when no to_target).
         start_frame: First frame of the animation range (default 0).
         end_frame: Last frame of the animation range (default 60 = 2 sec at 30fps).
-        hold_from_frames: Frames to hold focus on from-subject before pulling
-            (default 0). Hold period is at the start of the frame range.
-        hold_to_frames: Frames to hold focus on to-subject after the pull
-            (default 0). Hold period is at the end of the frame range.
-        f_stop: Set aperture at the start of the animation. Low values (1.4–2.8)
-            produce more pronounced blur separation during the pull.
+        hold_from_frames: Frames to hold on the from-subject before pulling (default 0).
+        hold_to_frames: Frames to hold on the to-subject after the pull (default 0).
+            Holds that leave no time to pull are dropped.
+        f_stop: Aperture to set. Low values (1.4-2.8) make the pull more visible.
 
     Returns:
         dict with keys: camera, fromTarget, fromDistance, toTarget, toDistance,
         fStop, focalDistanceProperty, startFrame, endFrame, pullStartFrame,
-        pullEndFrame, keyframes[], pullDurationFrames, pullDurationSeconds,
-        suggestions.
+        pullEndFrame, keyframes[], pullDurationFrames, pullDurationSeconds
+        (at 30 fps), suggestions.
 
     Examples:
-        # Classic 2-second rack focus: Alice → Bob
-        result = daz_animate_focus_pull(
-            camera_label="Camera 1",
-            from_target="Alice",
-            to_target="Bob",
-            start_frame=0, end_frame=59,
-            f_stop=2.0
-        )
-
-        # Hold on Alice for 1 sec, pull to Bob over 2 sec, hold 1 sec
-        result = daz_animate_focus_pull(
-            "Camera 1",
-            from_target="Alice", to_target="Bob",
-            start_frame=0, end_frame=119,
-            hold_from_frames=30, hold_to_frames=30,
-            f_stop=1.8
-        )
-
-        # Manual distances — product close-up pull
-        result = daz_animate_focus_pull(
-            "Macro Cam",
-            from_distance=40, to_distance=20,
-            start_frame=0, end_frame=45
-        )
+        daz_animate_focus_pull("Camera 1", from_target="Alice", to_target="Bob",
+                               start_frame=0, end_frame=119,
+                               hold_from_frames=30, hold_to_frames=30, f_stop=1.8)
 
     Notes:
-        - Requires DOF to be enabled on the camera (use daz_set_focus_point first,
-          or this tool will attempt to enable it automatically)
-        - Camera must have a "Focal Distance" property — enable DOF in DAZ Studio
-          camera parameters before calling if the tool reports property not found
-        - Frame layout: [start] --hold-from-- [pull-start] → [pull-end] --hold-to-- [end]
-        - Use low F/Stop (1.4–2.8) to maximise the visual impact of the focus pull
-        - Combine with daz_render_animation to export the animated sequence
+        - DOF is enabled on the camera automatically
+        - Frame layout: [start] --hold-from-- [pull-start] -> [pull-end] --hold-to-- [end]
     """
     if from_target is None and from_distance is None:
         raise ToolError("Either from_target or from_distance must be provided")
@@ -1831,25 +1767,56 @@ async def daz_animate_focus_pull(
         raise ToolError("start_frame must be >= 0 and end_frame must be > start_frame")
     if hold_from_frames < 0 or hold_to_frames < 0:
         raise ToolError("hold_from_frames and hold_to_frames must be >= 0")
-    if from_distance is not None and from_distance <= 0:
-        raise ToolError("from_distance must be greater than 0")
-    if to_distance is not None and to_distance <= 0:
-        raise ToolError("to_distance must be greater than 0")
     if f_stop is not None and (f_stop < 0.7 or f_stop > 64):
         raise ToolError("f_stop must be between 0.7 and 64")
+    for name, value in (("from_distance", from_distance), ("to_distance", to_distance)):
+        if value is not None and value <= 0:
+            raise ToolError(f"{name} must be greater than 0")
+    pull_start, pull_end = start_frame + hold_from_frames, end_frame - hold_to_frames
+    if pull_start >= pull_end:  # same rule as rack_focus: holds that leave no pull are dropped
+        pull_start, pull_end = start_frame, end_frame
 
-    return await _execute_by_id("vangard-animate-focus-pull", {
-        "cameraLabel": camera_label,
-        "fromTarget": from_target,
-        "toTarget": to_target,
-        "fromDistance": from_distance,
-        "toDistance": to_distance,
-        "startFrame": start_frame,
-        "endFrame": end_frame,
-        "holdFromFrames": hold_from_frames,
-        "holdToFrames": hold_to_frames,
-        "fStop": f_stop,
-    })
+    def _run() -> dict[str, Any]:
+        scene = get_scene()
+        cam = _shots.camera(scene, camera_label)
+        cam_pos = Vec3.from_dict(cam.position)
+        frm = _shots.subject(scene, from_target).focus_point if from_target else from_distance
+        to = _shots.subject(scene, to_target).focus_point if to_target else to_distance
+        pull = sl.rack_focus(cam_pos, frm, to, start=start_frame, end=end_frame,
+                             hold_from=hold_from_frames, hold_to=hold_to_frames)
+        cam.depth_of_field = True
+        for k in pull.keys:
+            cam.set_focal_distance_at_frame(k.frame, k.focal_distance)
+        if f_stop is not None:
+            cam.f_stop = f_stop
+        # Later entries win: without holds the start/end keys are the pull's own.
+        phase = {start_frame: "hold-from", end_frame: "hold-to",
+                 pull_start: "pull-start", pull_end: "pull-end"}
+        return {
+            "camera": camera_label,
+            "fromTarget": from_target,
+            "fromDistance": round(pull.keys[0].focal_distance, 1),
+            "toTarget": to_target,
+            "toDistance": round(pull.keys[-1].focal_distance, 1),
+            "fStop": f_stop,
+            "focalDistanceProperty": "Focal Distance",
+            "startFrame": start_frame,
+            "endFrame": end_frame,
+            "pullStartFrame": pull_start,
+            "pullEndFrame": pull_end,
+            "keyframes": [{"frame": k.frame, "focalDistance": round(k.focal_distance, 1),
+                           "phase": phase[k.frame]} for k in pull.keys],
+            "pullDurationFrames": pull_end - pull_start,
+            "pullDurationSeconds": round((pull_end - pull_start) / 30, 1),
+            "suggestions": [
+                "Render with daz_render_animation to see the focus pull in motion",
+                "Adjust hold_from_frames / hold_to_frames to pause before and after the pull",
+                "Combine with daz_animate_camera_movement for a dolly + focus pull",
+                "Use F/Stop 1.4-2.8 for shallow DOF, 8-16 for deep DOF",
+            ],
+        }
+
+    return await _shots.run(_run)
 
 
 # ---------------------------------------------------------------------------
