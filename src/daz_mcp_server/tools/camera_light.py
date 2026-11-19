@@ -349,14 +349,6 @@ _CAMERA_ANGLES: dict[str, tuple[float, float, str]] = {
 }
 
 
-def _orbit_pose(target: Vec3, azimuth: float, elevation: float, distance: float,
-                focal_length: float) -> Vec3:
-    """Camera position *distance* from *target* at the given angles (dazpy framing math)."""
-    framing = Framing(subjects=(target,), azimuth_deg=azimuth, elevation_deg=elevation,
-                      distance_cm=distance)
-    return framing_transform([(target, False)], framing, focal_length)[0]
-
-
 @mcp.tool()
 async def daz_apply_composition_rule(
     camera_label: str,
@@ -394,7 +386,7 @@ async def daz_apply_composition_rule(
         lens = Lens(focal_length=cam.focal_length or 50.0)
         target = subj.focus_point
         azimuth, distance = _shots.horizontal_view(Vec3.from_dict(cam.position), target)
-        position = _orbit_pose(target, azimuth, elevation, distance, lens.focal_length)
+        position = _shots.orbit_position(target, azimuth, elevation, distance, lens.focal_length)
         aim = sl.compose_aim(position, target, screen_x, lens.focal_length)
         shot = Shot(id=sl.shot_name("medium", subject_label, tag=rule), lens=lens,
                     camera=Placement(position=position, look_at=aim))
@@ -506,7 +498,8 @@ async def daz_apply_camera_angle(
             line = sl.LineOfAction(subject_label, view, subj.root, ahead)
             shot = sl.over_the_shoulder(line, subject_label, view, lens=lens)
         else:
-            position = _orbit_pose(target, azimuth, elevation, distance, lens.focal_length)
+            position = _shots.orbit_position(target, azimuth, elevation, distance,
+                                             lens.focal_length)
             if roll:
                 placement = Placement(position=position,
                                       rotation=sl.look_rotation(position, target, roll))

@@ -28,6 +28,29 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
     formula (`nearSharp` / `farSharp`).
   - `daz_setup_shot_coverage(camera_height=...)` is now optional: the aim
     height for every shot; by default each size uses its own.
+- `daz_plan_shot`, `daz_create_storyboard`, `daz_create_camera_rig` and
+  `daz_create_camera_path` are built on `dazpy.shot_library` too, and their
+  four DazScript programs are removed. `daz_create_scene` keeps its script
+  for lights and blocking but builds its cameras with dazpy. Behaviour
+  changes:
+  - `daz_plan_shot` returns the planned `shot` (`Shot.to_dict()`); its camera
+    stands on the subject's front (it used to be behind it), fits the shot
+    type's lens, and two-shot / over-shoulder pair with the nearest figure.
+  - `daz_create_storyboard` cameras face the subject's front (`angle` 0 =
+    `+Z`), a reused camera is re-aimed, `partnerLabel` picks the second
+    figure for two-shot / over-shoulder, snake_case shot keys are accepted,
+    and the result adds `sequence` (`Sequence.to_dict()`) and `cameras`.
+    A missing `subjectLabel` is an error instead of framing the origin.
+  - `daz_create_camera_rig` aims every camera exactly at the centre and reuses
+    the rig and its cameras when run again with the same `rig_name`.
+  - `daz_create_camera_path` with `aim_at_target` aims at the target on every
+    waypoint (it used to aim once); it clears the camera's existing position
+    keys first and rejects duplicate waypoint frames. `easing` is still not
+    applied (Studio's default interpolation).
+  - `daz_create_scene` cameras are labelled with shot ids, conversation
+    cameras keep the 180-degree rule (`continuity` in the result), and no
+    cameras are made without a character. Dining characters now face each
+    other (they faced away) and "dining" is recognised as a keyword.
 
 ## [0.8.0] - 2026-11-16
 

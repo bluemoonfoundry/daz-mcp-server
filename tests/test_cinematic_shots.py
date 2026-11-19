@@ -42,7 +42,7 @@ class FakeCamera:
     def __getattr__(self, name):
         if name.startswith("_"):
             raise AttributeError(name)
-        return lambda *a: self.calls.append((name,) + a)
+        return lambda *a, **kw: self.calls.append((name,) + a + ((kw,) if kw else ()))
 
     def call(self, name):
         return [c for c in self.calls if c[0] == name]
@@ -80,6 +80,23 @@ class FakeScene:
 
     def set_anim_range(self, *a):
         pass
+
+    def overview(self):
+        return {"figures": [{"name": k, "label": k} for k, n in self.nodes.items() if n.figure],
+                "cameras": [{"name": k, "label": k} for k in self.cameras], "lights": []}
+
+    @property
+    def _client(self):
+        return FakeClient(self)
+
+
+class FakeClient:
+    def __init__(self, scene):
+        self.scene = scene
+
+    def execute(self, script):
+        self.scene.scripts = getattr(self.scene, "scripts", []) + [script]
+        return type("R", (), {"value": "Rig_Rig"})()
 
 
 @pytest.fixture
@@ -228,3 +245,100 @@ async def test_focus_pull_keys_and_phases(scene):
 async def test_errors_are_tool_errors(scene, call):
     with pytest.raises(ToolError):
         await call()
+
+
+# ---- m0n3: plan_shot / storyboard / camera rig / camera path / create_scene ----
+
+async def test_plan_shot_is_read_only_and_returns_a_shot(scene):
+    out = await cinematic.daz_plan_shot("close-up", "Alice", "Camera 1", mood="dramatic",
+                                        composition_rule="center-frame")
+    assert scene.created == [] and not scene.cameras["Camera 1"].calls  # nothing applied
+    cam = out["recommendations"]["camera"]
+    assert cam["focalLength"] == 85.0 and cam["position"]["z"] > 0  # in front of Alice
+    assert cam["distanceFromSubject"] == pytest.approx(framing_distance("close_up", 85.0), abs=0.1)
+    assert out["shot"]["id"] == "CU_Alice" and out["shot"]["camera"]["size"] == "close_up"
+    assert out["recommendations"]["lighting"]["preset"] == "rembrandt"
+    assert {f["label"] for f in out["sceneState"]["figures"]} == {"Alice", "Bob"}
+    assert out["recommendations"]["toolSequence"][0] == 'daz_frame_shot("Camera 1", "Alice", "close-up")'
+
+
+async def test_plan_shot_pairs_with_nearest_figure(scene):
+    ots = await cinematic.daz_plan_shot("over-shoulder", "Alice")
+    assert ots["shot"]["id"] == "OTS_Alice_over_Bob"
+    assert ots["recommendations"]["camera"]["position"]["z"] < -120  # behind Bob, looking at Alice
+    golden = await cinematic.daz_plan_shot("medium-shot", "Alice", composition_rule="golden-ratio")
+    assert golden["shot"]["camera"]["kind"] == "placement"
+    thirds = await cinematic.daz_plan_shot("wide-shot")
+    assert thirds["subject"] is None and thirds["shot"]["camera"]["composition"] == "right_third"
+
+
+async def test_storyboard_applies_shots_with_frame_ranges(scene):
+    out = await cinematic.daz_create_storyboard("Cafe", [
+        {"label": "Est", "shotType": "wide-shot", "subjectLabel": "Alice", "durationFrames": 60},
+        {"shot_type": "close-up", "subject": "Alice", "angle": 90, "dialogue": "Hi."},
+        {"shotType": "over-shoulder", "subjectLabel": "Bob", "camera": "Camera 1"},
+        {"shotType": "two-shot", "subjectLabel": "Alice"},
+    ], frames_per_shot=30)
+    assert out["shots"][3]["shotId"] == "004_2S_Alice-Bob"
+    assert [(s["startFrame"], s["endFrame"]) for s in out["shots"]] == [(0, 59), (60, 89), (90, 119),
+                                                                        (120, 149)]
+    assert out["cameras"] == ["Cafe_Cam1", "Cafe_Cam2", "Camera 1", "Cafe_Cam4"]
+    assert [s["cameraCreated"] for s in out["shots"]] == [True, True, False, True]
+    assert [n for n, _ in scene.created] == ["Cafe_Cam1", "Cafe_Cam2", "Cafe_Cam4"]
+    cu = pos_of(scene.created[1][1])
+    assert cu.x > 0 and abs(cu.z) < 1e-6  # angle 90 = the subject's +X side
+    assert out["shots"][2]["shotId"] == "003_OTS_Bob_over_Alice"
+    seq = out["sequence"]["shots"]
+    assert seq[1]["storyboard"]["dialogue"] == "Hi." and seq[0]["frame_range"] == [0, 59]
+    plan_only = await cinematic.daz_create_storyboard("P", [{"shotType": "medium-shot"}],
+                                                      save_presets=False)
+    assert plan_only["cameras"] == [] and len(scene.created) == 3
+
+
+async def test_camera_rig_aims_every_camera_at_centre(scene):
+    out = await cinematic.daz_create_camera_rig("Rig", {"x": 0, "y": 100, "z": 0}, camera_count=4,
+                                                radius=200, height_variation=0, focal_lengths=[35])
+    assert [c["label"] for c in out["cameras"]] == ["Rig_Cam1", "Rig_Cam2", "Rig_Cam3", "Rig_Cam4"]
+    assert [c["focalLength"] for c in out["cameras"]] == [35.0, 50.0, 50.0, 50.0]
+    for (_, cam), angle in zip(scene.created, (0, 90, 180, 270)):
+        p = pos_of(cam)
+        assert aim_of(cam) == Vec3(0, 100, 0)
+        assert p.distance(Vec3(0, 100, 0)) == pytest.approx(200)
+        assert math.degrees(math.atan2(p.x, p.z)) % 360 == pytest.approx(angle % 360, abs=1e-6)
+        assert cam.call("reparent")
+    assert "DzGroupNode" in scene.scripts[0]
+
+
+async def test_camera_path_keys_waypoints_and_tracks_target(scene):
+    cam = scene.cameras["Camera 1"]
+    out = await cinematic.daz_create_camera_path("Camera 1", [
+        {"position": {"x": 100, "y": 160, "z": 300}, "frame": 60},
+        {"position": {"x": 0, "y": 160, "z": 400}, "frame": 0},
+    ], aim_at_target="Alice")
+    assert [k[1:] for k in cam.call("set_position_at_frame")] == [(0, 0.0, 160.0, 400.0),
+                                                                  (60, 100.0, 160.0, 300.0)]
+    assert len(cam.call("set_rotation_at_frame")) == 2 and cam.call("clear_rotation_keys")
+    assert out["frameRange"] == {"start": 0, "end": 60} and out["keyframesSet"] == 12
+    assert out["aimPoint"]["y"] == sl.EYE_HEIGHT_CM
+    with pytest.raises(ToolError):
+        await cinematic.daz_create_camera_path("Camera 1", [
+            {"position": {"x": 0, "y": 0, "z": 0}, "frame": 5},
+            {"position": {"x": 1, "y": 0, "z": 0}, "frame": 5}])
+
+
+@pytest.mark.parametrize("scene_type,ids", [
+    ("conversation", ["OTS_Bob_over_Alice", "OTS_Alice_over_Bob"]),
+    ("dining", ["MST_Alice-Bob", "OTS_Bob_over_Alice"]),
+    ("interview", ["MST_Alice-Bob", "MS_Alice"]),
+])
+async def test_create_scene_builds_cameras_with_dazpy(scene, monkeypatch, scene_type, ids):
+    async def fake_exec(script_id, args):
+        assert script_id == "vangard-create-scene"
+        return {"sceneType": scene_type, "actions": [], "suggestions": []}
+    monkeypatch.setattr(cinematic, "_execute_by_id", fake_exec)
+    out = await cinematic.daz_create_scene("a scene", ["Alice", "Bob", "Ghost"])
+    assert [c["label"] for c in out["cameras"]] == ids
+    assert out["continuity"] == []
+    assert [n for n, _ in scene.created] == ids
+    none = await cinematic.daz_create_scene("portrait", ["Ghost"])
+    assert none["cameras"] == [] and "Ghost" in none["suggestions"][-1]

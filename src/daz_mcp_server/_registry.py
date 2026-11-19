@@ -3038,7 +3038,7 @@ _ANIMATE_CONVERSATION_SCRIPT = """\
 # args: {description, characters: []}
 # description: Natural language scene description
 # characters: List of character labels already in scene
-# Returns: {sceneType, actions: [], cameras: [], suggestions: []}
+# Returns: {sceneType, actions: [], suggestions: []} (cameras are built in Python by dazpy)
 # Generate a complete scene from natural language description
 _CREATE_SCENE_SCRIPT = """\
 (function(){
@@ -3047,24 +3047,8 @@ _CREATE_SCENE_SCRIPT = """\
     var characters = args.characters || [];
 
     var actions = [];
-    var cameras = [];
     var suggestions = [];
     var sceneType = "generic";
-
-    // Helper: Create camera
-    function createCamera(label, x, y, z, aimX, aimY, aimZ) {
-        var cam = new DzBasicCamera();
-        cam.setLabel(label);
-        Scene.addNode(cam);
-        var xp = cam.findProperty("XTranslate");
-        var yp = cam.findProperty("YTranslate");
-        var zp = cam.findProperty("ZTranslate");
-        if (xp) xp.setValue(x);
-        if (yp) yp.setValue(y);
-        if (zp) zp.setValue(z);
-        cam.aimAt(new DzVec3(aimX, aimY, aimZ));
-        return cam;
-    }
 
     // Helper: Create spot light
     function createSpotLight(label, x, y, z, flux, aimX, aimY, aimZ) {
@@ -3109,7 +3093,7 @@ _CREATE_SCENE_SCRIPT = """\
     }
 
     // Scene type detection and setup
-    if (description.indexOf("dinner") !== -1 || description.indexOf("meal") !== -1 || description.indexOf("eat") !== -1) {
+    if (description.indexOf("dinner") !== -1 || description.indexOf("dining") !== -1 || description.indexOf("meal") !== -1 || description.indexOf("eat") !== -1) {
         sceneType = "dining";
         actions.push("Scene type: Dining/meal scene");
 
@@ -3124,8 +3108,8 @@ _CREATE_SCENE_SCRIPT = """\
                 var c2rot = char2.findProperty("YRotate");
                 if (c1pos) c1pos.setValue(-60);
                 if (c2pos) c2pos.setValue(60);
-                if (c1rot) c1rot.setValue(180);
-                if (c2rot) c2rot.setValue(0);
+                if (c1rot) c1rot.setValue(0);
+                if (c2rot) c2rot.setValue(180);
                 actions.push("Positioned characters facing each other across table distance");
             }
         }
@@ -3142,15 +3126,6 @@ _CREATE_SCENE_SCRIPT = """\
         }
 
         setSceneOnlyLighting();
-
-        // Cameras
-        var cam1 = createCamera("Wide Shot", 0, eyeHeight, 250, 0, eyeHeight, 0);
-        cameras.push({label: "Wide Shot", type: "wide", purpose: "Establishing shot of dining scene"});
-
-        if (characters.length >= 2) {
-            var cam2 = createCamera("Over Shoulder 1", -50, eyeHeight - 10, -60, 50, eyeHeight, 60);
-            cameras.push({label: "Over Shoulder 1", type: "over-shoulder", purpose: "Conversation angle"});
-        }
 
         suggestions.push("Add table prop for dining scene");
         suggestions.push("Add plates, glasses, or food props for realism");
@@ -3188,15 +3163,6 @@ _CREATE_SCENE_SCRIPT = """\
         actions.push("Applied professional three-point lighting");
         setSceneOnlyLighting();
 
-        // Cameras
-        var cam1 = createCamera("Wide Shot", 0, eyeHeight + 10, 300, 0, eyeHeight, 0);
-        cameras.push({label: "Wide Shot", type: "wide", purpose: "Establishing interview setup"});
-
-        if (characters.length >= 1) {
-            var cam2 = createCamera("Medium Shot", subjectCenter.x, eyeHeight, subjectCenter.z + 140, subjectCenter.x, eyeHeight, subjectCenter.z);
-            cameras.push({label: "Medium Shot", type: "medium", purpose: "Professional medium shot"});
-        }
-
         suggestions.push("Add desk or table prop between characters");
         suggestions.push("Add chairs for seated interview");
         suggestions.push("Consider office props (laptop, papers) for context");
@@ -3215,17 +3181,6 @@ _CREATE_SCENE_SCRIPT = """\
                            subjectCenter.x, eyeHeight, subjectCenter.z);
             actions.push("Applied classic three-point portrait lighting");
             setSceneOnlyLighting();
-        }
-
-        // Cameras
-        if (subject) {
-            var cam1 = createCamera("Close-up", subjectCenter.x, eyeHeight, subjectCenter.z + 50,
-                                   subjectCenter.x, eyeHeight, subjectCenter.z);
-            cameras.push({label: "Close-up", type: "close-up", purpose: "Face portrait"});
-
-            var cam2 = createCamera("Medium Close-up", subjectCenter.x + 30, eyeHeight, subjectCenter.z + 90,
-                                   subjectCenter.x, eyeHeight, subjectCenter.z);
-            cameras.push({label: "Medium Close-up", type: "medium-close-up", purpose: "Head and shoulders"});
         }
 
         suggestions.push("Adjust character facial expression for portrait mood");
@@ -3263,15 +3218,6 @@ _CREATE_SCENE_SCRIPT = """\
         actions.push("Applied natural conversation lighting");
         setSceneOnlyLighting();
 
-        // Cameras for shot-reverse-shot
-        if (characters.length >= 2) {
-            var cam1 = createCamera("Over Shoulder 1", -40, eyeHeight - 10, -70, 50, eyeHeight, 0);
-            cameras.push({label: "Over Shoulder 1", type: "over-shoulder", purpose: "Conversation angle 1"});
-
-            var cam2 = createCamera("Over Shoulder 2", 40, eyeHeight - 10, 70, -50, eyeHeight, 0);
-            cameras.push({label: "Over Shoulder 2", type: "over-shoulder", purpose: "Conversation angle 2"});
-        }
-
         suggestions.push("Use shot-reverse-shot camera technique for conversation");
         suggestions.push("Apply emotions and look-at for animated dialogue");
         suggestions.push("Consider adding environment props for context");
@@ -3293,17 +3239,6 @@ _CREATE_SCENE_SCRIPT = """\
             setSceneOnlyLighting();
         }
 
-        // Basic cameras
-        if (subject) {
-            var cam1 = createCamera("Wide Shot", subjectCenter.x, eyeHeight, subjectCenter.z + 400,
-                                   subjectCenter.x, eyeHeight, subjectCenter.z);
-            cameras.push({label: "Wide Shot", type: "wide", purpose: "Establishing shot"});
-
-            var cam2 = createCamera("Medium Shot", subjectCenter.x, eyeHeight, subjectCenter.z + 140,
-                                   subjectCenter.x, eyeHeight, subjectCenter.z);
-            cameras.push({label: "Medium Shot", type: "medium", purpose: "Medium framing"});
-        }
-
         suggestions.push("Provide more specific scene description for tailored setup");
         suggestions.push("Keywords: dinner, interview, portrait, conversation");
         suggestions.push("Add props and environment elements as needed");
@@ -3319,88 +3254,7 @@ _CREATE_SCENE_SCRIPT = """\
         description: args.description,
         charactersUsed: characters.length,
         actions: actions,
-        cameras: cameras,
         suggestions: suggestions
-    };
-})()
-"""
-
-# args: {cameraLabel, waypoints: [{position: {x, y, z}, frame: int}], easing, aimAtTarget?}
-# easing: "linear", "smooth", "ease-in", "ease-out"
-# Returns: {camera, waypoints: int, easing, frameRange}
-# Create smooth camera path through multiple waypoints
-_CREATE_CAMERA_PATH_SCRIPT = """\
-(function(){
-    var args = getArguments()[0] || {};
-    var cameraLabel = args.cameraLabel;
-    var waypoints = args.waypoints || [];
-    var easing = args.easing || "smooth";
-    var aimAtTarget = args.aimAtTarget;
-
-    // Find camera
-    var camera = Scene.findNodeByLabel(cameraLabel);
-    if (!camera) camera = Scene.findNode(cameraLabel);
-    if (!camera) throw new Error("Camera not found: " + cameraLabel);
-    if (!camera.inherits("DzCamera")) throw new Error("Node is not a camera: " + cameraLabel);
-
-    if (waypoints.length < 2) {
-        throw new Error("At least 2 waypoints required");
-    }
-
-    // Helper: Set keyframe
-    function setKeyframe(node, propName, frame, value) {
-        var prop = node.findProperty(propName);
-        if (!prop) return false;
-        prop.setValue(frame, value);
-        return true;
-    }
-
-    // Sort waypoints by frame
-    waypoints.sort(function(a, b) { return a.frame - b.frame; });
-
-    // Set keyframes at each waypoint
-    var keyframesSet = 0;
-    for (var i = 0; i < waypoints.length; i++) {
-        var wp = waypoints[i];
-        var pos = wp.position;
-        var frame = wp.frame;
-
-        if (!pos || pos.x === undefined || pos.y === undefined || pos.z === undefined) {
-            throw new Error("Waypoint " + i + " missing position (x, y, z)");
-        }
-        if (frame === undefined) {
-            throw new Error("Waypoint " + i + " missing frame");
-        }
-
-        setKeyframe(camera, "XTranslate", frame, pos.x);
-        setKeyframe(camera, "YTranslate", frame, pos.y);
-        setKeyframe(camera, "ZTranslate", frame, pos.z);
-        keyframesSet += 3;
-    }
-
-    // Optionally animate aim-at target
-    var targetNode = null;
-    if (aimAtTarget) {
-        targetNode = Scene.findNodeByLabel(aimAtTarget);
-        if (!targetNode) targetNode = Scene.findNode(aimAtTarget);
-        if (targetNode) {
-            var targetPos = targetNode.getWSPos();
-            // For simplicity, just aim at start and end
-            // Full implementation would animate pointing at target throughout
-            camera.aimAt(new DzVec3(targetPos.x, targetPos.y, targetPos.z));
-        }
-    }
-
-    var startFrame = waypoints[0].frame;
-    var endFrame = waypoints[waypoints.length - 1].frame;
-
-    return {
-        camera: camera.getLabel(),
-        waypointCount: waypoints.length,
-        easing: easing,
-        keyframesSet: keyframesSet,
-        frameRange: {start: startFrame, end: endFrame},
-        aimAtTarget: targetNode ? targetNode.getLabel() : null
     };
 })()
 """
@@ -3804,111 +3658,6 @@ _CHOREOGRAPH_ACTION_SCRIPT = """\
 """
 
 # ---------------------------------------------------------------------------
-# Phase 4.7: Cinematic Coverage Tools
-# ---------------------------------------------------------------------------
-
-_CREATE_CAMERA_RIG_SCRIPT = """\
-(function(){
-    var args = getArguments()[0] || {};
-    var rigName = args.rigName || "CameraRig";
-    var centerPosition = args.centerPosition || {x: 0, y: 150, z: 0};
-    var cameraCount = args.cameraCount || 3;
-    var radius = args.radius || 250;
-    var heightVariation = args.heightVariation || 40;
-    var focalLengths = args.focalLengths || [35, 50, 85];
-
-    if (cameraCount < 2 || cameraCount > 8) {
-        throw new Error("cameraCount must be between 2 and 8");
-    }
-
-    if (focalLengths.length < cameraCount) {
-        // Extend focal lengths array to match camera count
-        while (focalLengths.length < cameraCount) {
-            focalLengths.push(50); // Default to 50mm
-        }
-    }
-
-    var cameras = [];
-    var angleStep = 360 / cameraCount;
-
-    // Create parent null for rig (DzGroupNode is the standard empty group)
-    var rigParent = new DzGroupNode();
-    rigParent.setLabel(rigName + "_Rig");
-    Scene.addNode(rigParent);
-
-    var rigX = rigParent.findProperty("XTranslate");
-    var rigY = rigParent.findProperty("YTranslate");
-    var rigZ = rigParent.findProperty("ZTranslate");
-
-    if (rigX) rigX.setValue(centerPosition.x);
-    if (rigY) rigY.setValue(centerPosition.y);
-    if (rigZ) rigZ.setValue(centerPosition.z);
-
-    // Create cameras in circle around center
-    for (var i = 0; i < cameraCount; i++) {
-        var angle = i * angleStep;
-        var angleRad = angle * (Math.PI / 180);
-
-        var cam = new DzBasicCamera();
-        cam.setLabel(rigName + "_Cam" + (i + 1));
-        Scene.addNode(cam);
-
-        // Position relative to center
-        var offsetX = radius * Math.sin(angleRad);
-        var offsetZ = radius * Math.cos(angleRad);
-        var offsetY = (Math.sin(i * 0.7) * heightVariation);
-
-        var camX = cam.findProperty("XTranslate");
-        var camY = cam.findProperty("YTranslate");
-        var camZ = cam.findProperty("ZTranslate");
-
-        if (camX) camX.setValue(offsetX);
-        if (camY) camY.setValue(offsetY);
-        if (camZ) camZ.setValue(offsetZ);
-
-        // Set focal length
-        var focalProp = cam.getFocalLengthControl();
-        if (focalProp) focalProp.setValue(focalLengths[i]);
-
-        // Point camera at center
-        var yRot = cam.findProperty("YRotate");
-        if (yRot) yRot.setValue(angle + 180);
-
-        var xRot = cam.findProperty("XRotate");
-        if (xRot) {
-            var tiltAngle = Math.atan2(-offsetY, radius) * (180 / Math.PI);
-            xRot.setValue(tiltAngle);
-        }
-
-        // Parent to rig
-        rigParent.addNodeChild(cam, false);
-
-        cameras.push({
-            name: cam.getLabel(),
-            angle: angle,
-            focalLength: focalLengths[i],
-            heightOffset: offsetY
-        });
-    }
-
-    return {
-        rigName: rigName,
-        rigLabel: rigParent.getLabel(),
-        centerPosition: centerPosition,
-        radius: radius,
-        cameraCount: cameraCount,
-        cameras: cameras,
-        suggestions: [
-            "Rotate rig parent node (YRotate) to orbit all cameras around subject",
-            "Animate rig position to move entire camera array",
-            "Switch between cameras for bullet-time effect",
-            "Adjust individual camera focal lengths for variety"
-        ]
-    };
-})()
-"""
-
-# ---------------------------------------------------------------------------
 # Phase 4.8: Lighting Animation scripts
 # ---------------------------------------------------------------------------
 
@@ -4280,323 +4029,6 @@ _CREATE_LIGHT_SEQUENCE_SCRIPT = """\
             "Position lights in scene before rendering",
             "Use daz_render_animation to render the full sequence",
             "Adjust Flux values with daz_set_keyframe to fine-tune timing"
-        ]
-    };
-})()
-"""
-
-# ---------------------------------------------------------------------------
-# Phase 4.9: Shot Planning scripts
-# ---------------------------------------------------------------------------
-
-_PLAN_SHOT_SCRIPT = """\
-(function(){
-    var args = getArguments()[0] || {};
-    var shotType = args.shotType || "medium-shot";
-    var subjectLabel = args.subjectLabel || null;
-    var cameraLabel = args.cameraLabel || null;
-    var mood = args.mood || "neutral";
-
-    // Shot type → distance, focal length, vertical angle
-    var shotDefs = {
-        "extreme-close-up": {distance: 25,  focalLength: 85,  vertAngle: 0,   description: "Eyes and mouth only"},
-        "close-up":         {distance: 50,  focalLength: 85,  vertAngle: 2,   description: "Face and chin"},
-        "medium-close-up":  {distance: 90,  focalLength: 85,  vertAngle: 3,   description: "Head and shoulders"},
-        "medium-shot":      {distance: 140, focalLength: 50,  vertAngle: 5,   description: "Waist up"},
-        "medium-full":      {distance: 200, focalLength: 50,  vertAngle: 5,   description: "Knees up"},
-        "full-shot":        {distance: 400, focalLength: 35,  vertAngle: 8,   description: "Full body with headroom"},
-        "wide-shot":        {distance: 700, focalLength: 24,  vertAngle: 10,  description: "Character in environment"},
-        "extreme-wide":     {distance: 1200, focalLength: 18, vertAngle: 12,  description: "Environment establishing"},
-        "two-shot":         {distance: 250, focalLength: 50,  vertAngle: 5,   description: "Two characters framed together"},
-        "over-shoulder":    {distance: 150, focalLength: 85,  vertAngle: 3,   description: "OTS: foreground shoulder, background face"}
-    };
-
-    // Mood → lighting preset, key light angle, key flux
-    var moodDefs = {
-        "neutral":    {lighting: "three-point",  keyAngle: 45,  keyFlux: 4000, fillRatio: 0.5, rimRatio: 0.3, notes: "Balanced, versatile lighting"},
-        "dramatic":   {lighting: "rembrandt",    keyAngle: 45,  keyFlux: 6000, fillRatio: 0.15, rimRatio: 0.5, notes: "High contrast, shadowed fill side"},
-        "happy":      {lighting: "butterfly",    keyAngle: 0,   keyFlux: 5000, fillRatio: 0.6,  rimRatio: 0.4, notes: "Bright front light, even fill"},
-        "sad":        {lighting: "split",        keyAngle: 90,  keyFlux: 2500, fillRatio: 0.1,  rimRatio: 0.2, notes: "Low key, deep shadows"},
-        "tense":      {lighting: "loop",         keyAngle: 35,  keyFlux: 5500, fillRatio: 0.2,  rimRatio: 0.6, notes: "Hard key, strong rim separation"},
-        "romantic":   {lighting: "butterfly",    keyAngle: 10,  keyFlux: 1800, fillRatio: 0.7,  rimRatio: 0.3, notes: "Soft, warm, flattering"},
-        "horror":     {lighting: "split",        keyAngle: 180, keyFlux: 1500, fillRatio: 0.05, rimRatio: 0.1, notes: "Under-lit or side-lit, minimal fill"},
-        "action":     {lighting: "three-point",  keyAngle: 30,  keyFlux: 7000, fillRatio: 0.3,  rimRatio: 0.8, notes: "High energy, strong rim for separation"}
-    };
-
-    // Composition rule → horizontal angle offset, height adjustment note
-    var compositionRules = {
-        "rule-of-thirds": {hOffset: 15,  note: "Subject on right third — offset camera left of centre"},
-        "center-frame":   {hOffset: 0,   note: "Subject centred — symmetric composition"},
-        "golden-ratio":   {hOffset: 12,  note: "Subject at 0.618 golden section from left"},
-        "leading-lines":  {hOffset: 20,  note: "Low angle with diagonal offset for implied motion"}
-    };
-
-    var composition = compositionRules[args.compositionRule] || compositionRules["rule-of-thirds"];
-    var shotDef = shotDefs[shotType] || shotDefs["medium-shot"];
-    var moodDef = moodDefs[mood] || moodDefs["neutral"];
-
-    // Gather scene state for context
-    var sceneInfo = {
-        numCameras: Scene.getNumCameras(),
-        numLights: Scene.getNumLights(),
-        numSkeletons: Scene.getNumSkeletons(),
-        figures: []
-    };
-
-    for (var i = 0; i < Scene.getNumSkeletons(); i++) {
-        var skel = Scene.getSkeleton(i);
-        var xp = skel.findProperty("XTranslate");
-        var yp = skel.findProperty("YTranslate");
-        var zp = skel.findProperty("ZTranslate");
-        sceneInfo.figures.push({
-            label: skel.getLabel(),
-            position: {
-                x: xp ? xp.getValue() : 0,
-                y: yp ? yp.getValue() : 0,
-                z: zp ? zp.getValue() : 0
-            }
-        });
-    }
-
-    // Find subject if specified
-    var subjectPos = {x: 0, y: 130, z: 0};
-    if (subjectLabel) {
-        var subNode = Scene.findNodeByLabel(subjectLabel) || Scene.findNode(subjectLabel);
-        if (subNode) {
-            var sx = subNode.findProperty("XTranslate");
-            var sy = subNode.findProperty("YTranslate");
-            var sz = subNode.findProperty("ZTranslate");
-            subjectPos = {
-                x: sx ? sx.getValue() : 0,
-                y: (sy ? sy.getValue() : 0) + 130,
-                z: sz ? sz.getValue() : 0
-            };
-        }
-    }
-
-    // Camera placement recommendation
-    var hAngle = composition.hOffset;
-    var hAngleRad = hAngle * (Math.PI / 180);
-    var camX = subjectPos.x + shotDef.distance * Math.sin(hAngleRad);
-    var camZ = subjectPos.z - shotDef.distance * Math.cos(hAngleRad);
-    var camY = subjectPos.y + (shotDef.distance * Math.tan(shotDef.vertAngle * (Math.PI / 180)));
-
-    // Lighting recommendations
-    var keyFlux = moodDef.keyFlux;
-    var fillFlux = Math.round(keyFlux * moodDef.fillRatio);
-    var rimFlux  = Math.round(keyFlux * moodDef.rimRatio);
-
-    var lightingSteps = [
-        "Set environment mode to Scene Only (daz_set_property on Environment node)",
-        "Create/configure key light: angle=" + moodDef.keyAngle + "°, Flux=" + keyFlux + " lm",
-        "Create/configure fill light: angle=" + (moodDef.keyAngle + 120) + "° (opposite side), Flux=" + fillFlux + " lm",
-        "Create/configure rim light: behind subject (~180° from camera), Flux=" + rimFlux + " lm"
-    ];
-
-    var cameraSteps = [
-        "Position camera at X=" + Math.round(camX) + " Y=" + Math.round(camY) + " Z=" + Math.round(camZ),
-        "Set focal length to " + shotDef.focalLength + "mm",
-        "Aim camera at subject eye-level (Y≈" + Math.round(subjectPos.y) + " cm)",
-        composition.note
-    ];
-
-    var characterSteps = [];
-    if (shotType === "two-shot") {
-        characterSteps.push("Place characters 60-80 cm apart facing each other or 3/4 to camera");
-        characterSteps.push("Ensure both figures share equal frame space");
-    } else if (shotType === "over-shoulder") {
-        characterSteps.push("Place foreground character back-to-camera, 50-80 cm from lens");
-        characterSteps.push("Place background subject 100-150 cm from camera");
-        characterSteps.push("Offset subjects horizontally so background face is clear");
-    } else {
-        characterSteps.push("Position subject at scene origin or desired world position");
-        characterSteps.push("Ensure subject faces +Z (toward camera at default angle=0°)");
-    }
-
-    // Build recommended tool call sequence
-    var toolSequence = [];
-    if (subjectLabel && cameraLabel) {
-        toolSequence.push('daz_orbit_camera_around("' + cameraLabel + '", "' + subjectLabel + '", ' + shotDef.distance + ', ' + hAngle + ', ' + shotDef.vertAngle + ')');
-        toolSequence.push('daz_set_property("' + cameraLabel + '", "FocalLength", ' + shotDef.focalLength + ')');
-    }
-    toolSequence.push('daz_apply_lighting_preset("' + moodDef.lighting + '"' + (subjectLabel ? ', "' + subjectLabel + '"' : '') + ')');
-    if (subjectLabel) {
-        toolSequence.push('daz_frame_shot(<camera>, "' + subjectLabel + '", "' + shotType + '")');
-    }
-
-    return {
-        shotType: shotType,
-        shotDescription: shotDef.description,
-        mood: mood,
-        compositionRule: args.compositionRule || "rule-of-thirds",
-        subject: subjectLabel,
-        camera: cameraLabel,
-        sceneState: sceneInfo,
-        recommendations: {
-            camera: {
-                position: {x: Math.round(camX), y: Math.round(camY), z: Math.round(camZ)},
-                focalLength: shotDef.focalLength,
-                distanceFromSubject: shotDef.distance,
-                horizontalAngle: hAngle,
-                verticalAngle: shotDef.vertAngle,
-                steps: cameraSteps
-            },
-            lighting: {
-                preset: moodDef.lighting,
-                keyFlux: keyFlux,
-                fillFlux: fillFlux,
-                rimFlux: rimFlux,
-                keyAngle: moodDef.keyAngle,
-                notes: moodDef.notes,
-                steps: lightingSteps
-            },
-            character: {
-                steps: characterSteps
-            },
-            toolSequence: toolSequence
-        }
-    };
-})()
-"""
-
-_CREATE_STORYBOARD_SCRIPT = """\
-(function(){
-    var args = getArguments()[0] || {};
-    var title = args.title || "Storyboard";
-    var shots = args.shots || [];
-    var startFrame = args.startFrame !== undefined ? args.startFrame : 0;
-    var framesPerShot = args.framesPerShot !== undefined ? args.framesPerShot : 90;
-    var savePresets = args.savePresets !== false;
-
-    if (shots.length === 0) {
-        throw new Error("shots array must have at least one shot definition");
-    }
-    if (shots.length > 20) {
-        throw new Error("Maximum 20 shots per storyboard");
-    }
-
-    var storyboardShots = [];
-    var currentFrame = startFrame;
-    var totalFrames = 0;
-
-    // Shot type → focal length default
-    var focalDefaults = {
-        "extreme-close-up": 85, "close-up": 85, "medium-close-up": 85,
-        "medium-shot": 50, "medium-full": 50, "full-shot": 35,
-        "wide-shot": 24, "extreme-wide": 18, "two-shot": 50, "over-shoulder": 85
-    };
-
-    // Shot type → distance default
-    var distDefaults = {
-        "extreme-close-up": 25, "close-up": 50, "medium-close-up": 90,
-        "medium-shot": 140, "medium-full": 200, "full-shot": 400,
-        "wide-shot": 700, "extreme-wide": 1200, "two-shot": 250, "over-shoulder": 150
-    };
-
-    for (var i = 0; i < shots.length; i++) {
-        var shot = shots[i];
-        var shotType = shot.shotType || "medium-shot";
-        var duration = shot.durationFrames || framesPerShot;
-        var shotEnd = currentFrame + duration - 1;
-
-        var camLabel = shot.cameraLabel || (title + "_Cam" + (i + 1));
-        var focalLength = shot.focalLength || focalDefaults[shotType] || 50;
-        var distance = shot.distance || distDefaults[shotType] || 200;
-        var angle = shot.angle !== undefined ? shot.angle : 0;
-
-        // Find subject
-        var subjectLabel = shot.subjectLabel || null;
-        var subjectPos = {x: 0, y: 130, z: 0};
-        if (subjectLabel) {
-            var subNode = Scene.findNodeByLabel(subjectLabel) || Scene.findNode(subjectLabel);
-            if (subNode) {
-                var sx = subNode.findProperty("XTranslate");
-                var sy = subNode.findProperty("YTranslate");
-                var sz = subNode.findProperty("ZTranslate");
-                subjectPos = {
-                    x: sx ? sx.getValue() : 0,
-                    y: (sy ? sy.getValue() : 0) + 130,
-                    z: sz ? sz.getValue() : 0
-                };
-            }
-        }
-
-        // Create camera for this shot if requested
-        var camCreated = false;
-        var camNode = Scene.findNodeByLabel(camLabel);
-        if (!camNode && savePresets) {
-            camNode = new DzBasicCamera();
-            Scene.addNode(camNode);
-            camNode.setLabel(camLabel);
-            camCreated = true;
-
-            // Position camera
-            var angleRad = angle * (Math.PI / 180);
-            var camX = subjectPos.x + distance * Math.sin(angleRad);
-            var camZ = subjectPos.z - distance * Math.cos(angleRad);
-            var camY = subjectPos.y + 20; // slight upward angle
-
-            var xp = camNode.findProperty("XTranslate");
-            var yp = camNode.findProperty("YTranslate");
-            var zp = camNode.findProperty("ZTranslate");
-            if (xp) xp.setValue(camX);
-            if (yp) yp.setValue(camY);
-            if (zp) zp.setValue(camZ);
-
-            // Set focal length
-            var flProp = camNode.getFocalLengthControl();
-            if (flProp) flProp.setValue(focalLength);
-
-            // Aim at subject
-            var dx = subjectPos.x - camX;
-            var dy = subjectPos.y - camY;
-            var dz = subjectPos.z - camZ;
-            var distXZ = Math.sqrt(dx * dx + dz * dz);
-            var yRotVal = Math.atan2(dx, -dz) * (180 / Math.PI);
-            var xRotVal = Math.atan2(dy, distXZ) * (180 / Math.PI);
-
-            var xRot = camNode.findProperty("XRotate");
-            var yRot = camNode.findProperty("YRotate");
-            if (xRot) xRot.setValue(xRotVal);
-            if (yRot) yRot.setValue(yRotVal);
-        }
-
-        storyboardShots.push({
-            shotNumber: i + 1,
-            label: shot.label || ("Shot " + (i + 1)),
-            shotType: shotType,
-            subject: subjectLabel,
-            camera: camLabel,
-            cameraCreated: camCreated,
-            focalLength: focalLength,
-            distance: distance,
-            angle: angle,
-            startFrame: currentFrame,
-            endFrame: shotEnd,
-            durationFrames: duration,
-            durationSeconds: Math.round(duration / 30 * 10) / 10,
-            description: shot.description || "",
-            action: shot.action || "",
-            dialogue: shot.dialogue || ""
-        });
-
-        totalFrames += duration;
-        currentFrame = shotEnd + 1;
-    }
-
-    return {
-        title: title,
-        totalShots: storyboardShots.length,
-        totalFrames: totalFrames,
-        totalSeconds: Math.round(totalFrames / 30 * 10) / 10,
-        startFrame: startFrame,
-        endFrame: currentFrame - 1,
-        shots: storyboardShots,
-        suggestions: [
-            "Use daz_set_active_camera to preview each shot's camera",
-            "Use daz_render_with_camera to render individual shots",
-            "Animate between shots with daz_animate_camera_movement",
-            "Set scene timeline: daz_set_frame_range(" + startFrame + ", " + (currentFrame - 1) + ")"
         ]
     };
 })()
@@ -7844,10 +7276,6 @@ _REGISTRY: dict[str, tuple[str, str]] = {
         "cameras, and positioning",
         _CREATE_SCENE_SCRIPT,
     ),
-    "vangard-create-camera-path": (
-        "Create smooth camera path through multiple waypoints with easing",
-        _CREATE_CAMERA_PATH_SCRIPT,
-    ),
     "vangard-create-character-path": (
         "Animate character movement along a path with waypoints",
         _CREATE_CHARACTER_PATH_SCRIPT,
@@ -7860,10 +7288,6 @@ _REGISTRY: dict[str, tuple[str, str]] = {
         "Choreograph simple action between characters (handshake, hug, fight, dance)",
         _CHOREOGRAPH_ACTION_SCRIPT,
     ),
-    "vangard-create-camera-rig": (
-        "Set up multi-camera rig in circular formation for bullet-time or multi-angle shots",
-        _CREATE_CAMERA_RIG_SCRIPT,
-    ),
     "vangard-animate-light": (
         "Animate a light's intensity with flicker, pulse, fade, strobe, or color-cycle effects",
         _ANIMATE_LIGHT_SCRIPT,
@@ -7872,16 +7296,6 @@ _REGISTRY: dict[str, tuple[str, str]] = {
         "Create a multi-light animated sequence for a mood or time-of-day "
         "(day-to-night, romantic, etc.)",
         _CREATE_LIGHT_SEQUENCE_SCRIPT,
-    ),
-    "vangard-plan-shot": (
-        "Analyse the current scene and recommend camera, lighting and character "
-        "settings for a shot type",
-        _PLAN_SHOT_SCRIPT,
-    ),
-    "vangard-create-storyboard": (
-        "Generate a storyboard of sequential shots with metadata and camera "
-        "settings saved to scene",
-        _CREATE_STORYBOARD_SCRIPT,
     ),
     "vangard-set-scene-atmosphere": (
         "Configure environment node settings (mode, intensity, dome) for atmosphere and mood",
