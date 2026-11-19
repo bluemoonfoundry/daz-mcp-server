@@ -29,6 +29,15 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   - `daz_setup_shot_coverage(camera_height=...)` is now optional: the aim
     height for every shot; by default each size uses its own.
 
+### Fixed
+
+- `daz_batch_select(add_to_selection=False)` replaces the current selection
+  as documented; it used to add to it.
+- `daz_get_scene_layout` and `daz_find_nearby_nodes` apply `include_types`
+  (it was accepted and ignored). Each entry now has a `type`: `figures`,
+  `wearables` (follower figures such as clothing), `bones`, `cameras`,
+  `lights` or `props`; an unknown type is an error.
+
 ## [0.8.0] - 2026-11-16
 
 First release on PyPI. Run it with `uvx daz-mcp-server`.
