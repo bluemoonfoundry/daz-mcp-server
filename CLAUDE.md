@@ -18,7 +18,7 @@ Bug-Katalog: `C:\Users\Black-Byte\Development\pinkcharakter\docs\daz-mcp-bridge-
 - **@src/daz_mcp_server/guides/cinema.md**: Cameras, lighting, animation, shot composition, and rendering.
 
 ## Architecture Summary
-- **Version:** 0.8.0 (source of truth: `pyproject.toml`; `tests/test_version_consistency.py` checks the docs and the server match it)
+- **Version:** 0.9.0 (source of truth: `pyproject.toml`; `tests/test_version_consistency.py` checks the docs and the server match it)
 - **Bridge:** Connects to DazScriptServer (port 18811)
 - **Registry:** 164 tools registered across 16 tool modules.
 - **Structure:** Modular — `_mcp.py` holds shared FastMCP instance; `tools/__init__.py` imports all 16 modules so `@mcp.tool()` decorators fire at import time.
