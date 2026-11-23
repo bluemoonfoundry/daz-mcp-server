@@ -1,5 +1,7 @@
 # Skill: Character Choreographer
-Tools for morphs, emotions, and movement.
+Tools for morphs, emotions, and movement. The tools named here are in the
+`expert` profile (`DAZ_MCP_PROFILE=expert`); each tool's own description lists
+its exact arguments and values.
 
 ## Morph Discovery
 - `daz_list_morphs`: Use `include_zero=False` to see active morphs.
@@ -10,15 +12,15 @@ Tools for morphs, emotions, and movement.
   control-property linking). See daz://guide/dazscript's "Morph Loader Pro" gotchas.
 
 ## Emotional Direction
-- `daz_set_emotion`: Apply `happy`, `angry`, `confident`, etc., with `intensity`.
-- `daz_set_body_language`: Full-body posture archetypes (`confident`, `defeated`, `alert`, `relaxed`).
-- `daz_direct_gaze`: Eye-direction control (`camera`, `up`, `down`, `left`, `right`, `away`).
-- Handles naming differences between Genesis 8 and 9.
+- `daz_set_emotion`: Expression plus a small body adjustment, scaled by `intensity`: `happy`, `sad`, `angry`, `surprised`, `fearful`, `disgusted`, `neutral`, `excited`, `bored`, `confident`, `shy`, `loving`, `contemptuous`.
+- `daz_set_body_language`: Upper-body posture (`confident`, `defensive`, `relaxed`, `tense`).
+- `daz_direct_gaze`: Turn the head toward `camera`, `away`, `up`, `down`, `left`, `right`, or `character` (with `target_label`).
+- These handle the bone and morph naming differences between Genesis 8 and 9.
 
 ## Posing & Interaction
-- `daz_look_at_character`, `daz_look_at_point`: Cascading rotation (eyes to torso).
+- `daz_look_at_character`, `daz_look_at_point`: Cascading rotation (eyes to torso, by `mode`). Rotations are absolute and clamp to the bones' limits (Genesis head twist ±22°).
 - `daz_reach_toward`: Pseudo-IK for arms.
-- `daz_interactive_pose`: Pre-built handshake, hug, or fight spacing.
+- `daz_interactive_pose`: Two-character poses: `face-each-other`, `hug`, `shoulder-arm`, `handshake`.
 - `daz_reset_pose`: Clear all pose values to default.
 - `daz_save_pose` / `daz_load_pose`: Save/restore figure poses to/from file.
 
@@ -32,5 +34,5 @@ Tools for morphs, emotions, and movement.
 
 ## Action & Pathing
 - `daz_create_character_path`: Animate walking with auto-rotation.
-- `daz_arrange_characters`: Formations (semicircle, circle, line).
-- `daz_choreograph_action`: Coordinated multi-character sequences.
+- `daz_arrange_characters`: Formations (`line`, `semicircle`, `triangle`, `conversation-circle`).
+- `daz_choreograph_action`: Coordinated two-character actions (`handshake`, `hug`, `fight`, `dance`).

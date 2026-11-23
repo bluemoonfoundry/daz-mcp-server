@@ -56,3 +56,30 @@ def test_no_stale_skill_references():
         bad += [m for m in re.findall(r"daz://guide/([a-z_]+)", text) if m not in GUIDE_NAMES]
     assert stale == []
     assert bad == []
+
+
+def _doc_texts():
+    dev_doc = PKG.parent.parent / "SKILL_DEVELOPMENT.md"
+    yield "SKILL_DEVELOPMENT.md", dev_doc.read_text(encoding="utf-8")
+    for name in GUIDE_NAMES:
+        yield f"guides/{name}.md", read_guide(name)
+
+
+def test_docs_name_only_registered_tools_and_arguments():
+    import inspect
+
+    import daz_mcp_server.tools  # noqa: F401  # pylint: disable=unused-import  # registers every tool
+
+    tools = {t.name: t for t in asyncio.run(mcp.list_tools())}
+    unknown, bad_kwargs = [], []
+    for doc, text in _doc_texts():
+        for name in sorted(set(re.findall(r"\bdaz_[a-z0-9_]+", text)) - {"daz_mcp_server"}):
+            if name not in tools:
+                unknown.append(f"{doc}: {name}")
+        for name, args in re.findall(r"\b(daz_[a-z0-9_]+)\(([^()]*)\)", text):
+            if name in tools:
+                params = inspect.signature(tools[name].fn).parameters
+                bad_kwargs += [f"{doc}: {name}({kw}=)"
+                               for kw in re.findall(r"\b([a-z_]\w*)\s*=", args) if kw not in params]
+    assert unknown == []
+    assert bad_kwargs == []
