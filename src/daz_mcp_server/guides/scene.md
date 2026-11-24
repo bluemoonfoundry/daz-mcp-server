@@ -1,20 +1,22 @@
 # Skill: Scene Architect
-Tools for scene layout, hierarchy, and library management.
+Tools for scene layout, hierarchy, and library management. The tools named
+here are in the `expert` profile (`DAZ_MCP_PROFILE=expert`); in the compact
+profile start with `daz_inspect_scene`.
 
 ## Scene & Hierarchy
 - `daz_scene_info`: Snapshot of the scene.
 - `daz_get_node_hierarchy`: Skeleton/tree mapping.
 - `daz_set_parent`: Attaching props or organizing the tree.
-- `daz_get_scene_layout`: Full spatial map.
+- `daz_get_scene_layout`: Spatial map of every node with a `type` (`figures`, `wearables`, `bones`, `cameras`, `lights`, `props`). Bones dominate an unfiltered layout; pass `include_types` (e.g. `["figures", "cameras", "lights", "props"]`).
 
 ## Batch Operations (Performance)
 Use these for 5-10x speedup when changing 3+ items:
-- `daz_batch_set_properties`, `daz_batch_transform`, `daz_batch_visibility`, `daz_batch_select`.
+- `daz_batch_set_properties`, `daz_batch_transform`, `daz_batch_visibility`, `daz_batch_select` (replaces the selection unless `add_to_selection=True`).
 
 ## Spatial Analysis
 - `daz_get_world_position`, `daz_get_bounding_box`.
 - `daz_check_overlap`: Collision/penetration detection.
-- `daz_find_nearby_nodes`: Find items within a radius.
+- `daz_find_nearby_nodes`: Nodes within a radius, nearest first, filterable by the same `include_types`.
 
 ## Content Library
 - `daz_list_categories`, `daz_browse_category`: Navigating `.duf` files.

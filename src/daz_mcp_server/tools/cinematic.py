@@ -1213,6 +1213,152 @@ async def daz_setup_shot_coverage(
     return await _shots.run(_run)
 
 
+_COVERAGE_PARTS = ("master", "two_shot", "ots", "singles")
+
+
+def _conversation_beats(beats: list[dict[str, Any]],
+                        speakers: tuple[str, str]) -> list[sl.DialogueBeat]:
+    """Validate MCP beat dicts and turn them into ``DialogueBeat`` objects."""
+    out: list[sl.DialogueBeat] = []
+    for i, beat in enumerate(beats, start=1):
+        missing = [k for k in ("speaker", "start", "end") if k not in beat]
+        if missing:
+            raise ToolError(f"Beat {i}: missing field(s) {missing}")
+        start, end = beat["start"], beat["end"]
+        if not isinstance(start, int) or not isinstance(end, int) or start < 0 or end < start:
+            raise ToolError(f"Beat {i}: start/end must be integers with 0 <= start <= end")
+        if beat["speaker"] not in speakers:
+            raise ToolError(f"Beat {i}: speaker {beat['speaker']!r} must be "
+                            f"{speakers[0]!r} or {speakers[1]!r}")
+        if out and start <= out[-1].end:
+            raise ToolError(f"Beat {i} starts at frame {start}, "
+                            f"before beat {i - 1} ends ({out[-1].end})")
+        out.append(sl.DialogueBeat(beat["speaker"], start, end, beat.get("line")))
+    return out
+
+
+@mcp.tool()
+async def daz_cover_conversation(
+    char_a: str,
+    char_b: str,
+    beats: list[dict[str, Any]] | None = None,
+    style: str = "ots",
+    side: int = 1,
+    establish_frames: int = 0,
+    single_size: str = "medium-close-up",
+    focal_length: float | None = None,
+    include: list[str] | None = None,
+) -> dict[str, Any]:
+    """Cover or cut a two-person conversation, keeping every camera on one side of the line.
+
+    Built on ``dazpy.shot_library``. Every camera stands on the same side of
+    the line of action between the two characters (the 180-degree rule), so
+    eyelines match across cuts. One camera is created per shot, labelled with
+    its shot id.
+
+    With ``beats``, the conversation is cut: one shot per beat on the speaker,
+    over the listener's shoulder (``style="ots"``) or in a clean single
+    (``style="singles"``), timed to the beat's frames, optionally opening on
+    a master. Without ``beats``, standard coverage is set up instead: master,
+    two-shot, the OTS pair and both clean singles (pick parts with ``include``).
+
+    Args:
+        char_a: Label of the first character.
+        char_b: Label of the second character.
+        beats: Dialogue beats in cut order, each
+            ``{"speaker": char_a|char_b, "start": int, "end": int, "line": str?}``
+            (frames inclusive; a beat must start after the previous one ends).
+        style: "ots" (default) or "singles" -- how each beat frames the speaker.
+        side: Which side of the line the cameras stand on: 1 (default) =
+            char_a's right as they face char_b, -1 = the other side.
+        establish_frames: With beats, open on a master for this many frames
+            at the start of the first beat (0 = no master).
+        single_size: Shot size of the clean singles: "extreme-close-up",
+            "close-up", "medium-close-up" (default), "medium-shot",
+            "medium-full", "full-shot", "wide-shot", "extreme-wide".
+        focal_length: Lens in mm for the beat shots (default: each shot's own).
+        include: Without beats, the coverage parts to create, from
+            "master", "two_shot", "ots", "singles" (default: all).
+
+    Returns:
+        Dict with:
+        - mode: "conversation" (beats given) or "coverage"
+        - planId, characters, side
+        - cameras: list of {label, shotId, position, focalLength, frameRange?, size?}
+        - cutList: with beats, the edit in order -- {shot, camera, start, end,
+          speaker?, line?} (speaker is absent on the establishing master)
+        - continuity: line-crossing issues, plus jump cuts (< 30 degrees at a
+          similar size) between consecutive beats of a conversation
+
+    Example:
+        daz_cover_conversation("Alice", "Bob", beats=[
+            {"speaker": "Alice", "start": 0, "end": 59, "line": "You came back."},
+            {"speaker": "Bob", "start": 60, "end": 119, "line": "I had to."},
+        ], establish_frames=24)
+        # 000_MST_Alice-Bob (0-23), 001_OTS_Alice_over_Bob (24-59),
+        # 002_OTS_Bob_over_Alice (60-119)
+
+        daz_cover_conversation("Alice", "Bob")   # master, two-shot, OTS pair, singles
+    """
+    if not char_a or not char_b or char_a == char_b:
+        raise ToolError("char_a and char_b must be two different character labels")
+    if style not in ("ots", "singles"):
+        raise ToolError("style must be 'ots' or 'singles'")
+    if side not in (1, -1):
+        raise ToolError("side must be 1 or -1")
+    if establish_frames < 0:
+        raise ToolError("establish_frames must be >= 0")
+    if single_size not in _shots.SHOT_TYPES:
+        raise ToolError(f"single_size must be one of: {', '.join(_shots.SHOT_TYPES)}")
+    if focal_length is not None and not 10.0 <= focal_length <= 500.0:
+        raise ToolError("focal_length must be between 10 and 500 mm")
+    parts = tuple(include) if include else _COVERAGE_PARTS
+    bad_parts = sorted(set(parts) - set(_COVERAGE_PARTS))
+    if bad_parts:
+        raise ToolError(f"Unknown include part(s) {bad_parts}; valid: {', '.join(_COVERAGE_PARTS)}")
+    dialogue = _conversation_beats(beats, (char_a, char_b)) if beats else None
+    size = _shots.SHOT_TYPES[single_size]
+
+    def _run() -> dict[str, Any]:
+        scene = get_scene()
+        positions = {n: _shots.subject(scene, n).root for n in (char_a, char_b)}
+        line = sl.LineOfAction.between(positions, char_a, char_b, side)
+        if dialogue:
+            plan = sl.conversation(line, dialogue, plan_id=f"{char_a}_{char_b}_conversation",
+                                   style=style, establish_frames=establish_frames,
+                                   single_size=size, lens=focal_length)
+            # Shots are in cut order: check the axis and jump cuts between beats.
+            continuity = sl.check_plan(plan, positions)
+        else:
+            plan = sl.dialogue_coverage(line, include=parts, single_size=size)
+            # Coverage setups are alternatives, not a cut: only the axis applies.
+            continuity = sl.check_axis(plan.all_shots(), sl.plan_line(plan, positions), positions)
+        shots = list(plan.all_shots())
+        cams = sl.apply_coverage(scene, plan, subjects=positions)
+        result: dict[str, Any] = {
+            "mode": "conversation" if dialogue else "coverage",
+            "planId": plan.id,
+            "characters": [char_a, char_b],
+            "side": side,
+            "cameras": [_shots.shot_summary(s, label, positions) for s, label in zip(shots, cams)],
+            "continuity": _shots.issues(continuity),
+        }
+        if dialogue:
+            cut_list = []
+            for s, label in zip(shots, cams):
+                entry: dict[str, Any] = {"shot": s.id, "camera": label,
+                                         "start": s.frame_range[0], "end": s.frame_range[1]}
+                if s.gaze:
+                    entry["speaker"] = s.gaze[0].actor
+                if s.storyboard is not None and s.storyboard.dialogue:
+                    entry["line"] = s.storyboard.dialogue
+                cut_list.append(entry)
+            result["cutList"] = cut_list
+        return result
+
+    return await _shots.run(_run)
+
+
 @mcp.tool()
 async def daz_create_camera_rig(
     rig_name: str = "CameraRig",

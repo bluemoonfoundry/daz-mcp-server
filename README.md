@@ -77,7 +77,7 @@ clone or install by hand. Point your MCP client at it (see
 uvx daz-mcp-server   # starts the stdio MCP server; your MCP client normally runs this
 ```
 
-`uvx` picks up new releases automatically; pin one with `uvx daz-mcp-server@0.8.0`.
+`uvx` picks up new releases automatically; pin one with `uvx daz-mcp-server@0.9.0`.
 
 ### Using pip (alternative)
 
@@ -133,7 +133,7 @@ Configure the server via environment variables:
 | `DAZ_TIMEOUT` | `30.0` | Request timeout in seconds (increase for long renders) |
 | `DAZ_API_TOKEN` | *(from file)* | API token for authentication |
 | `DAZ_CONTENT_BROWSER_URL` | `http://localhost:8080` | Content browser API URL (if using a separate content service) |
-| `DAZ_MCP_PROFILE` | `compact` | Model-facing surface: `compact` (10 workflow tools) or `expert` (all 164 registered tools) |
+| `DAZ_MCP_PROFILE` | `compact` | Model-facing surface: `compact` (10 workflow tools) or `expert` (all 165 registered tools) |
 
 ### Tool profiles
 
@@ -152,6 +152,11 @@ so its large catalogue and examples do not consume the always-visible tool
 surface. Low-level primitives remain available for development and unusual
 scene surgery by setting `DAZ_MCP_PROFILE=expert` in the MCP server's `env`
 configuration and restarting the MCP client.
+
+### Changes in 0.9.0
+
+- The camera and shot tools build their shots with `dazpy.shot_library` (requires dazpy 2.15.0): two-person coverage keeps the 180-degree rule, shots fit the camera's lens, and cameras are labelled with shot ids (`WS_Alice`, `OTS_Bob_over_Alice`). See the [changelog](CHANGELOG.md) for behaviour changes.
+- New `daz_cover_conversation`: cut a two-person conversation from dialogue beats, or set up master / two-shot / OTS / singles coverage, with continuity checks.
 
 ### Changes in 0.8.0
 
@@ -2331,24 +2336,27 @@ daz_import_node_config("C:/shots/crowd.json", node_labels=["Alice"])
 ### 🗺️ Scene Layout & Proximity
 
 #### `daz_get_scene_layout`
-Full spatial map of all scene nodes with positions and bounding boxes.
+Spatial map of all scene nodes with world positions and rotations.
 
 **Arguments:**
-- `include_types` (list, optional): Filter by type. Values: `"figures"`, `"cameras"`, `"lights"`, `"props"`. Omit for all types.
+- `include_types` (list, optional): Filter by type. Values: `"figures"`, `"wearables"` (follower figures such as clothing), `"bones"`, `"cameras"`, `"lights"`, `"props"` (everything else). Omit for all types; an unknown value is an error.
 
 **Returns:**
 ```json
 {
   "nodes": [
     {
-      "label": "Genesis 9", "type": "DzFigure",
+      "label": "Genesis 9", "type": "figures",
       "position": {"x": 0, "y": 0, "z": 0},
-      "boundingBox": {"min": {...}, "max": {...}, "center": {...}}
+      "rotation": {"x": 0, "y": 0, "z": 0},
+      "visible": true
     }
   ],
   "count": 8
 }
 ```
+
+A Genesis figure's bones are scene nodes, so an unfiltered layout is dominated by `"bones"` entries; pass e.g. `["figures", "cameras", "lights", "props"]` for an overview.
 
 **Use when:** Getting a complete overview of scene spatial layout before adding or moving objects.
 
@@ -2358,24 +2366,24 @@ Full spatial map of all scene nodes with positions and bounding boxes.
 Find all nodes within a radius of a target node.
 
 **Arguments:**
-- `target_label` (string): Center node to search around
-- `radius` (float, default `200.0`): Search radius in cm
-- `include_types` (list, optional): Filter by type: `"figures"`, `"cameras"`, `"lights"`, `"props"`
+- `node_label` (string): Center node to search around
+- `radius` (float, default `100.0`): Search radius in cm
+- `include_types` (list, optional): Filter by type, same values as `daz_get_scene_layout`
 
-**Returns:**
+**Returns:** nearest first.
 ```json
 {
-  "target": "Alice",
+  "center_node": "Alice",
   "radius": 200,
-  "nearby": [
-    {"label": "Bob", "type": "DzFigure", "distance": 120.5, "direction": "front-right"},
-    {"label": "Chair", "type": "prop", "distance": 85.0, "direction": "right"}
+  "nearby_nodes": [
+    {"label": "Chair", "type": "props", "distance": 85.0, "direction": "right"},
+    {"label": "Bob", "type": "figures", "distance": 120.5, "direction": "front"}
   ],
   "count": 2
 }
 ```
 
-**Direction labels:** `front`, `front-right`, `right`, `back-right`, `back`, `back-left`, `left`, `front-left`
+**Direction labels:** `front`, `back`, `left`, `right` (the dominant horizontal axis; +Z is front)
 
 **Use when:** Finding all characters or props near a subject, checking interaction range.
 
@@ -2639,7 +2647,7 @@ daz_wait_for_scene_event(["scene.loaded", "scene.saved"], timeout_seconds=60)
 
 ### 🎬 Cinematic Director Workflow
 
-The cinematic module (`tools/cinematic.py`) provides 22 high-level tools for professional scene creation. The tools below are a selection of the most commonly used ones; additional tools include `daz_animate_camera_movement`, `daz_create_camera_path`, `daz_create_character_path`, `daz_arrange_characters`, `daz_choreograph_action`, `daz_setup_shot_coverage`, `daz_create_camera_rig`, `daz_animate_light`, `daz_create_light_sequence`, `daz_plan_shot`, `daz_create_storyboard`, `daz_set_focus_point`, `daz_animate_focus_pull`, `daz_time_expression`, and `daz_sync_character_beats`.
+The cinematic module (`tools/cinematic.py`) provides 23 high-level tools for professional scene creation. The tools below are a selection of the most commonly used ones; additional tools include `daz_animate_camera_movement`, `daz_create_camera_path`, `daz_create_character_path`, `daz_arrange_characters`, `daz_choreograph_action`, `daz_setup_shot_coverage`, `daz_cover_conversation`, `daz_create_camera_rig`, `daz_animate_light`, `daz_create_light_sequence`, `daz_plan_shot`, `daz_create_storyboard`, `daz_set_focus_point`, `daz_animate_focus_pull`, `daz_time_expression`, and `daz_sync_character_beats`.
 
 #### `daz_create_shot_sequence`
 Create multi-camera shot sequences for cinematic storytelling.
@@ -2680,6 +2688,34 @@ daz_create_shot_sequence("shot-reverse-shot", ["Alice", "Bob"], duration=240)
 
 # 360° turntable
 daz_create_shot_sequence("orbit", ["Genesis 9"], duration=300)
+```
+
+---
+
+#### `daz_cover_conversation`
+Cover or cut a two-person conversation with every camera on one side of the line of action (180-degree rule).
+
+**Arguments:**
+- `char_a`, `char_b` (string): The two character labels
+- `beats` (list[dict], optional): Dialogue beats in cut order, `{"speaker", "start", "end", "line"?}` (frames inclusive). With beats the conversation is cut, one shot per beat on the speaker; without them, standard coverage is set up
+- `style` (string, default "ots"): `"ots"` (over the listener's shoulder) or `"singles"` (clean single)
+- `side` (int, default 1): Side of the line the cameras stand on (1 or -1)
+- `establish_frames` (int, default 0): With beats, open on a master for this many frames
+- `single_size` (string, default "medium-close-up"): Shot size of the singles
+- `focal_length` (float, optional): Lens in mm for the beat shots
+- `include` (list[string], optional): Without beats, the coverage parts — `"master"`, `"two_shot"`, `"ots"`, `"singles"` (default: all)
+
+**Returns:** `mode` (`"conversation"` or `"coverage"`), `planId`, `characters`, `side`, `cameras`, `cutList` (with beats: `{shot, camera, start, end, speaker?, line?}` in edit order) and `continuity` (axis crossings; jump cuts between consecutive beats).
+
+**Example:**
+```python
+daz_cover_conversation("Alice", "Bob", beats=[
+    {"speaker": "Alice", "start": 0, "end": 59, "line": "You came back."},
+    {"speaker": "Bob", "start": 60, "end": 119, "line": "I had to."},
+], establish_frames=24)
+# cutList: 000_MST_Alice-Bob (0-23), 001_OTS_Alice_over_Bob (24-59), 002_OTS_Bob_over_Alice (60-119)
+
+daz_cover_conversation("Alice", "Bob")  # master, two-shot, OTS pair, both singles
 ```
 
 ---
@@ -3564,9 +3600,10 @@ MCP boundary. `tools/workflow.py` is the five-tool default facade and delegates
 to the same implementations as the detailed tools.
 
 ### 🎬 Cinematic Director Workflow
-22 high-level cinematic tools for professional scene creation:
+23 high-level cinematic tools for professional scene creation:
 - **Scene Generation**: Create complete scenes from natural language (5 templates: dining, interview, portrait, conversation, generic)
 - **Shot Sequences**: Multi-camera cinematography (establishing shots, shot-reverse-shot, orbit, push-in)
+- **Dialogue Coverage**: Cut a two-person conversation from dialogue beats, or set up master/two-shot/OTS/singles coverage, with continuity checks
 - **Camera Animation**: Dolly, push-in, orbit paths with keyframe control
 - **Conversation Choreography**: Automated dialogue animation with look-at behavior and emotion timing
 - **Lighting Animation**: Animated light sequences, mood lighting, time-of-day
@@ -3743,7 +3780,7 @@ daz-mcp-server/
 │       ├── material.py        # Materials: list, get, set, presets, copy (6 tools)
 │       ├── utility.py         # Status, execute, docs, validate, macros (20 tools)
 │       ├── content.py         # Content browser, search, compatibility (8 tools)
-│       ├── cinematic.py       # Shot sequences, camera paths, storyboard (22 tools)
+│       ├── cinematic.py       # Shot sequences, camera paths, storyboard (23 tools)
 │       ├── hair.py            # Strand-based hair (2 tools)
 │       └── wardrobe.py        # Clothing, dForce, subdivision, export (16 tools)
 ├── tests/
@@ -3756,7 +3793,7 @@ daz-mcp-server/
 
 ### Architecture
 
-- **FastMCP 3.x server** with stdio transport (164 tools registered; 10 visible in the default `compact` profile)
+- **FastMCP 3.x server** with stdio transport (165 tools registered; 10 visible in the default `compact` profile)
 - **Profiled model boundary**: the compact facade is selected by default; `DAZ_MCP_PROFILE=expert` reveals every detailed tool without changing their implementation
 - **Modular tool package**: focused modules under `tools/`; decorators fire at import time via the shared `mcp` instance from `_mcp.py`, avoiding circular imports with `server.py`
 - **One DazScriptServer protocol client**: `dazpy.aio.AsyncDazClient` owns endpoint URLs, wire payloads, timeout policy, request lifecycle, SSE streams, and typed errors

@@ -38,10 +38,10 @@ profile changes visibility only; it uses the same implementations as compact.
 - Positive Y rotation → camera points left (-X direction)
 - Example: to face a subject offset to -X (camera's right), use a *negative* Y rotation value.
 
-**Bone rotations follow the same inverted convention.**
-- Head "Twist" (YRotate): positive turns the head left, negative turns right
-- Eye "Side-Side" (YRotate): positive looks left, negative looks right
-- When computing angles to aim bones at a target, negate the expected sign.
+**Bone rotations are in the figure's own frame.**
+- Head "Twist" (YRotate): positive turns the head to the figure's left (+X), negative to its right
+- Eye "Side-Side" (YRotate): positive looks to the figure's left, negative to its right
+- For a figure at rest facing +Z, `atan2(dx, dz)` toward the target is the YRotate to set (no sign flip)
 
 **Genesis 9 figures face the +Z axis by default** (with Y rotation = 0).
 - "In front of" a character = positive Z
@@ -51,21 +51,18 @@ profile changes visibility only; it uses the same implementations as compact.
 
 ## Camera Placement
 
-**Never use `daz_orbit_camera_around` for portrait work.**
+**Don't use `daz_orbit_camera_around` for portrait work.**
 - It aims at the node's *root position* (feet/origin), not face level
-- Always place cameras manually using explicit world-space XYZ coordinates
 
-**Always calculate true 3D distance for focal distance.**
-- Focal distance = √(ΔX² + ΔY² + ΔZ²) from camera to face
-- Do not use Z distance alone — the offset in X and Y matters significantly at portrait distances
-- Head bone world position is the most reliable face target; use `daz_get_world_position("Head")`
+**Portrait camera workflow:**
+1. Create a camera with `daz_create_camera` and set its lens (focal length) first
+2. `daz_frame_shot(camera, figure, "close-up")` (or another size) places and aims it at the right height for that size, fitted to the lens
+3. `daz_apply_camera_angle` / `daz_apply_composition_rule` adjust the angle or composition
+4. `daz_set_focus_point(camera, target_label=figure, f_stop=...)` focuses on the eyes using the true 3D distance
 
-**Portrait camera workflow (proven):**
-1. Get head world position with `daz_get_world_position("Head")`
-2. Calculate camera position manually: X = -sin(angle) × distance, Z = cos(angle) × distance, Y = head Y + small offset
-3. Create camera with `daz_create_camera` at those coordinates
-4. Set Y rotation to *negative* of the horizontal angle to face the subject
-5. Calculate true 3D distance for focal distance and set explicitly via `daz_set_property("Focal Distance", ...)`
+If you place a camera by hand, focal distance is the full 3D distance from camera to the eyes
+(√(ΔX² + ΔY² + ΔZ²)), not the Z offset alone; the head bone's world position
+(`daz_get_world_position("Head")`) is a good face target.
 
 ---
 
@@ -86,19 +83,17 @@ profile changes visibility only; it uses the same implementations as compact.
 
 ---
 
-## `daz_look_at_point` Limitations
+## `daz_look_at_point` Limits
 
-- The tool *does* rotate eyes and head bones, but applies rotations in the wrong direction due to the inverted convention
-- **Always verify in the viewport after calling it** and manually correct bone rotations if needed
-- For reliable gaze direction: manually set Head Twist and Eye Side-Side values, accounting for the inverted sign
+- Rotations are absolute (a look-at is a state, not a delta) and computed from the figure at rest; on a figure that is itself rotated or posed, check the result in the viewport
+- Bone limits clamp the result: a target more than ~22° to the side leaves the head at its limit, so use `mode="neck"`, `"torso"` or `"full"` to spread the turn
 
 ---
 
 ## Rendering
 
-**`daz_render_with_camera_async` fails in this DAZ Studio version.**
-- Error: `Property 'getViewportMgr' of object DzApp is not a function`
-- Use `daz_render_async` with the `camera` parameter instead
+**Render from a specific camera** with `daz_render_async(camera=...)` or `daz_render_with_camera_async`
+(the same render path with the camera pinned); the active viewport camera is not changed.
 
 **DOF is sensitive at short camera distances.**
 - At ~90cm subject distance, even small focal distance errors throw the face out of focus
@@ -114,10 +109,3 @@ profile changes visibility only; it uses the same implementations as compact.
 - Soft portrait studio levels: Key=1200, Fill=500, Rim=600
 - Shadow Softness clamps to 1.0 internally — that's the maximum (fully soft), which is correct for portraits
 - Always set environment to Scene Only mode (mode 3) when using a custom lighting rig
-
----
-
-## Scene File
-
-- Current project scene: `X:/Development/Study/A Woman in Saigon.duf`
-- Renders output to: `X:/Development/Study/renders/`

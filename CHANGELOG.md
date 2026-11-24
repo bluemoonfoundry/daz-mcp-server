@@ -3,7 +3,18 @@
 All notable changes to daz-mcp-server are documented here.
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
-## [Unreleased]
+## [0.9.0] - 2026-11-22
+
+Requires dazpy 2.15.0 or later.
+
+### Added
+
+- `daz_cover_conversation`: cut a two-person conversation from dialogue beats
+  (`{speaker, start, end, line}`), one over-the-shoulder or single shot per
+  beat with an optional opening master, or set up master / two-shot / OTS /
+  singles coverage when no beats are given. Built on
+  `dazpy.shot_library.conversation` / `dialogue_coverage` / `check_plan`;
+  returns the cameras, the cut list and any continuity issues.
 
 ### Changed
 
@@ -51,6 +62,23 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
     cameras keep the 180-degree rule (`continuity` in the result), and no
     cameras are made without a character. Dining characters now face each
     other (they faced away) and "dining" is recognised as a keyword.
+
+### Fixed
+
+- `daz_batch_select(add_to_selection=False)` replaces the current selection
+  as documented; it used to add to it.
+- `daz_get_scene_layout` and `daz_find_nearby_nodes` apply `include_types`
+  (it was accepted and ignored). Each entry now has a `type`: `figures`,
+  `wearables` (follower figures such as clothing), `bones`, `cameras`,
+  `lights` or `props`; an unknown type is an error.
+- The bundled guides (`daz://guide/<name>`) match the tools again: corrected
+  option lists (body-language postures, gaze directions, interaction and
+  formation types, mood lighting, camera angles and moves), dropped
+  limitations that no longer apply (`daz_look_at_point` direction,
+  `daz_render_with_camera_async`), pointed portrait work at `daz_frame_shot` /
+  `daz_set_focus_point`, noted which tools need the `expert` profile, and
+  removed a personal project path. A test now checks that every tool and
+  example argument a guide names exists.
 
 ## [0.8.0] - 2026-11-16
 
