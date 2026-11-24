@@ -3,6 +3,42 @@
 All notable changes to daz-mcp-server are documented here.
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [Unreleased]
+
+Requires dazpy 2.16.0 or later.
+
+### Changed
+
+- `daz_plan_shot`, `daz_create_storyboard`, `daz_create_camera_rig` and
+  `daz_create_camera_path` are built on `dazpy.shot_library`, and their
+  four DazScript programs are removed. `daz_create_scene` keeps its script
+  for lights and blocking but builds its cameras with dazpy. Behaviour
+  changes:
+  - `daz_plan_shot` returns the planned `shot` (`Shot.to_dict()`); its camera
+    stands on the subject's front (it used to be behind it), fits the shot
+    type's lens, and two-shot / over-shoulder pair with the nearest figure.
+  - `daz_create_storyboard` cameras face the subject's front (`angle` 0 =
+    `+Z`), a reused camera is re-aimed, `partnerLabel` picks the second
+    figure for two-shot / over-shoulder, snake_case shot keys are accepted,
+    and the result adds `sequence` (`Sequence.to_dict()`) and `cameras`.
+    A missing `subjectLabel` is an error instead of framing the origin.
+  - `daz_create_camera_rig` aims every camera exactly at the centre and reuses
+    the rig and its cameras when run again with the same `rig_name`. Its
+    `<name>_Rig` group is made with `DazScene.create_group`, so the
+    cinematic tools send no inline DazScript of their own.
+  - `daz_create_camera_path` with `aim_at_target` aims at the target on every
+    waypoint (it used to aim once); it clears the camera's existing position
+    keys first and rejects duplicate waypoint frames. `easing` is still not
+    applied (Studio's default interpolation).
+  - `daz_create_scene` cameras are labelled with shot ids, conversation
+    cameras keep the 180-degree rule (`continuity` in the result), and no
+    cameras are made without a character. Dining characters now face each
+    other (they faced away) and "dining" is recognised as a keyword.
+- Shot framing uses dazpy 2.16.0's frame geometry: Studio's Frame Width
+  spans the frame height, not the width. Shot sizes used to stand 1/aspect
+  too far back (33% too loose at 4:3), and `daz_apply_composition_rule`'s
+  thirds and golden-section placements were off by the same factor.
+
 ## [0.9.0] - 2026-11-22
 
 Requires dazpy 2.15.0 or later.

@@ -1,6 +1,6 @@
 # daz-mcp-server
 
-**Version 0.9.0** | MCP Server for DAZ Studio
+**Version 0.10.0** | MCP Server for DAZ Studio
 
 A [Model Context Protocol (MCP)](https://modelcontextprotocol.io) server that exposes DAZ Studio operations to Claude and other MCP clients. Built on [FastMCP](https://github.com/jlowin/fastmcp) and wraps the [DazScriptServer](https://github.com/bluemoonfoundry/daz-script-server) HTTP plugin.
 
@@ -109,6 +109,7 @@ matching dazpy; the plugin is installed separately in Daz Studio
 
 | daz-mcp-server | dazpy | Daz Studio plugin |
 |---|---|---|
+| 0.10.0 | >= 2.16.0 | >= 2.12 |
 | 0.9.0 | >= 2.15.0 | >= 2.12 |
 | 0.8.0 | >= 2.13.0 | >= 2.12 |
 
@@ -2783,7 +2784,7 @@ Automatically creates lighting, cameras, and character positioning based on text
 - `characters` (list[string], optional): Character labels already in scene
 
 **Supported Scene Types:**
-- **"dining" / "dinner" / "meal"** - Dining scene with characters facing across table
+- **"dining" / "dinner" / "meal" / "eat"** - Dining scene with characters facing across table
 - **"interview" / "meeting" / "business"** - Interview setup with professional lighting
 - **"portrait" / "headshot" / "photo"** - Portrait photography with three-point lighting
 - **"conversation" / "talking" / "chat"** - Conversation scene with shot-reverse-shot cameras
@@ -2801,9 +2802,12 @@ Automatically creates lighting, cameras, and character positioning based on text
     "Applied warm romantic lighting"
   ],
   "cameras": [
-    {"label": "Wide Shot", "type": "wide", "purpose": "Establishing shot of dining scene"},
-    {"label": "Over Shoulder 1", "type": "over-shoulder", "purpose": "Conversation angle"}
+    {"label": "MST_Alice-Bob", "shotId": "MST_Alice-Bob", "type": "wide",
+     "purpose": "Establishing shot of the table", "focalLength": 35.0, "position": {...}},
+    {"label": "OTS_Bob_over_Alice", "shotId": "OTS_Bob_over_Alice", "type": "over-shoulder",
+     "purpose": "Conversation angle", "focalLength": 50.0, "position": {...}}
   ],
+  "continuity": [],
   "suggestions": [
     "Add table prop for dining scene",
     "Add plates, glasses, or food props for realism",
@@ -2827,7 +2831,8 @@ daz_create_scene("professional portrait", ["Genesis 9"])
 **What Gets Created:**
 1. Scene-appropriate lighting (2-3 spot lights)
 2. Character positioning based on scene type
-3. Multiple cameras at strategic angles
+3. Template coverage cameras from `dazpy.shot_library`, labelled with shot ids
+   (conversation cameras keep the 180-degree rule; none without a character)
 4. Environment mode set to Scene Only
 5. Actionable suggestions for enhancement
 

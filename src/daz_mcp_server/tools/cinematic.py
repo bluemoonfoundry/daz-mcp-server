@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import json
+import math
 from dataclasses import replace
 from pathlib import Path
 from typing import Any
@@ -9,8 +10,10 @@ from typing import Any
 from fastmcp.exceptions import ToolError
 
 from dazpy import shot_library as sl
+from dazpy.exceptions import NodeNotFoundError
 from dazpy.math3 import Vec3
-from dazpy.shots import Lens, apply_shot
+from dazpy.shots import (CameraKeyframe, Keyframed, Lens, Placement, Sequence, Shot, Storyboard,
+                         apply_shot)
 
 from .._mcp import mcp, _execute_by_id
 from .._client import get_scene
@@ -30,6 +33,51 @@ _VALID_MOODS = frozenset({
 _VALID_COMPOSITION_RULES = frozenset({
     "rule-of-thirds", "center-frame", "golden-ratio", "leading-lines",
 })
+
+#: plan_shot composition rule -> (subject screen x, camera elevation deg or None, note).
+_PLAN_COMPOSITION: dict[str, tuple[float, float | None, str]] = {
+    "rule-of-thirds": (sl.THIRD_X, None, "Subject on the right vertical third"),
+    "center-frame": (0.0, None, "Subject centred: symmetric composition"),
+    "golden-ratio": (sl.GOLDEN_X, None,
+                     "Subject on the right golden section (0.382 / 0.618 split)"),
+    "leading-lines": (-sl.THIRD_X, -10.0,
+                      "Low angle, subject on the left third: the frame leads in"),
+}
+
+_PLAN_DESCRIPTIONS: dict[str, str] = {
+    **{t: _shots.FRAMING_NOTES[s].capitalize() for t, s in _shots.SHOT_TYPES.items()},
+    "two-shot": "Two characters framed together",
+    "over-shoulder": "OTS: foreground shoulder, background face",
+}
+
+#: plan_shot mood -> lighting recommendation.
+_PLAN_MOODS: dict[str, dict[str, Any]] = {
+    "neutral": {"preset": "three-point", "keyAngle": 45, "keyFlux": 4000, "fillRatio": 0.5,
+                "rimRatio": 0.3, "notes": "Balanced, versatile lighting"},
+    "dramatic": {"preset": "rembrandt", "keyAngle": 45, "keyFlux": 6000, "fillRatio": 0.15,
+                 "rimRatio": 0.5, "notes": "High contrast, shadowed fill side"},
+    "happy": {"preset": "butterfly", "keyAngle": 0, "keyFlux": 5000, "fillRatio": 0.6,
+              "rimRatio": 0.4, "notes": "Bright front light, even fill"},
+    "sad": {"preset": "split", "keyAngle": 90, "keyFlux": 2500, "fillRatio": 0.1,
+            "rimRatio": 0.2, "notes": "Low key, deep shadows"},
+    "tense": {"preset": "loop", "keyAngle": 35, "keyFlux": 5500, "fillRatio": 0.2,
+              "rimRatio": 0.6, "notes": "Hard key, strong rim separation"},
+    "romantic": {"preset": "butterfly", "keyAngle": 10, "keyFlux": 1800, "fillRatio": 0.7,
+                 "rimRatio": 0.3, "notes": "Soft, warm, flattering"},
+    "horror": {"preset": "split", "keyAngle": 180, "keyFlux": 1500, "fillRatio": 0.05,
+               "rimRatio": 0.1, "notes": "Under-lit or side-lit, minimal fill"},
+    "action": {"preset": "three-point", "keyAngle": 30, "keyFlux": 7000, "fillRatio": 0.3,
+               "rimRatio": 0.8, "notes": "High energy, strong rim for separation"},
+}
+
+#: Snake-case / short keys accepted in daz_create_storyboard shot dicts.
+_STORYBOARD_ALIASES = {
+    "shot_type": "shotType", "subject": "subjectLabel", "subject_label": "subjectLabel",
+    "partner": "partnerLabel", "partner_label": "partnerLabel", "camera": "cameraLabel",
+    "camera_label": "cameraLabel", "duration": "durationFrames",
+    "duration_frames": "durationFrames",
+    "focal_length": "focalLength",
+}
 
 _VALID_ENV_MODES = {0, 1, 2, 3}
 
@@ -294,7 +342,8 @@ async def daz_create_scene(
         - description: Original description
         - charactersUsed: Number of characters processed
         - actions: List of actions performed (what was set up)
-        - cameras: List of created cameras with type and purpose
+        - cameras: List of {type, purpose, label, shotId, position, focalLength, ...}
+        - continuity: 180-degree-rule issues between the first two characters
         - suggestions: List of suggestions for improving the scene
 
     Example:
@@ -345,11 +394,14 @@ async def daz_create_scene(
            - Interview: Facing each other at interview distance
            - Conversation: Facing at conversation distance (closer than interview)
 
-        3. **Cameras**: Multiple camera angles appropriate for scene
-           - Wide shots for establishing
-           - Medium shots for general coverage
-           - Close-ups for portraits
-           - Over-shoulder for conversations
+        3. **Cameras**: built with ``dazpy.shot_library`` and labelled with their
+           shot ids (``MST_Alice-Bob``, ``OTS_Bob_over_Alice``, ``CU_Alice``...)
+           - Dining: master + over-the-shoulder (2 characters)
+           - Interview: master + medium single (2 characters)
+           - Conversation: shot/reverse-shot pair on one side of the line
+           - Portrait: close-up + medium close-up
+           - Otherwise: wide + medium (master + medium with 2 characters)
+           No characters: no cameras.
 
         4. **Suggestions**: Actionable next steps for scene enhancement
 
@@ -389,10 +441,73 @@ async def daz_create_scene(
     if len(chars) > 10:
         raise ToolError("Too many characters (max 10)")
 
-    return await _execute_by_id("vangard-create-scene", {
+    result = await _execute_by_id("vangard-create-scene", {
         "description": description,
         "characters": chars,
     })
+    result = dict(result or {})
+    scene_type = result.get("sceneType", "generic")
+
+    def _cameras() -> dict[str, Any]:
+        scene = get_scene()
+        positions: dict[str, Vec3] = {}
+        missing = []
+        for label in chars[:2]:
+            try:
+                positions[label] = _shots.subject(scene, label).root
+            except NodeNotFoundError:
+                missing.append(label)
+        plan = _scene_camera_plan(scene_type, list(positions), positions)
+        shots = [s for s, _, _ in plan]
+        cams = sl.apply_coverage(scene, shots, subjects=positions) if shots else {}
+        continuity: list[dict[str, Any]] = []
+        if len(positions) >= 2:
+            keys = list(positions)
+            line = sl.LineOfAction.between(positions, keys[0], keys[1])
+            continuity = _shots.issues(sl.check_axis(shots, line, positions))
+        return {
+            "cameras": [{"type": kind, "purpose": purpose,
+                         **_shots.shot_summary(s, label, positions)}
+                        for (s, kind, purpose), label in zip(plan, cams)],
+            "continuity": continuity,
+            "missing": missing,
+        }
+
+    built = await _shots.run(_cameras)
+    result["cameras"] = built["cameras"]
+    result["continuity"] = built["continuity"]
+    if built["missing"]:
+        result.setdefault("suggestions", []).append(
+            "Characters not found (no cameras for them): " + ", ".join(built["missing"]))
+    return result
+
+
+def _scene_camera_plan(scene_type: str, keys: list[str],
+                       positions: dict[str, Vec3]) -> list[tuple[Shot, str, str]]:
+    """``(shot, type, purpose)`` cameras for a ``daz_create_scene`` template."""
+    if not keys:
+        return []
+    a = keys[0]
+    line = sl.LineOfAction.between(positions, a, keys[1]) if len(keys) >= 2 else None
+    wide = (_shots.size_shot("wide-shot", a, positions), "wide", "Establishing shot")
+    medium = (_shots.size_shot("medium-shot", a, positions), "medium", "Medium framing")
+    if scene_type == "portrait":
+        return [(_shots.size_shot("close-up", a, positions), "close-up", "Face portrait"),
+                (_shots.size_shot("medium-close-up", a, positions, azimuth=sl.SINGLE_OFFSET_DEG),
+                 "medium-close-up", "Head and shoulders")]
+    if line is None:
+        return [wide, medium]
+    if scene_type == "dining":
+        return [(sl.master(line), "wide", "Establishing shot of the table"),
+                (sl.over_the_shoulder(line, a, line.b), "over-shoulder", "Conversation angle")]
+    if scene_type == "interview":
+        return [(sl.master(line), "wide", "Establishing interview setup"),
+                (sl.single(line, a, size="medium"), "medium", "Professional medium shot")]
+    if scene_type == "conversation":
+        ots = sl.shot_reverse_shot(line)
+        return [(ots[0], "over-shoulder", f"Over {a}'s shoulder onto {line.b}"),
+                (ots[1], "over-shoulder", f"Over {line.b}'s shoulder onto {a}")]
+    return [(sl.master(line), "wide", "Establishing shot"), medium]
 
 
 # ---------------------------------------------------------------------------
@@ -506,7 +621,9 @@ async def daz_create_camera_path(
 ) -> dict[str, Any]:
     """Create smooth camera path through multiple waypoints.
 
-    Creates a smooth animated camera path by interpolating between position waypoints.
+    Keys the camera at each waypoint as a ``dazpy.shots.Keyframed`` move;
+    Studio interpolates between the keys. Existing position keys on the
+    camera are cleared first (rotation keys too when aiming at a target).
     Perfect for tracking shots, reveals, and complex camera moves.
 
     Args:
@@ -515,21 +632,22 @@ async def daz_create_camera_path(
             - position: Dict with x, y, z coordinates (world space, cm)
             - frame: Frame number for this waypoint
             Minimum 2 waypoints required. Automatically sorted by frame.
-        easing: Interpolation type (default: "smooth")
-            - "linear": Constant speed between waypoints
-            - "smooth": Ease-in-out (slow start/end, fast middle)
-            - "ease-in": Slow start, fast end
-            - "ease-out": Fast start, slow end
-        aim_at_target: Optional node label to track throughout movement
+        easing: Requested interpolation: "linear", "smooth" (default),
+            "ease-in" or "ease-out". Validated and echoed in the result only:
+            Studio interpolates the keys with its default curve (dazpy has no
+            per-key interpolation control yet). Add waypoints to shape the move.
+        aim_at_target: Optional node label to track: the camera is aimed at
+            it (a figure's eyes, a prop's centre) on every waypoint.
 
     Returns:
         Dict with:
         - camera: Camera label
         - waypointCount: Number of waypoints
         - easing: Easing type used
-        - keyframesSet: Number of keyframes created
+        - keyframesSet: Number of property keys set (3 per waypoint, 6 when aimed)
         - frameRange: {start, end} frame range
-        - aimAtTarget: Target node label if specified
+        - aimAtTarget: Target node label if specified; aimPoint: the point aimed at
+        - shot: the applied shot (``dazpy.shots.Shot.to_dict()``)
 
     Example:
         # Simple 3-waypoint path
@@ -569,10 +687,8 @@ async def daz_create_camera_path(
         daz_create_camera_path("Camera 1", waypoints, easing="linear")
 
     Notes:
-        - Waypoints are automatically sorted by frame
-        - Creates 3 keyframes per waypoint (X, Y, Z translate)
-        - Easing currently applied at DazScript keyframe level
-        - aim_at_target points camera at target throughout path
+        - Waypoints are automatically sorted by frame; frames must be unique
+        - Without aim_at_target the camera's rotation is left as it is
         - Use more waypoints for tighter curves
         - World space coordinates (same as daz_set_property)
         - Good for: dolly shots, crane shots, tracking shots, reveals
@@ -614,12 +730,38 @@ async def daz_create_camera_path(
             f"Valid options: {', '.join(valid_easing)}"
         )
 
-    return await _execute_by_id("vangard-create-camera-path", {
-        "cameraLabel": camera_label,
-        "waypoints": waypoints,
-        "easing": easing,
-        "aimAtTarget": aim_at_target,
-    })
+    ordered = sorted(waypoints, key=lambda wp: wp["frame"])
+    frames = [wp["frame"] for wp in ordered]
+    if len(set(frames)) != len(frames):
+        raise ToolError("Waypoint frames must be unique")
+
+    def _run() -> dict[str, Any]:
+        scene = get_scene()
+        cam = _shots.camera(scene, camera_label)
+        target = _shots.subject(scene, aim_at_target).focus_point if aim_at_target else None
+        keys = tuple(
+            CameraKeyframe(frame=wp["frame"], look_at=target,
+                           position=Vec3(float(wp["position"]["x"]), float(wp["position"]["y"]),
+                                         float(wp["position"]["z"])))
+            for wp in ordered)
+        first = keys[0]
+        shot = Shot(id=sl.shot_name("move", aim_at_target, tag="path"),
+                    camera=Placement(position=first.position, look_at=target),
+                    lens=Lens(focal_length=cam.focal_length or 50.0),
+                    movement=Keyframed(keyframes=keys), frame_range=(first.frame, keys[-1].frame))
+        apply_shot(scene, shot, camera=cam)
+        return {
+            "camera": camera_label,
+            "waypointCount": len(keys),
+            "easing": easing,
+            "keyframesSet": len(keys) * (6 if target is not None else 3),
+            "frameRange": {"start": first.frame, "end": keys[-1].frame},
+            "aimAtTarget": aim_at_target,
+            "aimPoint": _shots.vec(target) if target is not None else None,
+            "shot": shot.to_dict(),
+        }
+
+    return await _shots.run(_run)
 
 
 # ---------------------------------------------------------------------------
@@ -1228,9 +1370,13 @@ async def daz_create_camera_rig(
 ) -> dict[str, Any]:
     """Set up multi-camera rig for bullet-time or simultaneous multi-angle shots.
 
-    Creates multiple cameras arranged in a circle around a center point, all parented
-    to a rig controller. Rotate the rig to orbit all cameras around the subject, or
-    switch between cameras for instant angle changes.
+    Creates multiple cameras arranged in a circle around a center point, each
+    aimed at the centre (``dazpy.shots.Placement`` shots applied with
+    ``dazpy.shot_library.apply_coverage``), all parented to a rig controller
+    group node. Rotate the rig to orbit all cameras around the subject, or
+    switch between cameras for instant angle changes. Running it again with
+    the same rig_name re-aims the existing cameras and rig instead of
+    duplicating them.
 
     Args:
         rig_name: Base name for rig (default: "CameraRig")
@@ -1247,7 +1393,8 @@ async def daz_create_camera_rig(
         - centerPosition: {x, y, z} center point
         - radius: Distance from center
         - cameraCount: Number of cameras
-        - cameras: List of dicts with name, angle, focalLength, heightOffset
+        - cameras: List of dicts with name, label, angle, focalLength,
+          heightOffset, position (world), reused
         - suggestions: List of recommended next steps
 
     Example:
@@ -1287,7 +1434,8 @@ async def daz_create_camera_rig(
         - Animate rig position to move entire camera array
         - Switch between cameras for instant angle changes (bullet-time)
         - Height variation adds subtle vertical offsets for visual interest
-        - Cameras automatically point at center
+          (camera i is raised by sin(0.7 * i) * height_variation)
+        - Cameras point at center; angle 0 is the centre's +Z side
         - If focal_lengths list too short, remaining cameras use 50mm
         - Cameras named RigName_Cam1, RigName_Cam2, etc.
         - Evenly spaced around circle (360° / camera_count)
@@ -1323,14 +1471,48 @@ async def daz_create_camera_rig(
             if fl < 10 or fl > 200:
                 raise ToolError("All focal lengths must be between 10 and 200 mm")
 
-    return await _execute_by_id("vangard-create-camera-rig", {
-        "rigName": rig_name,
-        "centerPosition": center_position,
-        "cameraCount": camera_count,
-        "radius": radius,
-        "heightVariation": height_variation,
-        "focalLengths": focal_lengths,
-    })
+    for key in ("x", "y", "z"):
+        if key not in center_position:
+            raise ToolError("center_position must have x, y, z fields")
+    lenses = [float(f) for f in focal_lengths] + [50.0] * max(0, camera_count - len(focal_lengths))
+    center = Vec3(float(center_position["x"]), float(center_position["y"]),
+                  float(center_position["z"]))
+
+    def _run() -> dict[str, Any]:
+        scene = get_scene()
+        shots, info = [], []
+        for i in range(camera_count):
+            azimuth = i * 360.0 / camera_count
+            height = math.sin(i * 0.7) * height_variation
+            elevation = math.degrees(math.atan2(height, radius))
+            position = _shots.orbit_position(center, azimuth, elevation, math.hypot(radius, height))
+            shots.append(Shot(id=f"{rig_name}_Cam{i + 1}", lens=Lens(focal_length=lenses[i]),
+                              camera=Placement(position=position, look_at=center)))
+            info.append((azimuth, height))
+        existing = {s.id: c for s in shots if (c := _shots.find_camera(scene, s.id)) is not None}
+        cams = sl.apply_coverage(scene, shots, cameras=existing)
+        rig = _shots.group_node(scene, f"{rig_name}_Rig", center)
+        for cam in cams.values():
+            cam.reparent(rig, preserve_world_transform=True)
+        return {
+            "rigName": rig_name,
+            "rigLabel": f"{rig_name}_Rig",
+            "centerPosition": _shots.vec(center),
+            "radius": radius,
+            "cameraCount": camera_count,
+            "cameras": [{"name": s.id, "label": s.id, "angle": round(az, 1),
+                         "focalLength": s.lens.focal_length, "heightOffset": round(h, 1),
+                         "position": _shots.vec(s.camera.position),
+                         "reused": s.id in existing}
+                        for s, (az, h) in zip(shots, info)],
+            "suggestions": [
+                f"Rotate {rig_name}_Rig's YRotate to orbit every camera around the centre",
+                "Animate the rig's translation to move the whole array",
+                "Switch cameras with daz_set_active_camera for instant angle changes",
+            ],
+        }
+
+    return await _shots.run(_run)
 
 
 # ---------------------------------------------------------------------------
@@ -1546,8 +1728,10 @@ async def daz_plan_shot(
     and character placement recommendations.
 
     No changes are made to the scene — this is a pure planning / advisory tool.
-    It reads scene state (figure positions, existing cameras/lights) and returns
-    a step-by-step action plan with recommended tool calls you can execute next.
+    It reads scene state (figure positions, existing cameras/lights), builds the
+    shot with ``dazpy.shot_library`` and returns it (``shot``: a
+    ``dazpy.shots.Shot`` dict, ready for ``apply_shot`` or a scene recipe)
+    with a step-by-step action plan and recommended tool calls.
 
     Args:
         shot_type: Cinematic shot size — one of:
@@ -1555,15 +1739,19 @@ async def daz_plan_shot(
             "medium-full", "full-shot", "wide-shot", "extreme-wide",
             "two-shot", "over-shoulder"
         subject_label: Scene node label for the primary subject (figure or prop).
-            Used to calculate camera distance and aim point. If omitted, scene
-            origin (0, 130, 0) is used as the default eye-level aim point.
+            Framed as a standing figure at its root. If omitted, a figure
+            standing at the scene origin is assumed. "two-shot" and
+            "over-shoulder" pair the subject with the nearest other figure
+            (the OTS looks over that figure's shoulder onto the subject).
         camera_label: Existing camera to use for recommendation context. If provided,
             tool call suggestions reference this camera by name.
         mood: Emotional tone that drives the lighting recommendation — one of:
             "neutral", "dramatic", "happy", "sad", "tense", "romantic",
             "horror", "action"
-        composition_rule: Framing principle for horizontal camera offset — one of:
-            "rule-of-thirds", "center-frame", "golden-ratio", "leading-lines"
+        composition_rule: Where the subject sits in frame — one of:
+            "rule-of-thirds" (right third), "center-frame", "golden-ratio"
+            (right golden section), "leading-lines" (left third, low angle).
+            The camera turns; it does not move.
 
     Returns:
         dict with keys:
@@ -1571,11 +1759,13 @@ async def daz_plan_shot(
         - subject, camera
         - sceneState: {numCameras, numLights, numSkeletons, figures[]}
         - recommendations:
-            - camera: {position, focalLength, distanceFromSubject, horizontalAngle,
-                       verticalAngle, steps[]}
+            - camera: {position, aim, focalLength, distanceFromSubject (to the aim
+                       point), horizontalAngle (0 = subject's +Z front),
+                       verticalAngle (degrees above the aim), steps[]}
             - lighting: {preset, keyFlux, fillFlux, rimFlux, keyAngle, notes, steps[]}
             - character: {steps[]}
             - toolSequence: ordered list of suggested tool calls to execute
+        - shot: the planned shot (``dazpy.shots.Shot.to_dict()``)
 
     Examples:
         # Plan a dramatic close-up
@@ -1604,7 +1794,8 @@ async def daz_plan_shot(
 
     Notes:
         - No scene changes are made; this is a read-only advisory call
-        - Camera position is relative to subject's current world position
+        - Sizes fit the shot type's default lens (24mm wide ... 100mm extreme
+          close-up); the camera stands on the subject's front (+Z) side
         - Lighting flux values assume Iray renderer; adjust for other renderers
         - toolSequence contains copy-pasteable tool call strings with real values
         - Follow up with daz_apply_lighting_preset, daz_orbit_camera_around, etc.
@@ -1625,13 +1816,113 @@ async def daz_plan_shot(
             f"Valid: {', '.join(sorted(_VALID_COMPOSITION_RULES))}"
         )
 
-    return await _execute_by_id("vangard-plan-shot", {
-        "shotType": shot_type,
-        "subjectLabel": subject_label,
-        "cameraLabel": camera_label,
-        "mood": mood,
-        "compositionRule": composition_rule,
-    })
+    def _run() -> dict[str, Any]:
+        scene = get_scene()
+        overview = scene.overview()
+        positions = _shots.figure_positions(scene)
+        if subject_label:
+            subj = _shots.subject(scene, subject_label)
+            key = subject_label
+            positions[key] = subj.root
+        else:
+            key = "origin"
+            positions[key] = Vec3(0.0, 0.0, 0.0)
+        partner = _shots.nearest(positions, key) if shot_type in _shots.PAIR_TYPES else None
+        screen_x, elevation, comp_note = _PLAN_COMPOSITION[composition_rule]
+        composition = {sl.THIRD_X: "right_third", -sl.THIRD_X: "left_third"}.get(screen_x, "center")
+        shot = _shots.size_shot(shot_type, key, positions, partner=partner, elevation=elevation,
+                                composition=composition)
+        position, aim = _shots.pose(shot, positions)
+        if screen_x == sl.GOLDEN_X and shot_type not in _shots.PAIR_TYPES:
+            aim = sl.compose_aim(position, aim, screen_x, shot.lens.focal_length)
+            shot = Shot(id=shot.id, lens=shot.lens,
+                        camera=Placement(position=position, look_at=aim))
+        root = positions[key]
+        azimuth, horizontal = _shots.horizontal_view(position, root, minimum=1.0)
+        vertical = math.degrees(math.atan2(position.y - aim.y, max(horizontal, 1e-6)))
+        light = _PLAN_MOODS[mood]
+        key_flux = light["keyFlux"]
+        fill_flux = round(key_flux * light["fillRatio"])
+        rim_flux = round(key_flux * light["rimRatio"])
+        focal = shot.lens.focal_length
+        p = _shots.vec(position, 0)
+        cam_name = camera_label or "<camera>"
+        camera_steps = [
+            f"Position camera at X={p['x']:.0f} Y={p['y']:.0f} Z={p['z']:.0f}",
+            f"Set focal length to {focal:g}mm",
+            f"Aim camera at X={aim.x:.0f} Y={aim.y:.0f} Z={aim.z:.0f}",
+            comp_note,
+        ]
+        if partner:
+            camera_steps.append(f"Partner for the {shot_type}: {partner}")
+        if shot_type == "two-shot":
+            char_steps = ["Place characters 60-80 cm apart facing each other or 3/4 to camera",
+                          "Ensure both figures share equal frame space"]
+            if partner is None:
+                char_steps.insert(
+                    0, "No second figure in the scene: planned as a medium-wide single")
+        elif shot_type == "over-shoulder":
+            char_steps = [f"Foreground: {partner}'s shoulder frames the near edge" if partner
+                          else "No second figure: planned over the subject's own shoulder",
+                          "Offset subjects horizontally so the background face is clear"]
+        else:
+            char_steps = ["Position subject at the desired world position",
+                          "Genesis figures face +Z; the camera stands on that side at angle 0"]
+        tools: list[str] = []
+        if subject_label and shot_type in _shots.SHOT_TYPES:
+            tools.append(f'daz_frame_shot("{cam_name}", "{subject_label}", "{shot_type}")')
+            if composition_rule != "center-frame":
+                tools.append(f'daz_apply_composition_rule("{cam_name}", "{subject_label}", '
+                             f'"{composition_rule}")')
+        elif subject_label and partner:
+            tools.append(f'daz_create_shot_sequence("shot-reverse-shot", ["{subject_label}", '
+                         f'"{partner}"])')
+        else:
+            tools.append(f'daz_set_property("{cam_name}", "XTranslate", {p["x"]:.0f})  # etc.')
+        tools.append(f'daz_apply_lighting_preset("{light["preset"]}"'
+                     + (f', "{subject_label}"' if subject_label else "") + ")")
+        return {
+            "shotType": shot_type,
+            "shotDescription": _PLAN_DESCRIPTIONS[shot_type],
+            "mood": mood,
+            "compositionRule": composition_rule,
+            "subject": subject_label,
+            "camera": camera_label,
+            "sceneState": {
+                "numCameras": len(overview.get("cameras", [])),
+                "numLights": len(overview.get("lights", [])),
+                "numSkeletons": len(overview.get("figures", [])),
+                "figures": [{"label": k, "position": _shots.vec(v)} for k, v in positions.items()
+                            if k != "origin" or subject_label == "origin"],
+            },
+            "recommendations": {
+                "camera": {
+                    "position": p,
+                    "aim": _shots.vec(aim, 0),
+                    "focalLength": focal,
+                    "distanceFromSubject": round(position.distance(aim), 1),
+                    "horizontalAngle": round(azimuth, 1),
+                    "verticalAngle": round(vertical, 1),
+                    "steps": camera_steps,
+                },
+                "lighting": {
+                    "preset": light["preset"], "keyFlux": key_flux, "fillFlux": fill_flux,
+                    "rimFlux": rim_flux, "keyAngle": light["keyAngle"], "notes": light["notes"],
+                    "steps": [
+                        "Set environment mode to Scene Only (daz_set_property on Environment node)",
+                        f"Key light: {light['keyAngle']} deg from the camera axis, "
+                        f"Flux={key_flux} lm",
+                        f"Fill light: opposite side, Flux={fill_flux} lm",
+                        f"Rim light: behind the subject, Flux={rim_flux} lm",
+                    ],
+                },
+                "character": {"steps": char_steps},
+                "toolSequence": tools,
+            },
+            "shot": shot.to_dict(),
+        }
+
+    return await _shots.run(_run)
 
 
 @mcp.tool()
@@ -1646,10 +1937,11 @@ async def daz_create_storyboard(
     positions it according to shot type, and returns a complete shot list with
     frame ranges and metadata.
 
-    Each shot in the storyboard gets its own camera node in the scene (when
-    save_presets=True), positioned and aimed at the subject. The returned
-    data includes frame ranges for the full timeline and per-shot details
-    ready for rendering or animation.
+    Each shot is built with ``dazpy.shot_library`` and, when save_presets=True,
+    applied to its own camera node. The returned data includes frame ranges
+    for the full timeline, per-shot details, and the whole board as a
+    ``dazpy.shots.Sequence`` dict (``sequence``) whose shots carry their frame
+    range and storyboard text.
 
     Args:
         title: Name for this storyboard (used as camera name prefix).
@@ -1659,15 +1951,22 @@ async def daz_create_storyboard(
                 "medium-shot", "medium-full", "full-shot", "wide-shot",
                 "extreme-wide", "two-shot", "over-shoulder"
             - label (str): Human-readable shot name (e.g. "Scene 1 - Establishing").
-            - subjectLabel (str): Scene node to point camera at.
+            - subjectLabel (str): Scene node to frame (default: a figure at the origin).
+            - partnerLabel (str): Second figure for "two-shot" / "over-shoulder"
+              (the OTS looks over the partner's shoulder onto the subject).
+              Default: the figure nearest the subject.
             - cameraLabel (str): Override camera node name (default: title_Cam1, etc.).
             - durationFrames (int): Shot length in frames (default: frames_per_shot).
             - focalLength (int): Override focal length in mm.
             - distance (int): Override camera-to-subject distance in cm.
-            - angle (int): Horizontal camera angle in degrees (0=front, 90=right).
+            - angle (int): Camera azimuth in degrees around the subject
+              (0 = the subject's +Z front, 90 = its +X side).
             - description (str): Scene description / visual note.
             - action (str): Character action description.
             - dialogue (str): Spoken dialogue for this shot.
+            - notes (str): Free-form notes.
+            snake_case keys (shot_type, subject, partner, camera, duration,
+            focal_length) are accepted too.
         start_frame: First frame of the storyboard timeline (default 0).
         frames_per_shot: Default frame count when durationFrames is not specified
             per shot (default 90 = 3 seconds at 30fps).
@@ -1676,10 +1975,12 @@ async def daz_create_storyboard(
 
     Returns:
         dict with keys: title, totalShots, totalFrames, totalSeconds,
-        startFrame, endFrame, shots[], suggestions[].
-        Each shot entry contains: shotNumber, label, shotType, subject, camera,
-        cameraCreated, focalLength, distance, angle, startFrame, endFrame,
-        durationFrames, durationSeconds, description, action, dialogue.
+        startFrame, endFrame, shots[], cameras[] (labels of applied cameras),
+        sequence (``Sequence.to_dict()``), suggestions[].
+        Each shot entry contains: shotNumber, shotId, label, shotType, subject,
+        camera, cameraCreated, applied, position, focalLength, distance (to the
+        aim point), angle, startFrame, endFrame, durationFrames,
+        durationSeconds, description, action, dialogue.
 
     Examples:
         # 3-shot dialogue scene
@@ -1728,7 +2029,7 @@ async def daz_create_storyboard(
     Notes:
         - Maximum 20 shots per storyboard
         - Camera nodes are named <title>_Cam1, _Cam2, etc. unless overridden
-        - If a camera with the same label already exists, it is reused (not recreated)
+        - If a camera with the same label already exists, it is reused and re-aimed
         - Frame ranges are contiguous: shot N+1 starts at shot N's endFrame + 1
         - Use the suggestions[3] string to set the timeline range before rendering
         - Combine with daz_create_shot_sequence for automatic multi-camera coverage
@@ -1742,22 +2043,115 @@ async def daz_create_storyboard(
     if frames_per_shot < 1:
         raise ToolError("frames_per_shot must be at least 1")
 
-    # Validate shot types
-    for i, shot in enumerate(shots):
-        st = shot.get("shotType", "medium-shot")
+    specs = []
+    for i, raw in enumerate(shots):
+        spec = {_STORYBOARD_ALIASES.get(k, k): v for k, v in raw.items()}
+        st = spec.get("shotType", "medium-shot")
         if st not in _VALID_SHOT_TYPES:
             raise ToolError(
                 f"Shot {i + 1} has invalid shotType '{st}'. "
                 f"Valid: {', '.join(sorted(_VALID_SHOT_TYPES))}"
             )
+        duration = spec.get("durationFrames") or frames_per_shot
+        if not isinstance(duration, int) or duration < 1:
+            raise ToolError(f"Shot {i + 1}: durationFrames must be a positive integer")
+        specs.append({**spec, "shotType": st, "durationFrames": duration})
 
-    return await _execute_by_id("vangard-create-storyboard", {
-        "title": title,
-        "shots": shots,
-        "startFrame": start_frame,
-        "framesPerShot": frames_per_shot,
-        "savePresets": save_presets,
-    })
+    def _run() -> dict[str, Any]:
+        scene = get_scene()
+        figures: dict[str, Vec3] | None = None
+        positions: dict[str, Vec3] = {}
+        built: list[tuple[Shot, str, dict[str, Any]]] = []
+        frame = start_frame
+        for i, spec in enumerate(specs, start=1):
+            st, subj_label = spec["shotType"], spec.get("subjectLabel")
+            if subj_label:
+                positions.setdefault(subj_label, _shots.subject(scene, subj_label).root)
+                key = subj_label
+            else:
+                key = "origin"
+                positions.setdefault(key, Vec3(0.0, 0.0, 0.0))
+            partner = spec.get("partnerLabel")
+            if partner:
+                positions.setdefault(partner, _shots.subject(scene, partner).root)
+            elif st in _shots.PAIR_TYPES and subj_label:
+                if figures is None:
+                    figures = _shots.figure_positions(scene)
+                partner = _shots.nearest({**figures, key: positions[key]}, key)
+                if partner:
+                    positions.setdefault(partner, figures[partner])
+            end = frame + spec["durationFrames"] - 1
+            board = Storyboard(description=spec.get("description") or None,
+                               dialogue=spec.get("dialogue") or None,
+                               beat=spec.get("action") or None, notes=spec.get("notes") or None)
+            size = _shots.SHOT_TYPES.get(st, "two_shot" if st == "two-shot" else "ots")
+            shot = _shots.size_shot(
+                st, key, positions, partner=partner, focal_length=spec.get("focalLength"),
+                distance=spec.get("distance"), azimuth=float(spec.get("angle") or 0.0),
+                shot_id=sl.shot_name(
+                    size, f"{subj_label}-{partner}" if st == "two-shot" and partner else subj_label,
+                    over=partner if st == "over-shoulder" else None, index=i),
+                frame_range=(frame, end), storyboard=board)
+            built.append((shot, spec.get("cameraLabel") or f"{title}_Cam{i}", spec))
+            frame = end + 1
+
+        entries = []
+        for n, (shot, cam_label, spec) in enumerate(built, start=1):
+            created = False
+            if save_presets:
+                cam = _shots.find_camera(scene, cam_label)
+                if cam is None:
+                    cam = scene.create_camera(cam_label)
+                    cam.label = cam_label  # a scripted camera's label is empty on Studio 4
+                    created = True
+                apply_shot(scene, shot, camera=cam, subjects=positions)
+            position, aim = _shots.pose(shot, positions)
+            start, end = shot.frame_range
+            duration = end - start + 1
+            entries.append({
+                "shotNumber": n,
+                "shotId": shot.id,
+                "label": spec.get("label") or f"Shot {n}",
+                "shotType": spec["shotType"],
+                "subject": spec.get("subjectLabel"),
+                "camera": cam_label,
+                "cameraCreated": created,
+                "applied": save_presets,
+                "position": _shots.vec(position),
+                "focalLength": shot.lens.focal_length,
+                "distance": round(position.distance(aim), 1),
+                "angle": spec.get("angle", 0),
+                "startFrame": start,
+                "endFrame": end,
+                "durationFrames": duration,
+                "durationSeconds": round(duration / 30, 1),
+                "description": spec.get("description", ""),
+                "action": spec.get("action", ""),
+                "dialogue": spec.get("dialogue", ""),
+            })
+        total = frame - start_frame
+        sequence = Sequence(id=sl.shot_name("storyboard", tag=title),
+                            shots=tuple(s for s, _, _ in built),
+                            storyboard=Storyboard(description=title))
+        return {
+            "title": title,
+            "totalShots": len(entries),
+            "totalFrames": total,
+            "totalSeconds": round(total / 30, 1),
+            "startFrame": start_frame,
+            "endFrame": frame - 1,
+            "shots": entries,
+            "cameras": [e["camera"] for e in entries] if save_presets else [],
+            "sequence": sequence.to_dict(),
+            "suggestions": [
+                "Use daz_set_active_camera to preview each shot's camera",
+                "Use daz_render_with_camera to render individual shots",
+                "Animate between shots with daz_animate_camera_movement",
+                f"Set scene timeline: daz_set_frame_range({start_frame}, {frame - 1})",
+            ],
+        }
+
+    return await _shots.run(_run)
 
 
 # ---------------------------------------------------------------------------
