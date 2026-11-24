@@ -265,25 +265,8 @@ async def run(fn: Any) -> Any:
 
 
 def group_node(scene: Any, label: str, at: Vec3) -> Any:
-    """The group node labelled *label* (created at *at* when absent), as a ``DazNode``.
-
-    dazpy has no group-node constructor yet, so this is the one inline script
-    the cinematic tools still send.
-    """
-    import json
-
-    from dazpy import DazNode, NodeIdentifier
-    script = f"""(function(){{
-    var label = {json.dumps(label)};
-    var g = Scene.findNodeByLabel(label);
-    if (!g) {{
-        g = new DzGroupNode();
-        g.setName(label);
-        Scene.addNode(g);
-        g.setLabel(label);
-        g.setWSPos(new DzVec3({at.x}, {at.y}, {at.z}));
-    }}
-    return g.getName();
-}})()"""
-    client = scene._client  # pylint: disable=protected-access
-    return DazNode(client, NodeIdentifier(client.execute(script).value))
+    """The group node labelled *label*, created at *at* when absent."""
+    try:
+        return scene.find_node_by_label(label)
+    except NodeNotFoundError:
+        return scene.create_group(label, position=(at.x, at.y, at.z))

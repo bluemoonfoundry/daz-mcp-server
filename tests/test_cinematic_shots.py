@@ -53,7 +53,7 @@ class FakeCamera:
 
 class FakeScene:
     def __init__(self, nodes, cameras=None):
-        self.nodes, self.cameras, self.created = nodes, dict(cameras or {}), []
+        self.nodes, self.cameras, self.created, self.groups = nodes, dict(cameras or {}), [], []
 
     def find_skeleton_by_label(self, label):
         n = self.nodes.get(label)
@@ -85,18 +85,11 @@ class FakeScene:
         return {"figures": [{"name": k, "label": k} for k, n in self.nodes.items() if n.figure],
                 "cameras": [{"name": k, "label": k} for k in self.cameras], "lights": []}
 
-    @property
-    def _client(self):
-        return FakeClient(self)
-
-
-class FakeClient:
-    def __init__(self, scene):
-        self.scene = scene
-
-    def execute(self, script):
-        self.scene.scripts = getattr(self.scene, "scripts", []) + [script]
-        return type("R", (), {"value": "Rig_Rig"})()
+    def create_group(self, name, label=None, position=None):
+        group = FakeNode(position, figure=False)
+        self.groups.append((name, label, position))
+        self.nodes[name if label is None else label] = group
+        return group
 
 
 @pytest.fixture
@@ -140,7 +133,8 @@ async def test_composition_rule_places_eyes_on_the_rule(scene):
     eye = Vec3(0, sl.EYE_HEIGHT_CM, 0)
     fwd = (aim - p).normalize()
     right = fwd.cross(Vec3(0, 1, 0)).normalize()
-    x = (eye - p).dot(right) / (eye - p).dot(fwd) / (36 / 50 / 2)
+    half_width = sl.DEFAULT_FRAME_WIDTH_MM / sl.DEFAULT_ASPECT / 50 / 2  # frame width spans the height
+    x = (eye - p).dot(right) / (eye - p).dot(fwd) / half_width
     assert x == pytest.approx(sl.GOLDEN_X, abs=1e-6)
     assert math.hypot(p.x, p.z) == pytest.approx(300, abs=1e-6)  # kept its distance
     assert out["rule"] == "golden-ratio"
@@ -306,7 +300,15 @@ async def test_camera_rig_aims_every_camera_at_centre(scene):
         assert p.distance(Vec3(0, 100, 0)) == pytest.approx(200)
         assert math.degrees(math.atan2(p.x, p.z)) % 360 == pytest.approx(angle % 360, abs=1e-6)
         assert cam.call("reparent")
-    assert "DzGroupNode" in scene.scripts[0]
+    assert scene.groups == [("Rig_Rig", None, (0.0, 100.0, 0.0))]
+
+
+async def test_camera_rig_reuses_an_existing_group(scene):
+    rig = FakeNode((0, 0, 0), figure=False)
+    scene.nodes["Rig_Rig"] = rig
+    await cinematic.daz_create_camera_rig("Rig", {"x": 0, "y": 100, "z": 0}, camera_count=2)
+    assert scene.groups == []
+    assert all(cam.call("reparent")[0][1] is rig for _, cam in scene.created)
 
 
 async def test_camera_path_keys_waypoints_and_tracks_target(scene):
