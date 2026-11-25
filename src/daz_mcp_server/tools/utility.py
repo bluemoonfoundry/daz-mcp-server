@@ -19,8 +19,9 @@ from .._mcp import (
     _execute_by_id,
     _execute_raw,
 )
-from .._client import get_async_daz_client
-from .._errors import handle_dazpy_error
+from .._client import get_async_daz_client, get_scene
+from .._errors import handle_dazpy_error, run_tool
+from .._validation import validate_scene
 from .._guides import GUIDE_NAMES, guide_index, read_guide
 from .. import _compat
 
@@ -241,6 +242,8 @@ async def daz_find_actions(
         daz_find_actions("ERC Freeze")
         daz_find_actions("DzStrandHairCreateNodeAction")
     """
+    # Stays on its registered script: dazpy has no DzActionMgr API, and this
+    # is read-only discovery (it never triggers an action).
     return await _execute_by_id(
         "vangard-find-actions",
         {"query": query, "maxResults": max_results},
@@ -294,7 +297,26 @@ async def daz_batch_set_properties(
         individually for each operation. All operations execute in a single
         script call to DAZ Studio.
     """
-    return await _execute_by_id("vangard-batch-set-properties", {"operations": operations})
+    ops = []
+    for i, op in enumerate(operations):
+        if not isinstance(op, dict) or not {"nodeLabel", "propertyName", "value"} <= op.keys():
+            raise ToolError(
+                f"operations[{i}] needs nodeLabel, propertyName and value; got {op!r}")
+        ops.append((op["nodeLabel"], op["propertyName"], op["value"]))
+
+    def _run() -> dict[str, Any]:
+        results = []
+        for (node_label, _prop, _value), r in zip(ops, get_scene().set_numeric_properties(ops)):
+            if r.ok:
+                results.append({"success": True, "node": r.node, "property": r.property,
+                                "value": r.value})
+            else:
+                results.append({"success": False, "node": node_label, "error": r.error})
+        ok = sum(1 for r in results if r["success"])
+        return {"results": results, "successCount": ok, "failureCount": len(results) - ok,
+                "total": len(results)}
+
+    return await run_tool(_run)
 
 
 @mcp.tool()
@@ -335,10 +357,18 @@ async def daz_inspect_properties(
             "count": 45
         }
     """
-    return await _execute_by_id("vangard-inspect-properties", {
-        "nodeLabel": node_label,
-        "propertyType": property_type,
-    })
+    kinds = ("all", "numeric", "transform", "morph", "bool", "string")
+    if property_type not in kinds:
+        raise ToolError(f"property_type must be one of {', '.join(kinds)}; got {property_type!r}")
+
+    def _run() -> dict[str, Any]:
+        node = get_scene().resolve_node(node_label)
+        props = [{"label": d.label, "name": d.name, "type": d.type, "value": d.value,
+                  "min": d.min, "max": d.max, "path": d.path, "is_animatable": d.is_animatable}
+                 for d in node.property_details(property_type)]
+        return {"node": node.describe().label, "properties": props, "count": len(props)}
+
+    return await run_tool(_run)
 
 
 @mcp.tool()
@@ -370,16 +400,23 @@ async def daz_get_property_metadata(
             "node": "Spotlight 1"
         }
     """
-    return await _execute_by_id("vangard-get-property-metadata", {
-        "nodeLabel": node_label,
-        "propertyName": property_name,
-    })
+    def _run() -> dict[str, Any]:
+        node = get_scene().resolve_node(node_label)
+        try:
+            d = node.property_detail(property_name)
+        except daz_exc.PropertyNotFoundError as e:
+            raise ToolError(f"Property not found: {property_name} on {node_label}") from e
+        return {"label": d.label, "name": d.name, "type": d.type, "current_value": d.value,
+                "default_value": d.default, "min": d.min, "max": d.max,
+                "is_animatable": d.is_animatable, "path": d.path,
+                "node": node.describe().label}
+
+    return await run_tool(_run)
 
 
 # ---------------------------------------------------------------------------
 # Tools — script / scene validation
 # ---------------------------------------------------------------------------
-
 
 @mcp.tool()
 async def daz_validate_script(script: str) -> dict[str, Any]:
@@ -506,10 +543,17 @@ async def daz_validate_scene() -> dict[str, Any]:
     """Validate the current scene for common issues before rendering.
 
     Checks:
-    - Character/figure bounding box collisions (interpenetration)
-    - Lighting presence and quality
+    - Character/figure bounding box collisions (top-level figures only)
+    - Whether anything lights the render (lights, environment dome/sun, camera
+      headlamp; dazpy ``DazScene.check``), and single-light scenes
+    - Whether each figure is in the active viewport camera's frame
     - Camera presence
     - Empty scene (no figures)
+
+    Issue/warning ``type`` is ``collision``, a dazpy check code (``no_light``,
+    ``no_subject_in_frame``, ``subject_out_of_frame``,
+    ``subject_not_in_frame``), ``poor-lighting``, ``no-camera`` or
+    ``no-figures``. ``findings`` holds the raw dazpy check findings.
 
     Returns a score (0-100) and breakdown by category, plus actionable
     suggestions for any issues found.
@@ -538,11 +582,12 @@ async def daz_validate_scene() -> dict[str, Any]:
                 "figures": 2,
                 "cameras": 1,
                 "lights": 3,
-                "environment_lighting": false
-            }
+                "lit": true
+            },
+            "findings": [...]
         }
     """
-    return await _execute_by_id("vangard-validate-scene")
+    return await run_tool(lambda: validate_scene(get_scene()))
 
 
 # ---------------------------------------------------------------------------
@@ -871,16 +916,14 @@ async def daz_list_macros() -> dict[str, Any]:
 @mcp.tool()
 async def daz_auto_improve_scene() -> dict[str, Any]:
     """Automatically validate the scene and attempt to fix common issues."""
-    validation = await _execute_by_id("vangard-validate-scene")
-    issues = validation.get("issues", []) if isinstance(validation, dict) else []
+    validation = await run_tool(lambda: validate_scene(get_scene()))
     fixed = []
-    for issue in issues:
-        issue_type = issue.get("type", "") if isinstance(issue, dict) else ""
-        if issue_type == "missing_lights":
-            await _execute_by_id(
-                "vangard-create-light", {"lightType": "distant", "label": "Auto Light"}
-            )
-            fixed.append("Added missing light")
+    if any(i["type"] == "no_light" for i in validation["issues"]):
+        def _add_light() -> None:
+            light = get_scene().create_light("distant")
+            light.label = "Auto Light"
+        await run_tool(_add_light)
+        fixed.append("Added missing light")
     return {"validation": validation, "fixed": fixed, "count": len(fixed)}
 
 

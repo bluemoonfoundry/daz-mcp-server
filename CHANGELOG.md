@@ -43,7 +43,22 @@ Requires dazpy 2.17.0 or later, for the new primitives these tools use
     lists internal node names.
 - The material tools use dazpy. A missing-zone error lists the available
   zones, and `daz_set_material_property` reports the value Studio kept.
-- 43 registered scripts are removed (107 to 64), and a unit test fails if any
+- `daz_batch_set_properties`, `daz_inspect_properties`,
+  `daz_get_property_metadata`, `daz_validate_scene` and
+  `daz_auto_improve_scene` use dazpy. Batch set is still one Studio call.
+  `is_animatable` is now right (it was always `false`: the old scripts
+  called a non-existent `isAnimatable()`).
+- `daz_validate_scene` takes lighting and framing from dazpy's
+  `DazScene.check`. Changes:
+  - It no longer reports collisions between a figure and its own eyelashes,
+    tear or mouth (it now checks top-level figures only).
+  - It no longer misreads the environment from `Scene.getNode(1)`.
+  - Issue types for lighting/framing are dazpy check codes (`no_light`,
+    `subject_out_of_frame`, ...) and the raw findings are in `findings`.
+  - `summary.environment_lighting` is replaced by `summary.lit`.
+  - `daz_auto_improve_scene` now adds the missing light. It looked for an
+    issue type validate never emitted.
+- 47 registered scripts are removed (107 to 60), and a unit test fails if any
   registered script is no longer called by a tool.
 
 ### Fixed

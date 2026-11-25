@@ -639,56 +639,6 @@ _INTERACTIVE_POSE_SCRIPT = """\
 # args: {operations: [{nodeLabel, propertyName, value}]}
 # Returns: {results: [{success, node, property, value, error}], successCount, failureCount}
 # Batch property setting with individual error handling for each operation
-_BATCH_SET_PROPERTIES_SCRIPT = """\
-(function(){
-    var args = getArguments()[0] || {};
-    var operations = args.operations || [];
-    var results = [];
-    var successCount = 0;
-    var failureCount = 0;
-
-    for (var i = 0; i < operations.length; i++) {
-        var op = operations[i];
-        var result = { success: false, node: op.nodeLabel };
-
-        try {
-            var n = Scene.findNodeByLabel(op.nodeLabel);
-            if (!n) n = Scene.findNode(op.nodeLabel);
-            if (!n) throw new Error("Node not found: " + op.nodeLabel);
-
-            var prop = null;
-            for (var p = 0; p < n.getNumProperties(); p++) {
-                var pr = n.getProperty(p);
-                if (pr.getLabel() === op.propertyName || pr.getName() === op.propertyName) {
-                    prop = pr;
-                    break;
-                }
-            }
-
-            if (!prop) throw new Error("Property not found: " + op.propertyName);
-            if (!prop.inherits("DzNumericProperty")) throw new Error("Property is not numeric: " + op.propertyName);
-
-            prop.setValue(op.value);
-            result.success = true;
-            result.property = prop.getLabel();
-            result.value = prop.getValue();
-            successCount++;
-        } catch (e) {
-            result.error = e.message || String(e);
-            failureCount++;
-        }
-
-        results.push(result);
-    }
-
-    return {
-        results: results,
-        successCount: successCount,
-        failureCount: failureCount,
-        total: operations.length
-    };
-})()
-"""
 
 # args: {nodeLabels: [string], transforms: {propertyName: value}}
 # Returns: {results: [{success, node, applied, error}], successCount, failureCount}
@@ -1260,105 +1210,10 @@ _RENDER_ANIMATION_SCRIPT = """\
 # args: {nodeLabel, propertyType}
 # propertyType: "all" | "numeric" | "transform" | "bool" | "string"
 # Returns: {node, properties:[{label,name,type,value,min,max,path,is_animatable}], count}
-_INSPECT_PROPERTIES_SCRIPT = """\
-(function(){
-    var args = getArguments()[0] || {};
-    var node = Scene.findNodeByLabel(args.nodeLabel);
-    if (!node) node = Scene.findNode(args.nodeLabel);
-    if (!node) throw new Error("Node not found: " + args.nodeLabel);
-
-    var typeFilter = args.propertyType || "all";
-
-    var TRANSFORM_NAMES = {
-        "XTranslate": 1, "YTranslate": 1, "ZTranslate": 1,
-        "XRotate": 1, "YRotate": 1, "ZRotate": 1,
-        "Scale": 1, "XScale": 1, "YScale": 1, "ZScale": 1
-    };
-
-    var props = [];
-    for (var i = 0; i < node.getNumProperties(); i++) {
-        var prop = node.getProperty(i);
-        var className = prop.className();
-        var isNumeric = prop.inherits("DzNumericProperty");
-        var isBool = className === "DzBoolProperty";
-        var isTransform = TRANSFORM_NAMES[prop.getName()] === 1;
-        var isString = className === "DzStringProperty";
-
-        var include = false;
-        if (typeFilter === "all") include = true;
-        else if (typeFilter === "numeric" && isNumeric) include = true;
-        else if (typeFilter === "transform" && isTransform) include = true;
-        else if (typeFilter === "bool" && isBool) include = true;
-        else if (typeFilter === "string" && isString) include = true;
-        else if (typeFilter === "morph" && isNumeric && !isTransform) include = true;
-
-        if (!include) continue;
-
-        var entry = {
-            label: prop.getLabel(),
-            name: prop.getName(),
-            type: className,
-            path: prop.getPath ? prop.getPath() : "",
-            is_animatable: prop.isAnimatable ? prop.isAnimatable() : false
-        };
-
-        if (isNumeric) {
-            entry.value = prop.getValue();
-            entry.min = prop.getMin ? prop.getMin() : null;
-            entry.max = prop.getMax ? prop.getMax() : null;
-        } else if (isString && prop.getValue) {
-            entry.value = prop.getValue();
-            entry.min = null;
-            entry.max = null;
-        } else {
-            entry.value = null;
-            entry.min = null;
-            entry.max = null;
-        }
-
-        props.push(entry);
-    }
-
-    return { node: node.getLabel(), properties: props, count: props.length };
-})()
-"""
 
 # args: {nodeLabel, propertyName}
 # Returns: {label, name, type, current_value, default_value, min, max,
 #           is_animatable, path}
-_GET_PROPERTY_METADATA_SCRIPT = """\
-(function(){
-    var args = getArguments()[0] || {};
-    var node = Scene.findNodeByLabel(args.nodeLabel);
-    if (!node) node = Scene.findNode(args.nodeLabel);
-    if (!node) throw new Error("Node not found: " + args.nodeLabel);
-
-    var prop = null;
-    for (var i = 0; i < node.getNumProperties(); i++) {
-        var p = node.getProperty(i);
-        if (p.getLabel() === args.propertyName || p.getName() === args.propertyName) {
-            prop = p; break;
-        }
-    }
-    if (!prop) throw new Error("Property not found: " + args.propertyName +
-                                " on " + args.nodeLabel);
-
-    var isNumeric = prop.inherits("DzNumericProperty");
-
-    return {
-        label: prop.getLabel(),
-        name: prop.getName(),
-        type: prop.className(),
-        current_value: isNumeric ? prop.getValue() : null,
-        default_value: (isNumeric && prop.getDefaultValue) ? prop.getDefaultValue() : null,
-        min: (isNumeric && prop.getMin) ? prop.getMin() : null,
-        max: (isNumeric && prop.getMax) ? prop.getMax() : null,
-        is_animatable: prop.isAnimatable ? prop.isAnimatable() : false,
-        path: prop.getPath ? prop.getPath() : "",
-        node: node.getLabel()
-    };
-})()
-"""
 
 # ---------------------------------------------------------------------------
 # Phase 1: Lighting Preset Script
@@ -1513,119 +1368,6 @@ _APPLY_LIGHTING_PRESET_SCRIPT = """\
 # args: none
 # Returns: {valid, issues:[{type,severity,nodes,description,suggestion}],
 #           warnings:[...], score, score_breakdown}
-_VALIDATE_SCENE_SCRIPT = """\
-(function(){
-    var args = getArguments()[0] || {};
-    var issues = [];
-    var warnings = [];
-
-    // --- 1. Collision detection between figures (bounding box AABB) ---
-    var figures = [];
-    for (var i = 0; i < Scene.getNumSkeletons(); i++) {
-        var skel = Scene.getSkeleton(i);
-        var bb = skel.getWSBoundingBox();
-        figures.push({ label: skel.getLabel(), bb: bb });
-    }
-
-    for (var a = 0; a < figures.length; a++) {
-        for (var b = a + 1; b < figures.length; b++) {
-            var f1 = figures[a];
-            var f2 = figures[b];
-            var overlapX = Math.min(f1.bb.maxX, f2.bb.maxX) - Math.max(f1.bb.minX, f2.bb.minX);
-            var overlapY = Math.min(f1.bb.maxY, f2.bb.maxY) - Math.max(f1.bb.minY, f2.bb.minY);
-            var overlapZ = Math.min(f1.bb.maxZ, f2.bb.maxZ) - Math.max(f1.bb.minZ, f2.bb.minZ);
-
-            if (overlapX > 0 && overlapY > 0 && overlapZ > 0) {
-                var depth = Math.round(Math.min(overlapX, overlapY, overlapZ));
-                issues.push({
-                    type: "collision",
-                    severity: "high",
-                    nodes: [f1.label, f2.label],
-                    description: f1.label + " and " + f2.label +
-                                 " bounding boxes overlap by ~" + depth + " cm",
-                    suggestion: "Move one character away to resolve interpenetration"
-                });
-            }
-        }
-    }
-
-    // --- 2. Lighting checks ---
-    var numLights = Scene.getNumLights();
-    var envNode = Scene.getNode(1);
-    var envMode = envNode ? envNode.findProperty("Environment Mode") : null;
-    var envModeVal = envMode ? envMode.getValue() : 0;
-    var hasEnvLight = (envModeVal !== 3);  // not scene-only → env dome contributes
-
-    if (numLights === 0 && !hasEnvLight) {
-        issues.push({
-            type: "no-lights",
-            severity: "high",
-            nodes: [],
-            description: "Scene has no lights and environment lighting is disabled",
-            suggestion: "Use daz_apply_lighting_preset('three-point') to add lights"
-        });
-    } else if (numLights === 1) {
-        warnings.push({
-            type: "poor-lighting",
-            severity: "medium",
-            description: "Scene has only one light source, may cause harsh shadows",
-            suggestion: "Add a fill light at low intensity to soften shadows"
-        });
-    }
-
-    // --- 3. Camera framing check ---
-    var numCameras = Scene.getNumCameras();
-    if (numCameras === 0) {
-        warnings.push({
-            type: "no-camera",
-            severity: "medium",
-            description: "Scene has no cameras (will use default perspective view)",
-            suggestion: "Add a camera with daz_execute('var c = new DzBasicCamera(); Scene.addNode(c);')"
-        });
-    }
-
-    // --- 4. Empty scene check ---
-    var numFigures = Scene.getNumSkeletons();
-    if (numFigures === 0) {
-        warnings.push({
-            type: "no-figures",
-            severity: "low",
-            description: "Scene has no figures/characters",
-            suggestion: "Load a character with daz_load_file()"
-        });
-    }
-
-    // --- Score calculation ---
-    var lightScore = 100;
-    if (numLights === 0 && !hasEnvLight) lightScore = 0;
-    else if (numLights === 1) lightScore = 50;
-
-    var collisionScore = issues.filter(function(i){ return i.type === "collision"; }).length === 0 ? 100 : 30;
-    var cameraScore = numCameras > 0 ? 100 : 60;
-    var figureScore = numFigures > 0 ? 100 : 60;
-
-    var score = Math.round((lightScore + collisionScore + cameraScore + figureScore) / 4);
-
-    return {
-        valid: issues.length === 0,
-        issues: issues,
-        warnings: warnings,
-        score: score,
-        score_breakdown: {
-            lighting: lightScore,
-            collision: collisionScore,
-            camera: cameraScore,
-            figures: figureScore
-        },
-        summary: {
-            figures: numFigures,
-            cameras: numCameras,
-            lights: numLights,
-            environment_lighting: hasEnvLight
-        }
-    };
-})()
-"""
 
 # args: {preset, maxSamples, renderQuality}
 # Returns: {preset, propertiesSet: [{property, value}], note}
@@ -5418,10 +5160,6 @@ _REGISTRY: dict[str, tuple[str, str]] = {
         "Coordinate two characters for interactive poses (hug, handshake, etc)",
         _INTERACTIVE_POSE_SCRIPT,
     ),
-    "vangard-batch-set-properties": (
-        "Set multiple properties on one or more nodes with individual error handling",
-        _BATCH_SET_PROPERTIES_SCRIPT,
-    ),
     "vangard-set-active-camera": (
         "Set which camera is active in the viewport",
         _SET_ACTIVE_CAMERA_SCRIPT,
@@ -5458,24 +5196,10 @@ _REGISTRY: dict[str, tuple[str, str]] = {
         "Render animation frame range as image sequence",
         _RENDER_ANIMATION_SCRIPT,
     ),
-    # Phase 1: Property introspection
-    "vangard-inspect-properties": (
-        "List all properties on a node with metadata (type, value, min, max)",
-        _INSPECT_PROPERTIES_SCRIPT,
-    ),
-    "vangard-get-property-metadata": (
-        "Get detailed metadata for a single property on a node",
-        _GET_PROPERTY_METADATA_SCRIPT,
-    ),
     # Phase 1: Lighting presets
     "vangard-apply-lighting-preset": (
         "Create a professional lighting setup (three-point, rembrandt, butterfly, split, loop)",
         _APPLY_LIGHTING_PRESET_SCRIPT,
-    ),
-    # Phase 1: Scene validation
-    "vangard-validate-scene": (
-        "Validate scene for common issues: collisions, lighting, camera, figure presence",
-        _VALIDATE_SCENE_SCRIPT,
     ),
     # Phase 1.5: Render quality preset (used by daz_set_render_quality)
     "vangard-set-render-quality": (
