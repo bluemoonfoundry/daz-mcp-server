@@ -22,13 +22,22 @@ a running DAZ Studio 6 instance:
 """
 from __future__ import annotations
 
+import asyncio
 from typing import Any
 
-from .._mcp import mcp, _execute_by_id, _execute_by_id_async
+from .. import _ui_automation
+from .._client import get_scene
+from .._errors import run_tool
+from .._mcp import mcp, _execute_by_id_async
+from .render import daz_wait_for_request
 
 
 @mcp.tool()
-async def daz_create_strand_hair(target_node_label: str) -> dict[str, Any]:
+async def daz_create_strand_hair(
+    target_node_label: str,
+    auto_confirm: bool = False,
+    dialog_timeout: float = 30.0,
+) -> dict[str, Any]:
     """Create a native Strand-Based Hair node fit to a target figure.
 
     Triggers DAZ Studio's own ``DzStrandHairCreateNodeAction`` (the same
@@ -63,17 +72,32 @@ async def daz_create_strand_hair(target_node_label: str) -> dict[str, Any]:
     Args:
         target_node_label: Display label of the figure to grow hair on
             (e.g. ``"Genesis 8 Female"``). Must already be in the scene.
+        auto_confirm: Click the confirmation dialog's Accept button through
+            Windows UI Automation (needs ``pywinauto`` and this server on the
+            same machine as DAZ Studio), wait for the result and return it.
+            Default ``False``: a human confirms, as described above.
+        dialog_timeout: Seconds to wait for the dialog with ``auto_confirm``.
 
     Returns:
         ``{"request_id": "script-XXXXXXXX", "status": "queued", "submitted_at": "..."}``
+        (with ``auto_confirm``: the request's final result)
 
     Examples:
         daz_create_strand_hair("Genesis 8 Female")
     """
-    return await _execute_by_id_async(
+    # Stays a registered script: DzStrandHairCreateNodeAction opens a modal
+    # confirmation dialog (only a human or UI automation can accept it).
+    if auto_confirm:
+        _ui_automation._require_pywinauto()  # pylint: disable=protected-access
+    submitted = await _execute_by_id_async(
         "vangard-create-strand-hair",
         {"targetNodeLabel": target_node_label},
     )
+    if not auto_confirm:
+        return submitted
+    await asyncio.to_thread(_ui_automation.drive_strand_hair_create, dialog_timeout)
+    return await daz_wait_for_request(submitted["request_id"], poll_interval_seconds=1.0,
+                                      timeout_seconds=dialog_timeout + 60)
 
 
 @mcp.tool()
@@ -100,4 +124,8 @@ async def daz_list_strand_hair_nodes() -> dict[str, Any]:
         #     "target": "Genesis 8 Female", "has_geometry": true,
         #     "materials": [""]}]}
     """
-    return await _execute_by_id("vangard-list-strand-hair-nodes")
+    def _run() -> dict[str, Any]:
+        nodes = get_scene().strand_hair_nodes()
+        return {"count": len(nodes), "nodes": nodes}
+
+    return await run_tool(_run)

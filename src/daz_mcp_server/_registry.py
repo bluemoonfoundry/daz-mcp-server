@@ -287,76 +287,6 @@ _RESOLVE_NODE_JS = """\
 # Phase 2 script constants
 # ---------------------------------------------------------------------------
 
-_LIST_CATEGORIES_SCRIPT = """\
-(function(){
-    var args = getArguments()[0] || {};
-    var contentMgr = App.getContentMgr();
-    var parentPath = (args.parentPath || "").replace(/^\\/|\\/$/g, "");
-    var categories = [];
-    var seen = {};
-
-    for (var i = 0; i < contentMgr.getNumContentDirectories(); i++) {
-        var dir = contentMgr.getContentDirectory(i);
-        if (!dir) continue;
-        var basePath = dir.fullPath;
-        var searchPath = parentPath ? basePath + "/" + parentPath : basePath;
-        var d = new DzDir(searchPath);
-        if (!d.exists()) continue;
-
-        var subdirs = d.entryList([], DzDir.Dirs | DzDir.NoDotAndDotDot);
-        for (var j = 0; j < subdirs.length; j++) {
-            var name = subdirs[j];
-            if (seen[name]) continue;
-            seen[name] = true;
-            var subdir = new DzDir(d.absoluteFilePath(name));
-            var dufFiles = subdir.entryList(["*.duf"], DzDir.Files);
-            categories.push({
-                name: name,
-                path: parentPath ? parentPath + "/" + name : name,
-                duf_count: dufFiles.length
-            });
-        }
-    }
-
-    categories.sort(function(a, b) { return a.name < b.name ? -1 : a.name > b.name ? 1 : 0; });
-    return {parent: args.parentPath || "/", categories: categories, count: categories.length};
-})()
-"""
-
-_BROWSE_CATEGORY_SCRIPT = """\
-(function(){
-    var args = getArguments()[0] || {};
-    var contentMgr = App.getContentMgr();
-    var categoryPath = (args.categoryPath || "").replace(/^\\/|\\/$/g, "");
-    var items = [];
-    var seen = {};
-
-    for (var i = 0; i < contentMgr.getNumContentDirectories(); i++) {
-        var dir = contentMgr.getContentDirectory(i);
-        if (!dir) continue;
-        var basePath = dir.fullPath;
-        var searchPath = categoryPath ? basePath + "/" + categoryPath : basePath;
-        var d = new DzDir(searchPath);
-        if (!d.exists()) continue;
-
-        var files = d.entryList(["*.duf"], DzDir.Files);
-        for (var j = 0; j < files.length; j++) {
-            var fname = files[j];
-            if (seen[fname]) continue;
-            seen[fname] = true;
-            items.push({
-                name: fname.replace(/\\.duf$/i, ""),
-                filename: fname,
-                full_path: searchPath + "/" + fname
-            });
-        }
-    }
-
-    items.sort(function(a, b) { return a.name < b.name ? -1 : a.name > b.name ? 1 : 0; });
-    return {category: args.categoryPath || "/", items: items, count: items.length};
-})()
-"""
-
 
 # args: {char1Label, char2Label,
 #        dialogueBeats: [{speaker, startFrame, endFrame, emotion, gesture?}]}
@@ -811,246 +741,8 @@ _ERC_FREEZE_SCRIPT = "(function(){\n" + _RESOLVE_NODE_JS + """
 """
 
 # Content-Library Prop/Figure Support Asset export
-_SAVE_PROP_ASSET_SCRIPT = "(function(){\n" + _RESOLVE_NODE_JS + """
-    var args = getArguments()[0] || {};
-    if (typeof DzNodeSupportAssetFilter !== "function") {
-        throw new Error("DzNodeSupportAssetFilter is not available in this DAZ Studio version.");
-    }
-    if (!args.outputPath) throw new Error("outputPath is required");
-    var node = resolveNode(args.nodeLabel);
-
-    // Normalize slashes for prefix comparison against configured content directories.
-    function norm(p) { return String(p).replace(/\\\\/g, "/").toLowerCase(); }
-    var outNorm = norm(args.outputPath);
-
-    var contentMgr = App.getContentMgr();
-    var baseDataPath = null;
-    var n = contentMgr.getNumContentDirectories();
-    var dirs = [];
-    for (var i = 0; i < n; i++) {
-        var dir = contentMgr.getContentDirectoryPath(i);
-        dirs.push(dir);
-        var dirNorm = norm(dir);
-        if (outNorm.indexOf(dirNorm) === 0) { baseDataPath = dir; }
-    }
-    if (!baseDataPath) {
-        throw new Error(
-            "outputPath must be inside a configured DAZ content directory. outputPath=" +
-            args.outputPath + " ; configured directories: " + dirs.join(", ")
-        );
-    }
-
-    var filter = new DzNodeSupportAssetFilter();
-    filter.setNode(node);
-
-    var settings = new DzFileIOSettings();
-    filter.getDefaultOptions(settings);
-    settings.setStringValue("RunSilent", "yes");
-    settings.setStringValue("BaseDataPath", baseDataPath);
-    settings.setStringValue("VendorName", args.vendorName || "Author");
-    settings.setStringValue("ProductName", args.productName || "Product");
-    settings.setStringValue("ItemName", args.itemName || node.getLabel());
-    if (args.category) settings.setStringValue("Category", args.category);
-    if (args.compatibilityBase) settings.setStringValue("CompatibilityBase", args.compatibilityBase);
-    if (args.compatibleWith) settings.setStringValue("CompatibleWith", args.compatibleWith);
-    if (args.smartParent !== undefined) settings.setStringValue("SmartParentProp", args.smartParent ? "yes" : "no");
-    if (args.writeGeometry !== undefined) settings.setStringValue("WriteGeometryDef", args.writeGeometry ? "yes" : "no");
-    if (args.writeParameters !== undefined) settings.setStringValue("WriteParameterDefs", args.writeParameters ? "yes" : "no");
-    if (args.writeUvs !== undefined) settings.setStringValue("WriteUVDefs", args.writeUvs ? "yes" : "no");
-    if (args.forceUniqueIds !== undefined) settings.setStringValue("ForceUniqueIDs", args.forceUniqueIds ? "yes" : "no");
-    if (args.compressOutput !== undefined) settings.setStringValue("CompressOutput", args.compressOutput ? "yes" : "no");
-
-    var err = filter.doSave(settings, args.outputPath, "");
-    var errCode = (err && typeof err.valueOf === "function") ? err.valueOf() : err;
-    if (errCode) {
-        throw new Error("DzNodeSupportAssetFilter.doSave failed (error code " + errCode + ") for node " + node.getLabel());
-    }
-
-    return {
-        success: true,
-        node: node.getLabel(),
-        outputPath: args.outputPath,
-        baseDataPath: baseDataPath,
-        vendorName: args.vendorName || "Author",
-        productName: args.productName || "Product",
-        itemName: args.itemName || node.getLabel()
-    };
-})()
-"""
 
 # Phase 6.12: Morph Loader Pro
-_LOAD_MORPH_PRO_SCRIPT = "(function(){\n" + _RESOLVE_NODE_JS + """
-    var args = getArguments()[0] || {};
-    if (typeof DzMorphLoader !== "function") {
-        throw new Error("DzMorphLoader is not available (enable the Morph Loader Pro plugin)");
-    }
-    if (!args.objPath) throw new Error("objPath is required");
-    var node = resolveNode(args.nodeLabel);
-
-    var LOAD_MODES = {
-        EntireFigure: 0, SelectedNodes: 1, PrimaryNode: 2,
-        SingleSkinFigure: 3, SingleSkinFigureFromGraft: 4
-    };
-    var MIRROR_TYPES = {
-        DoNotMirror: 0, XSwap: 1, XPosToNeg: 2, XNegToPos: 3,
-        YSwap: 4, YPosToNeg: 5, YNegToPos: 6, ZSwap: 7, ZPosToNeg: 8, ZNegToPos: 9
-    };
-    var OVERWRITE_MODES = { MakeUnique: 0, DeltasAndERCLinks: 1, DeltasOnly: 2 };
-    var SUBD_MAPPINGS = { Catmark: 0, FacetOrder: 1, ZBrushCage: 2, MudboxCage: 3 };
-    var ERC_TYPES = {
-        ERCDeltaAdd: 0, ERCDivideInto: 1, ERCDivideBy: 2,
-        ERCMultiply: 3, ERCSubtract: 4, ERCAdd: 5, ERCKeyed: 6
-    };
-
-    function lookupEnum(table, name, label) {
-        if (table[name] === undefined) {
-            var valid = [];
-            for (var k in table) valid.push(k);
-            throw new Error("Unknown " + label + ": " + name + ". Valid: " + valid.join(", "));
-        }
-        return table[name];
-    }
-
-    function matchName(item, name) {
-        return item.getLabel() === name || item.getName() === name;
-    }
-
-    function findProp(searchNode, name) {
-        var i, pr, obj, m, ch, j;
-        for (i = 0; i < searchNode.getNumProperties(); i++) {
-            pr = searchNode.getProperty(i);
-            if (matchName(pr, name)) return pr;
-        }
-        obj = (typeof searchNode.getObject === "function") ? searchNode.getObject() : null;
-        if (!obj || typeof obj.getNumModifiers !== "function") return null;
-        for (i = 0; i < obj.getNumModifiers(); i++) {
-            m = obj.getModifier(i);
-            if (!m) continue;
-            if (matchName(m, name) && typeof m.getValueChannel === "function") {
-                ch = m.getValueChannel();
-                if (ch) return ch;
-            }
-            if (typeof m.getNumProperties === "function") {
-                for (j = 0; j < m.getNumProperties(); j++) {
-                    pr = m.getProperty(j);
-                    if (matchName(pr, name)) return pr;
-                }
-            }
-        }
-        return null;
-    }
-
-    var loader = new DzMorphLoader();
-    loader.setFilename(args.objPath);
-    if (args.morphName) loader.setMorphName(String(args.morphName));
-
-    var loadModeVal = lookupEnum(LOAD_MODES, args.loadMode || "EntireFigure", "loadMode");
-    var okMode = loader.setLoadMode(loadModeVal, node);
-    if (!okMode) {
-        throw new Error("setLoadMode failed for mode " + args.loadMode + " on node " + node.getLabel());
-    }
-
-    loader.setOverwriteExisting(lookupEnum(OVERWRITE_MODES, args.overwriteMode || "MakeUnique", "overwriteMode"));
-    loader.setMorphMirroring(lookupEnum(MIRROR_TYPES, args.mirroring || "DoNotMirror", "mirroring"));
-
-    if (args.preserveExistingDeltas !== undefined) loader.setPreserveExistingDeltas(!!args.preserveExistingDeltas);
-    if (args.cleanUpOrphans !== undefined) loader.setCleanUpOrphans(!!args.cleanUpOrphans);
-    if (args.deltaTolerance !== undefined && args.deltaTolerance !== null) {
-        loader.setDeltaTolerance(parseFloat(args.deltaTolerance));
-    }
-
-    if (args.subdivision !== undefined) loader.setMorphSubdivision(!!args.subdivision);
-    if (args.subdivisionMapping) {
-        loader.setSubdivisionMapping(lookupEnum(SUBD_MAPPINGS, args.subdivisionMapping, "subdivisionMapping"));
-    }
-    if (args.subdivisionMinResolution !== undefined && args.subdivisionMinResolution !== null) {
-        loader.setSubdivisionMinResolution(parseInt(args.subdivisionMinResolution, 10));
-    }
-    if (args.subdivisionMaxResolution !== undefined && args.subdivisionMaxResolution !== null) {
-        loader.setSubdivisionMaxResolution(parseInt(args.subdivisionMaxResolution, 10));
-    }
-    if (args.subdivisionBuiltResolution !== undefined && args.subdivisionBuiltResolution !== null) {
-        loader.setSubdivisionBuiltResolution(parseInt(args.subdivisionBuiltResolution, 10));
-    }
-    if (args.subdivisionSmoothCage !== undefined) loader.setSubdivisionSmoothCage(!!args.subdivisionSmoothCage);
-
-    if (args.attenuateStrength !== undefined && args.attenuateStrength !== null) {
-        loader.setAttenuateStrength(parseFloat(args.attenuateStrength));
-    }
-    if (args.attenuateEdgeStrength !== undefined && args.attenuateEdgeStrength !== null) {
-        loader.setAttenuateEdgeStrength(parseFloat(args.attenuateEdgeStrength));
-    }
-    if (args.attenuateMapPath) loader.setAttenuateMapPath(String(args.attenuateMapPath));
-
-    if (args.propertyGroupPath) loader.setPropertyGroupPath(String(args.propertyGroupPath));
-    if (args.hideSecondaryProperties !== undefined) loader.setHideSecondaryProperties(!!args.hideSecondaryProperties);
-
-    // Attention (SDK docs): applyReverseDeformationsPose() must run before createMorph().
-    if (args.reverseDeformations) {
-        loader.setReverseDeformations(true);
-        if (args.reverseDeformationsPosePath) {
-            loader.setReverseDeformationsPose(String(args.reverseDeformationsPosePath));
-        }
-        var okPose = loader.applyReverseDeformationsPose();
-        if (!okPose) {
-            throw new Error("applyReverseDeformationsPose() failed — check reverseDeformationsPosePath");
-        }
-    }
-
-    var controlPropLabel = null;
-    if (args.createControlProperty) {
-        if (!args.controlPropertyName) {
-            throw new Error("controlPropertyName is required when createControlProperty is true");
-        }
-        var controlNode = args.controlNodeLabel ? resolveNode(args.controlNodeLabel) : node;
-        var controlProp = findProp(controlNode, args.controlPropertyName);
-        if (!controlProp) {
-            throw new Error("Control property not found: " + args.controlPropertyName + " on " + controlNode.getLabel());
-        }
-        if (!controlProp.inherits("DzNumericProperty")) {
-            throw new Error("Control property is not numeric: " + args.controlPropertyName);
-        }
-        loader.setCreateControlProperty(true);
-        loader.setControlNode(controlNode);
-        loader.setControlProperty(controlProp);
-        controlPropLabel = controlProp.getLabel();
-        if (args.controlPropertyCustomLabel) {
-            loader.setControlPropertyUseCustomLabel(true);
-            loader.setControlPropertyCustomLabel(String(args.controlPropertyCustomLabel));
-        }
-        if (args.controlPropertyErcType) {
-            loader.setControlPropertyERCType(
-                lookupEnum(ERC_TYPES, args.controlPropertyErcType, "controlPropertyErcType")
-            );
-        }
-        if (args.controlPropertyErcCustomValue !== undefined && args.controlPropertyErcCustomValue !== null) {
-            loader.setControlPropertyERCUseCustomValue(true);
-            loader.setControlPropertyERCCustomValue(parseFloat(args.controlPropertyErcCustomValue));
-        }
-    }
-
-    var settings = new DzFileIOSettings();
-    settings.setFloatValue("Scale", args.scale !== undefined ? parseFloat(args.scale) : 1.0);
-    settings.setIntValue("RunSilent", 1);
-
-    var onlyErrorsOrWarnings = args.onlyErrorsOrWarnings !== undefined ? !!args.onlyErrorsOrWarnings : true;
-    var log = loader.createMorph(settings, node, onlyErrorsOrWarnings, true);
-
-    var resolvedMorphName = loader.getMorphName();
-
-    return {
-        success: true,
-        node: node.getLabel(),
-        file: args.objPath,
-        morphName: resolvedMorphName,
-        loadMode: args.loadMode || "EntireFigure",
-        overwriteMode: args.overwriteMode || "MakeUnique",
-        mirroring: args.mirroring || "DoNotMirror",
-        controlProperty: controlPropLabel,
-        log: log || ""
-    };
-})()
-"""
 
 _CREATE_STRAND_HAIR_SCRIPT = """\
 (function(){
@@ -1112,39 +804,6 @@ _CREATE_STRAND_HAIR_SCRIPT = """\
 })()
 """
 
-_LIST_STRAND_HAIR_NODES_SCRIPT = """\
-(function(){
-    var result = [];
-    for (var i = 0; i < Scene.getNumNodes(); i++) {
-        var n = Scene.getNode(i);
-        if (!n.inherits("DzStrandHairNode")) continue;
-
-        var target = n.getTargetNode();
-        var obj = n.getObject();
-        var hasGeometry = !!obj;
-        var materials = [];
-        if (obj) {
-            var shape = obj.getCurrentShape();
-            if (shape) {
-                for (var m = 0; m < shape.getNumMaterials(); m++) {
-                    var mat = shape.getMaterial(m);
-                    var lbl = (typeof mat.getLabel === "function") ? mat.getLabel() : mat.getName();
-                    materials.push(lbl || mat.getName());
-                }
-            }
-        }
-
-        result.push({
-            label: n.getLabel(),
-            name: n.getName(),
-            target: target ? target.getLabel() : null,
-            has_geometry: hasGeometry,
-            materials: materials
-        });
-    }
-    return { count: result.length, nodes: result };
-})()
-"""
 
 # Phase 6.12: Wearable Preset save trigger (Bug-Katalog #22 Teil 2)
 # Selects the target figure and fires DzWearablesAssetFilterAction. This
@@ -1170,15 +829,6 @@ _TRIGGER_WEARABLE_SAVE_SCRIPT = "(function(){\n" + _RESOLVE_NODE_JS + """
 # Registry entries: script_id → (description, script_text)
 # Registered with DazScriptServer on startup so high-level tools call by ID.
 _REGISTRY: dict[str, tuple[str, str]] = {
-    # Phase 2: Content library
-    "vangard-list-categories": (
-        "List content library subdirectories under a parent path across all content directories",
-        _LIST_CATEGORIES_SCRIPT,
-    ),
-    "vangard-browse-category": (
-        "List .duf files in a content library category path across all content directories",
-        _BROWSE_CATEGORY_SCRIPT,
-    ),
     # Phase 6.6: Scene export
     "vangard-import-obj": (
         "Import a Wavefront OBJ with Scale=1 and RunSilent (no options dialog)",
@@ -1192,30 +842,12 @@ _REGISTRY: dict[str, tuple[str, str]] = {
         "Headless ERC Freeze via DzERCFreeze (Property Hierarchy plugin), not DzERCFreezeAction",
         _ERC_FREEZE_SCRIPT,
     ),
-    "vangard-save-prop-asset": (
-        "Save a node as a DSON Figure/Prop Support Asset (.duf + .dsf geometry) into "
-        "a configured content directory via DzNodeSupportAssetFilter — headless "
-        "equivalent of File > Save As > Support Asset > Prop Asset",
-        _SAVE_PROP_ASSET_SCRIPT,
-    ),
-    # Phase 6.12: Morph Loader Pro
-    "vangard-load-morph-pro": (
-        "Load an OBJ morph target onto a node via DzMorphLoader (Morph Loader Pro "
-        "plugin) — full option set: load mode, mirroring, overwrite mode, reverse "
-        "deformations, subdivision mapping, attenuation maps, ERC control property",
-        _LOAD_MORPH_PRO_SCRIPT,
-    ),
     # Phase 6.13: Strand-Based Hair
     "vangard-create-strand-hair": (
         "Create a native Strand-Based Hair node fit to a target figure via "
         "DzStrandHairCreateNodeAction. BLOCKS on a DAZ Studio confirmation "
         "dialog the user must click — always submit via the async endpoint",
         _CREATE_STRAND_HAIR_SCRIPT,
-    ),
-    "vangard-list-strand-hair-nodes": (
-        "List every DzStrandHairNode in the scene with its target figure and "
-        "whether it has generated geometry yet",
-        _LIST_STRAND_HAIR_NODES_SCRIPT,
     ),
     "vangard-trigger-wearable-save": (
         "Select a figure and fire DzWearablesAssetFilterAction (File > Save As > "

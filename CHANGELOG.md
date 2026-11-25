@@ -162,7 +162,24 @@ Requires dazpy 2.17.0 or later, for the new primitives these tools use
   - A missing character is skipped and reported; it used to stop the
     template.
   - The first `actions` entry is now `Scene type: <type>`.
-- 97 registered scripts are removed (107 to 10), and a unit test fails if any
+- `daz_list_categories`, `daz_browse_category`, `daz_save_prop_asset`,
+  `daz_load_morph_pro` and `daz_list_strand_hair_nodes` use dazpy.
+- `daz_create_strand_hair(auto_confirm=True)` clicks Studio's "Create New
+  Strand-Based Hair" dialog through Windows UI Automation, waits, and
+  returns the finished result. It needs `pywinauto` on the DAZ Studio
+  machine. The default (`auto_confirm=False`) still returns a `request_id`
+  for a human to confirm. The dialog driver is ported from the blackbyte
+  fork, commit 2ba9a37.
+- Five tools stay on registered scripts on purpose, with a code comment
+  saying why:
+  - `daz_save_wearable_preset` and `daz_create_strand_hair` open Studio
+    dialogs.
+  - `daz_erc_freeze` needs an ERC editing API dazpy doesn't have.
+  - `daz_find_actions` searches DzActionMgr, which dazpy doesn't cover.
+  - `daz_load_file` for OBJ uses the silent unit-scale importer.
+  `daz_execute`, `daz_execute_file(_async)` and `daz_validate_script` run
+  your own script by design.
+- 102 registered scripts are removed (107 to 5), and a unit test fails if any
   registered script is no longer called by a tool.
 
 ### Fixed

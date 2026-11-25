@@ -1,5 +1,5 @@
 """Mock tests for Phase 6.13 Strand-Based Hair tools: daz_create_strand_hair
-and daz_list_strand_hair_nodes.
+(daz_list_strand_hair_nodes is in test_z2h_tools.py).
 
 All tests use respx to intercept HTTP at the transport layer — no DAZ Studio
 or DazScriptServer required.
@@ -14,10 +14,7 @@ import httpx
 
 from dazpy.aio import AsyncDazClient
 from daz_mcp_server._client import set_async_daz_client
-from daz_mcp_server.tools.hair import (
-    daz_create_strand_hair,
-    daz_list_strand_hair_nodes,
-)
+from daz_mcp_server.tools.hair import daz_create_strand_hair
 
 BASE_URL = "http://localhost:18811"
 
@@ -102,43 +99,3 @@ class TestCreateStrandHair:
         )
         await daz_create_strand_hair("Genesis 8 Female")
         assert not sync_route.called
-
-
-class TestListStrandHairNodes:
-    async def test_returns_nodes(self, mock_daz):
-        payload = {
-            "count": 1,
-            "nodes": [
-                {
-                    "label": "Strand-Based Hair",
-                    "name": "Strand_Based_Hair",
-                    "target": "Genesis 8 Female",
-                    "has_geometry": True,
-                    "materials": ["Hair"],
-                }
-            ],
-        }
-        mock_daz.post("/scripts/vangard-list-strand-hair-nodes/execute").mock(
-            return_value=_ok(payload)
-        )
-        result = await daz_list_strand_hair_nodes()
-        assert result["count"] == 1
-        assert result["nodes"][0]["target"] == "Genesis 8 Female"
-        assert result["nodes"][0]["has_geometry"] is True
-
-    async def test_empty_scene(self, mock_daz):
-        mock_daz.post("/scripts/vangard-list-strand-hair-nodes/execute").mock(
-            return_value=_ok({"count": 0, "nodes": []})
-        )
-        result = await daz_list_strand_hair_nodes()
-        assert result["count"] == 0
-        assert result["nodes"] == []
-
-    async def test_script_failure_raises(self, mock_daz):
-        from fastmcp.exceptions import ToolError
-
-        mock_daz.post("/scripts/vangard-list-strand-hair-nodes/execute").mock(
-            return_value=_fail("Scene not available")
-        )
-        with pytest.raises(ToolError):
-            await daz_list_strand_hair_nodes()

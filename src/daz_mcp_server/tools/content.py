@@ -8,10 +8,12 @@ from pathlib import Path
 from typing import Any
 
 import httpx
+from dazpy.exceptions import DazError
 from fastmcp.exceptions import ToolError
 
-from .._mcp import mcp, _execute_by_id, _execute_by_id_async
-from .._client import get_content_browser_client, CONTENT_BROWSER_URL
+from .._mcp import mcp, _execute_by_id_async
+from .._client import get_content_browser_client, get_scene, CONTENT_BROWSER_URL
+from .._errors import run_tool
 from .. import _ui_automation
 
 
@@ -37,7 +39,13 @@ async def daz_list_categories(parent_path: str = "") -> dict[str, Any]:
         daz_list_categories()                      # top-level: People, Props, Environments...
         daz_list_categories("People/Genesis 9")    # sub-folders: Characters, Clothing, Hair...
     """
-    return await _execute_by_id("vangard-list-categories", {"parentPath": parent_path})
+    def _run() -> dict[str, Any]:
+        cats = get_scene().content_categories(parent_path)
+        return {"parent": parent_path or "/", "count": len(cats),
+                "categories": [{"name": c.name, "path": c.path, "duf_count": c.duf_count}
+                               for c in cats]}
+
+    return await run_tool(_run)
 
 
 @mcp.tool()
@@ -61,7 +69,13 @@ async def daz_browse_category(
         daz_browse_category("People/Genesis 9/Hair")
         daz_browse_category("Props/Furniture")
     """
-    return await _execute_by_id("vangard-browse-category", {"categoryPath": category_path})
+    def _run() -> dict[str, Any]:
+        files = get_scene().content_files(category_path)
+        return {"category": category_path or "/", "count": len(files),
+                "items": [{"name": f.name, "filename": f.filename, "full_path": f.full_path}
+                          for f in files]}
+
+    return await run_tool(_run)
 
 
 @mcp.tool()
@@ -346,34 +360,24 @@ async def daz_save_prop_asset(
           settings). Use this Prop Asset tool instead; it covers the
           "Support Asset" half of the original request.
     """
-    payload: dict[str, Any] = {
-        "nodeLabel": node_label,
-        "outputPath": output_path,
-        "vendorName": vendor_name,
-        "productName": product_name,
-    }
-    if item_name is not None:
-        payload["itemName"] = item_name
-    if category is not None:
-        payload["category"] = category
-    if compatibility_base is not None:
-        payload["compatibilityBase"] = compatibility_base
-    if compatible_with is not None:
-        payload["compatibleWith"] = compatible_with
-    if smart_parent is not None:
-        payload["smartParent"] = smart_parent
-    if write_geometry is not None:
-        payload["writeGeometry"] = write_geometry
-    if write_parameters is not None:
-        payload["writeParameters"] = write_parameters
-    if write_uvs is not None:
-        payload["writeUvs"] = write_uvs
-    if force_unique_ids is not None:
-        payload["forceUniqueIds"] = force_unique_ids
-    if compress_output is not None:
-        payload["compressOutput"] = compress_output
+    def _run() -> dict[str, Any]:
+        node = get_scene().resolve_node(node_label)
+        label = node.describe().label
+        try:
+            base = node.save_support_asset(
+                output_path, vendor=vendor_name, product=product_name, item=item_name,
+                category=category, compatibility_base=compatibility_base,
+                compatible_with=compatible_with, smart_parent=smart_parent,
+                write_geometry=write_geometry, write_parameters=write_parameters,
+                write_uvs=write_uvs, force_unique_ids=force_unique_ids,
+                compress=compress_output)
+        except (ValueError, DazError) as e:
+            raise ToolError(str(e)) from e
+        return {"success": True, "node": label, "outputPath": output_path,
+                "baseDataPath": base, "vendorName": vendor_name, "productName": product_name,
+                "itemName": item_name or label}
 
-    return await _execute_by_id("vangard-save-prop-asset", payload)
+    return await run_tool(_run)
 
 
 @mcp.tool()
@@ -437,6 +441,9 @@ async def daz_save_wearable_preset(
           a fitted test prop, then fully reverted — no lasting scene changes.
     """
     _ui_automation._require_pywinauto()  # pylint: disable=protected-access
+    # Stays a registered script: DzWearablesAssetFilterAction opens Studio's
+    # save dialog, which only UI automation (below) can drive; its asset filter
+    # has no working silent doSave() (see docstring).
     await _execute_by_id_async("vangard-trigger-wearable-save", {"figureLabel": figure_label})
     return await asyncio.to_thread(
         _ui_automation.drive_wearable_preset_save, output_path, dialog_timeout

@@ -4,10 +4,10 @@ from __future__ import annotations
 import math
 from typing import Any
 
-from dazpy.exceptions import NodeNotFoundError, PropertyNotFoundError
+from dazpy.exceptions import DazError, NodeNotFoundError, PropertyNotFoundError
 from fastmcp.exceptions import ToolError
 
-from .._mcp import mcp, _execute_by_id
+from .._mcp import mcp
 from .._client import get_scene
 from .._emotions import (
     AXIS_BY_PROPERTY,
@@ -596,63 +596,47 @@ async def daz_load_morph_pro(
           blocking interactive rename dialog instead, even with
           ``MakeUnique`` (confirmed live).
     """
-    payload: dict[str, Any] = {
-        "nodeLabel": node_label,
-        "objPath": obj_path,
-        "loadMode": load_mode,
-        "overwriteMode": overwrite_mode,
-        "mirroring": mirroring,
-        "scale": scale,
-        "reverseDeformations": reverse_deformations,
-        "createControlProperty": create_control_property,
-        "onlyErrorsOrWarnings": only_errors_or_warnings,
-    }
-    if morph_name is not None:
-        payload["morphName"] = morph_name
-    if preserve_existing_deltas is not None:
-        payload["preserveExistingDeltas"] = preserve_existing_deltas
-    if clean_up_orphans is not None:
-        payload["cleanUpOrphans"] = clean_up_orphans
-    if delta_tolerance is not None:
-        payload["deltaTolerance"] = delta_tolerance
-    if reverse_deformations_pose_path is not None:
-        payload["reverseDeformationsPosePath"] = reverse_deformations_pose_path
-    if subdivision is not None:
-        payload["subdivision"] = subdivision
-    if subdivision_mapping is not None:
-        payload["subdivisionMapping"] = subdivision_mapping
-    if subdivision_min_resolution is not None:
-        payload["subdivisionMinResolution"] = subdivision_min_resolution
-    if subdivision_max_resolution is not None:
-        payload["subdivisionMaxResolution"] = subdivision_max_resolution
-    if subdivision_built_resolution is not None:
-        payload["subdivisionBuiltResolution"] = subdivision_built_resolution
-    if subdivision_smooth_cage is not None:
-        payload["subdivisionSmoothCage"] = subdivision_smooth_cage
-    if attenuate_strength is not None:
-        payload["attenuateStrength"] = attenuate_strength
-    if attenuate_edge_strength is not None:
-        payload["attenuateEdgeStrength"] = attenuate_edge_strength
-    if attenuate_map_path is not None:
-        payload["attenuateMapPath"] = attenuate_map_path
-    if property_group_path is not None:
-        payload["propertyGroupPath"] = property_group_path
-    if hide_secondary_properties is not None:
-        payload["hideSecondaryProperties"] = hide_secondary_properties
-    if control_node_label is not None:
-        payload["controlNodeLabel"] = control_node_label
-    if control_property_name is not None:
-        payload["controlPropertyName"] = control_property_name
-    if control_property_custom_label is not None:
-        payload["controlPropertyCustomLabel"] = control_property_custom_label
-    if control_property_erc_type is not None:
-        payload["controlPropertyErcType"] = control_property_erc_type
-    if control_property_erc_custom_value is not None:
-        payload["controlPropertyErcCustomValue"] = control_property_erc_custom_value
-
     if create_control_property and not control_property_name:
         raise ToolError(
             "control_property_name is required when create_control_property=True"
         )
+    options = {k: v for k, v in {
+        "morph_name": morph_name, "load_mode": load_mode, "overwrite_mode": overwrite_mode,
+        "mirroring": mirroring, "scale": scale, "only_errors_or_warnings": only_errors_or_warnings,
+        "preserve_existing_deltas": preserve_existing_deltas,
+        "clean_up_orphans": clean_up_orphans, "delta_tolerance": delta_tolerance,
+        "reverse_deformations": reverse_deformations,
+        "reverse_deformations_pose_path": reverse_deformations_pose_path,
+        "subdivision": subdivision, "subdivision_mapping": subdivision_mapping,
+        "subdivision_min_resolution": subdivision_min_resolution,
+        "subdivision_max_resolution": subdivision_max_resolution,
+        "subdivision_built_resolution": subdivision_built_resolution,
+        "subdivision_smooth_cage": subdivision_smooth_cage,
+        "attenuate_strength": attenuate_strength,
+        "attenuate_edge_strength": attenuate_edge_strength,
+        "attenuate_map_path": attenuate_map_path, "property_group_path": property_group_path,
+        "hide_secondary_properties": hide_secondary_properties,
+    }.items() if v is not None}
+    if create_control_property:
+        options.update({k: v for k, v in {
+            "control_property_name": control_property_name,
+            "control_property_custom_label": control_property_custom_label,
+            "control_property_erc_type": control_property_erc_type,
+            "control_property_erc_custom_value": control_property_erc_custom_value,
+        }.items() if v is not None})
 
-    return await _execute_by_id("vangard-load-morph-pro", payload)
+    def _run() -> dict[str, Any]:
+        scene = get_scene()
+        node = scene.resolve_node(node_label)
+        control = (scene.resolve_node(control_node_label)
+                   if create_control_property and control_node_label else None)
+        try:
+            r = node.load_morph(obj_path, control_node=control, **options)
+        except DazError as e:
+            raise ToolError(str(e)) from e
+        return {"success": True, "node": node.describe().label, "file": obj_path,
+                "morphName": r.morph_name, "loadMode": load_mode,
+                "overwriteMode": overwrite_mode, "mirroring": mirroring,
+                "controlProperty": r.control_property, "log": r.log}
+
+    return await _run_tool(_run)

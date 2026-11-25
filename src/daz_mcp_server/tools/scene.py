@@ -89,6 +89,8 @@ async def daz_load_file(
             "script."
         )
     if file_path.lower().endswith(".obj"):
+        # Stays a registered script: it drives DzObjImporter with RunSilent and
+        # unit scale (no import-options dialog); dazpy has no OBJ importer.
         return await _execute_by_id(
             "vangard-import-obj",
             {"filePath": file_path, "scaleFactor": 1.0},
