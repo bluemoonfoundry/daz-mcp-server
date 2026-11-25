@@ -88,37 +88,6 @@ _RESOLVE_NODE_JS = """\
 # args: {outputPath?}
 # Returns: {success}
 # Render options are set directly on the DzRenderOptions object (Qt property syntax).
-_RENDER_SCRIPT = """\
-(function(){
-    var args = getArguments()[0] || {};
-    var renderMgr = App.getRenderMgr();
-    var opts = renderMgr.getRenderOptions();
-    var path = args.outputPath || opts.renderImgFilename;
-    if (!path) {
-        throw new Error("Render output path is not set. Pass output_path or call daz_set_render_output first — otherwise Studio opens a filename dialog.");
-    }
-    opts.renderImgToId = opts.DirectToFile;
-    opts.renderImgFilename = path;
-    try {
-        var helper = renderMgr.getOptionHelper();
-        if (helper) {
-            var slash = Math.max(String(path).lastIndexOf("/"), String(path).lastIndexOf("\\\\"));
-            var dir = slash >= 0 ? String(path).substring(0, slash) : "";
-            var name = slash >= 0 ? String(path).substring(slash + 1) : String(path);
-            var np = helper.findProperty("Image Name");
-            var pp = helper.findProperty("Image Path");
-            if (np && typeof np.setValue === "function") np.setValue(name);
-            if (pp && typeof pp.setValue === "function") pp.setValue(dir);
-        }
-    } catch (e) {}
-    opts.applyChanges();
-    if (Number(opts.renderImgToId) !== Number(opts.DirectToFile) || !opts.renderImgFilename) {
-        throw new Error("Render-to-file did not persist (renderImgToId=" + opts.renderImgToId + ", file=" + opts.renderImgFilename + ")");
-    }
-    renderMgr.doRender(opts);
-    return { success: true, outputPath: opts.renderImgFilename };
-})()
-"""
 
 # args: {filePath, merge}
 # Returns: {success, file}
@@ -368,315 +337,18 @@ _INTERACTIVE_POSE_SCRIPT = """\
 # args: {cameraLabel, outputPath}
 # Returns: {success, camera, outputPath}
 # Render from specific camera (doesn't change active viewport camera)
-_RENDER_WITH_CAMERA_SCRIPT = """\
-(function(){
-    var args = getArguments()[0] || {};
-    var cam = Scene.findNodeByLabel(args.cameraLabel);
-    if (!cam) cam = Scene.findNode(args.cameraLabel);
-    if (!cam) throw new Error("Camera not found: " + args.cameraLabel);
-    if (!cam.inherits("DzCamera")) throw new Error("Node is not a camera: " + args.cameraLabel);
-
-    var renderMgr = App.getRenderMgr();
-    var opts = renderMgr.getRenderOptions();
-
-    var path = args.outputPath || opts.renderImgFilename;
-    if (!path) {
-        throw new Error("Render output path is not set. Pass output_path or call daz_set_render_output first — otherwise Studio opens a filename dialog.");
-    }
-
-    // DS6: doRender() renders from the active 3D viewport's camera and ignores
-    // opts.camera, so the viewport camera must be switched too (verified live:
-    // viewport=FaceCam + opts.camera="Portrait Cam" rendered FaceCam).
-    var viewport3D = null;
-    try {
-        var vpMgr = MainWindow.getViewportMgr();
-        var activeVp = vpMgr ? vpMgr.getActiveViewport() : null;
-        viewport3D = activeVp ? activeVp.get3DViewport() : null;
-    } catch (e) { viewport3D = null; }
-    if (!viewport3D) throw new Error("Cannot access the active 3D viewport to select the render camera");
-    var previousViewportCam = viewport3D.getCamera();
-
-    // Save previous camera
-    var previousCam = opts.camera;
-    var renderedFrom = null;
-
-    try {
-        // Set render camera (viewport camera is what DS6 actually renders from)
-        opts.camera = cam;
-        viewport3D.setCamera(cam);
-
-        opts.renderImgToId = opts.DirectToFile;
-        opts.renderImgFilename = path;
-        try {
-            var helper = renderMgr.getOptionHelper();
-            if (helper) {
-                var slash = Math.max(String(path).lastIndexOf("/"), String(path).lastIndexOf("\\\\"));
-                var dir = slash >= 0 ? String(path).substring(0, slash) : "";
-                var name = slash >= 0 ? String(path).substring(slash + 1) : String(path);
-                var np = helper.findProperty("Image Name");
-                var pp = helper.findProperty("Image Path");
-                if (np && typeof np.setValue === "function") np.setValue(name);
-                if (pp && typeof pp.setValue === "function") pp.setValue(dir);
-            }
-        } catch (e) {}
-        opts.applyChanges();
-        if (Number(opts.renderImgToId) !== Number(opts.DirectToFile) || !opts.renderImgFilename) {
-            throw new Error("Render-to-file did not persist (renderImgToId=" + opts.renderImgToId + ", file=" + opts.renderImgFilename + ")");
-        }
-        var activeCam = viewport3D.getCamera();
-        renderedFrom = activeCam ? activeCam.getLabel() : null;
-        if (renderedFrom !== cam.getLabel()) {
-            throw new Error("Viewport camera did not switch to " + cam.getLabel() + " (active: " + renderedFrom + ")");
-        }
-        renderMgr.doRender(opts);
-    } finally {
-        if (previousViewportCam) viewport3D.setCamera(previousViewportCam);
-        opts.camera = previousCam;  // may be null; never leave a dangling camera ref
-        opts.applyChanges();
-    }
-
-    return {
-        success: true,
-        camera: cam.getLabel(),
-        renderedFromCamera: renderedFrom,
-        outputPath: args.outputPath || null
-    };
-})()
-"""
 
 # args: none
 # Returns: {renderToFile, currentCamera, aspectRatio, aspectWidth, aspectHeight}
 # Get current render settings
-_GET_RENDER_SETTINGS_SCRIPT = """\
-(function(){
-    var args = getArguments()[0] || {};
-    var renderMgr = App.getRenderMgr();
-    var opts = renderMgr.getRenderOptions();
-
-    // DzRenderOptions.renderImgToId is an enum, and DirectToFile is 2 - not 0.
-    // Comparing against 0 made renderToFile always false and outputPath always
-    // null, even with a correctly configured file render. Compare against the
-    // named constant so this cannot drift again.
-    var directToFile = Number(opts.DirectToFile);
-    var rendersToFile = Number(opts.renderImgToId) === directToFile;
-
-    var sz = opts.imageSize;
-    var renderType = Number(opts.renderType);
-    var engine = "other";
-    var renderTypeName = null;
-    if (renderType === Number(opts.ScreenShot)) {
-        engine = "viewport";
-        renderTypeName = "ScreenShot";
-    } else if (renderType === Number(opts.HardwareAssisted)) {
-        engine = "multi_pass_opengl";
-        renderTypeName = "HardwareAssisted";
-    } else if (renderType === Number(opts.Software)) {
-        engine = "iray";
-        renderTypeName = "Software";
-    }
-    var active = renderMgr.getActiveRenderer();
-    var result = {
-        renderToFile: rendersToFile,
-        outputPath: rendersToFile ? opts.renderImgFilename : null,
-        aspectRatio: opts.aspect,
-        aspectWidth: opts.aspectWidth,
-        aspectHeight: opts.aspectHeight,
-        width: sz ? sz.width : null,
-        height: sz ? sz.height : null,
-        engine: engine,
-        renderType: renderType,
-        renderTypeName: renderTypeName,
-        activeRenderer: active ? active.getName() : null,
-        activeRendererClass: active ? active.className() : null
-    };
-    if (engine === "viewport") {
-        result.warning = "Engine Viewport opens a filename dialog unless DirectToFile + output path are set.";
-    }
-
-    // Get current render camera
-    if (opts.camera) {
-        result.currentCamera = opts.camera.getLabel();
-    } else {
-        result.currentCamera = null;
-    }
-
-    return result;
-})()
-"""
 
 # args: {cameras: [labels], outputDir, baseFilename}
 # Returns: {success, rendered: [{camera, outputPath}], total}
 # Render from multiple cameras in sequence
-_BATCH_RENDER_CAMERAS_SCRIPT = """\
-(function(){
-    var args = getArguments()[0] || {};
-    var cameras = args.cameras || [];
-    var outputDir = args.outputDir || "";
-    var baseFilename = args.baseFilename || "render";
-
-    var renderMgr = App.getRenderMgr();
-    var opts = renderMgr.getRenderOptions();
-    var previousCam = opts.camera;
-    var previousFilename = opts.renderImgFilename;
-
-    // DS6: doRender() renders from the active 3D viewport's camera and ignores
-    // opts.camera, so the viewport camera must be switched too (verified live:
-    // viewport=FaceCam + opts.camera="Portrait Cam" rendered FaceCam).
-    var viewport3D = null;
-    try {
-        var vpMgr = MainWindow.getViewportMgr();
-        var activeVp = vpMgr ? vpMgr.getActiveViewport() : null;
-        viewport3D = activeVp ? activeVp.get3DViewport() : null;
-    } catch (e) { viewport3D = null; }
-    if (!viewport3D) throw new Error("Cannot access the active 3D viewport to select the render camera");
-    var previousViewportCam = viewport3D.getCamera();
-
-    var rendered = [];
-
-    try {
-        for (var i = 0; i < cameras.length; i++) {
-            var camLabel = cameras[i];
-            var cam = Scene.findNodeByLabel(camLabel);
-            if (!cam) cam = Scene.findNode(camLabel);
-
-            if (cam && cam.inherits("DzCamera")) {
-                // Build output path
-                var outputPath = outputDir;
-                if (outputPath && outputPath.charAt(outputPath.length - 1) !== "/" &&
-                    outputPath.charAt(outputPath.length - 1) !== "\\\\") {
-                    outputPath += "/";
-                }
-                outputPath += baseFilename + "_" + camLabel.replace(/[^a-zA-Z0-9]/g, "_") + ".png";
-
-                // Viewport camera is what DS6 actually renders from
-                opts.camera = cam;
-                viewport3D.setCamera(cam);
-                var activeCam = viewport3D.getCamera();
-                if (!activeCam || activeCam.getLabel() !== cam.getLabel()) {
-                    throw new Error("Viewport camera did not switch to " + cam.getLabel());
-                }
-                opts.renderImgToId = opts.DirectToFile;
-                opts.renderImgFilename = outputPath;
-                opts.applyChanges();
-                renderMgr.doRender(opts);
-
-                rendered.push({
-                    camera: cam.getLabel(),
-                    renderedFromCamera: activeCam.getLabel(),
-                    outputPath: outputPath
-                });
-            }
-        }
-    } finally {
-        if (previousViewportCam) viewport3D.setCamera(previousViewportCam);
-        opts.camera = previousCam;  // may be null; never leave a dangling camera ref
-        opts.renderImgFilename = previousFilename;
-        opts.applyChanges();
-    }
-
-    return {
-        success: true,
-        rendered: rendered,
-        total: cameras.length
-    };
-})()
-"""
 
 # args: {startFrame, endFrame, outputDir, filenamePattern, camera}
 # Returns: {success, rendered: [{frame, outputPath}], total}
 # Render animation frame range
-_RENDER_ANIMATION_SCRIPT = """\
-(function(){
-    var args = getArguments()[0] || {};
-    var startFrame = args.startFrame !== undefined ? args.startFrame : Scene.getAnimRange().getStart();
-    var endFrame = args.endFrame !== undefined ? args.endFrame : Scene.getAnimRange().getEnd();
-    var outputDir = args.outputDir || "";
-    var filenamePattern = args.filenamePattern || "frame";
-
-    var renderMgr = App.getRenderMgr();
-    var opts = renderMgr.getRenderOptions();
-
-    // DS6: doRender() renders from the active 3D viewport's camera and ignores
-    // opts.camera, so the viewport camera must be switched too (verified live:
-    // viewport=FaceCam + opts.camera="Portrait Cam" rendered FaceCam).
-    var viewport3D = null;
-    try {
-        var vpMgr = MainWindow.getViewportMgr();
-        var activeVp = vpMgr ? vpMgr.getActiveViewport() : null;
-        viewport3D = activeVp ? activeVp.get3DViewport() : null;
-    } catch (e) { viewport3D = null; }
-    if (!viewport3D) throw new Error("Cannot access the active 3D viewport to select the render camera");
-    var previousViewportCam = viewport3D.getCamera();
-
-    // Set camera if specified (viewport camera is what DS6 actually renders from)
-    var previousCam = opts.camera;
-    var cam = null;
-    if (args.camera) {
-        cam = Scene.findNodeByLabel(args.camera);
-        if (!cam) cam = Scene.findNode(args.camera);
-        if (!cam || !cam.inherits("DzCamera")) throw new Error("Camera not found: " + args.camera);
-    }
-
-    var rendered = [];
-    var previousFrame = Scene.getFrame();
-    var previousFilename = opts.renderImgFilename;
-    var renderedFrom = null;
-
-    try {
-        if (cam) {
-            opts.camera = cam;
-            viewport3D.setCamera(cam);
-            var activeCam = viewport3D.getCamera();
-            if (!activeCam || activeCam.getLabel() !== cam.getLabel()) {
-                throw new Error("Viewport camera did not switch to " + cam.getLabel());
-            }
-        }
-        var vpCam = viewport3D.getCamera();
-        renderedFrom = vpCam ? vpCam.getLabel() : null;
-
-        opts.renderImgToId = opts.DirectToFile;
-        opts.applyChanges();
-
-        for (var frame = startFrame; frame <= endFrame; frame++) {
-            Scene.setFrame(frame);
-
-            var frameStr = String(frame);
-            while (frameStr.length < 4) frameStr = "0" + frameStr;
-
-            var outputPath = outputDir;
-            if (outputPath && outputPath.charAt(outputPath.length - 1) !== "/" &&
-                outputPath.charAt(outputPath.length - 1) !== "\\\\") {
-                outputPath += "/";
-            }
-            outputPath += filenamePattern + "_" + frameStr + ".png";
-
-            opts.renderImgFilename = outputPath;
-            opts.applyChanges();
-            renderMgr.doRender(opts);
-
-            rendered.push({
-                frame: frame,
-                outputPath: outputPath
-            });
-        }
-    } finally {
-        // Restore previous frame, camera, and output path
-        Scene.setFrame(previousFrame);
-        if (cam && previousViewportCam) viewport3D.setCamera(previousViewportCam);
-        opts.camera = previousCam;  // may be null; never leave a dangling camera ref
-        opts.renderImgFilename = previousFilename;
-        opts.applyChanges();
-    }
-
-    return {
-        success: true,
-        rendered: rendered,
-        total: rendered.length,
-        renderedFromCamera: renderedFrom,
-        frames: {start: startFrame, end: endFrame}
-    };
-})()
-"""
 
 # args: {nodeLabel, propertyName, frame, value}
 # Returns: {success, node, property, frame, value}
@@ -764,39 +436,6 @@ _RENDER_ANIMATION_SCRIPT = """\
 # Returns: {preset, propertiesSet: [{property, value}], note}
 # Sets Iray render quality via Max Samples and Render Quality properties on the
 # active renderer options.  Falls back gracefully if properties are not found.
-_SET_RENDER_QUALITY_SCRIPT = """\
-(function(){
-    var args = getArguments()[0] || {};
-    var renderMgr = App.getRenderMgr();
-    if (!renderMgr) throw "No render manager available";
-
-    // getOptionHelper() returns a DzElement (renderer's option node) which has findProperty
-    var optHelper = renderMgr.getOptionHelper ? renderMgr.getOptionHelper() : null;
-
-    var targets = ["Max Samples", "Render Quality"];
-    var targetValues = {"Max Samples": args.maxSamples, "Render Quality": args.renderQuality};
-
-    var propertiesSet = [];
-    var notFound = [];
-
-    for (var i = 0; i < targets.length; i++) {
-        var name = targets[i];
-        var prop = optHelper ? optHelper.findProperty(name) : null;
-        if (prop) {
-            prop.setValue(targetValues[name]);
-            propertiesSet.push({property: name, value: prop.getValue()});
-        } else {
-            notFound.push(name);
-        }
-    }
-
-    var result = {preset: args.preset, propertiesSet: propertiesSet};
-    if (notFound.length > 0) {
-        result.note = "Properties not found on active renderer option helper: " + notFound.join(", ");
-    }
-    return result;
-})()
-"""
 
 # ---------------------------------------------------------------------------
 # Phase 2 script constants
@@ -2790,101 +2429,10 @@ _CREATE_CAMERA_SCRIPT = """\
 # ---------------------------------------------------------------------------
 
 
-_SET_RENDER_OUTPUT_SCRIPT = """\
-(function(){
-    var args = getArguments()[0] || {};
-    var renderMgr = App.getRenderMgr();
-    var opts = renderMgr.getRenderOptions();
-    var changed = {};
-    if (args.outputPath) {
-        opts.renderImgFilename = args.outputPath;
-        opts.renderImgToId = opts.DirectToFile;
-        changed.output_path = args.outputPath;
-    }
-    if ((args.width !== undefined && args.width !== null) ||
-        (args.height !== undefined && args.height !== null)) {
-        var sz = opts.imageSize;
-        var w = (args.width !== undefined && args.width !== null) ? args.width : sz.width;
-        var h = (args.height !== undefined && args.height !== null) ? args.height : sz.height;
-        opts.imageSize = new QSize(w, h);
-        if (args.width !== undefined && args.width !== null) changed.width = args.width;
-        if (args.height !== undefined && args.height !== null) changed.height = args.height;
-    }
-    opts.applyChanges();
-    var cur = opts.imageSize;
-    return {
-        changed: changed,
-        current: {
-            output_path: opts.renderImgFilename || null,
-            width: cur ? cur.width : null,
-            height: cur ? cur.height : null
-        }
-    };
-})()
-"""
-
 # args: {engine}
 # Returns: {success, engine, renderType, renderTypeName, activeRenderer,
 #           activeRendererClass, warning?}
 # DS6 Engine dropdown is DzRenderOptions.renderType, not getActiveRenderer().
-_SET_RENDER_ENGINE_SCRIPT = """\
-(function(){
-    var args = getArguments()[0] || {};
-    var requested = String(args.engine || "").toLowerCase().replace(/-/g, "_").replace(/ /g, "_");
-    if (requested === "opengl" || requested === "hardware" || requested === "hardware_assisted") {
-        requested = "multi_pass_opengl";
-    }
-    if (requested === "nvidia_iray" || requested === "nvidia_iray_mdl" || requested === "software") {
-        requested = "iray";
-    }
-    if (requested !== "iray" && requested !== "multi_pass_opengl" && requested !== "viewport") {
-        throw new Error("Unknown render engine: " + args.engine + ". Use iray, multi_pass_opengl, or viewport.");
-    }
-
-    var mgr = App.getRenderMgr();
-    var opts = mgr.getRenderOptions();
-    if (requested === "viewport") {
-        opts.renderType = opts.ScreenShot;
-    } else if (requested === "multi_pass_opengl") {
-        opts.renderType = opts.HardwareAssisted;
-    } else {
-        var iray = mgr.findRenderer("DzIrayRenderer");
-        if (!iray) throw new Error("DzIrayRenderer is not registered");
-        mgr.setActiveRenderer(iray);
-        opts.renderType = opts.Software;
-    }
-    opts.applyChanges();
-    try {
-        var pane = MainWindow.getPaneMgr().findPane("DzRenderSettingsPane");
-        if (pane && pane.refresh) pane.refresh();
-    } catch (e) {}
-
-    var renderType = Number(opts.renderType);
-    var engine = requested;
-    var renderTypeName = renderType === Number(opts.ScreenShot) ? "ScreenShot"
-        : renderType === Number(opts.HardwareAssisted) ? "HardwareAssisted"
-        : renderType === Number(opts.Software) ? "Software" : null;
-    var expected = requested === "viewport" ? Number(opts.ScreenShot)
-        : requested === "multi_pass_opengl" ? Number(opts.HardwareAssisted)
-        : Number(opts.Software);
-    if (renderType !== expected) {
-        throw new Error("Render engine readback mismatch: wanted " + requested + " got renderType " + renderType);
-    }
-    var active = mgr.getActiveRenderer();
-    var result = {
-        success: true,
-        engine: engine,
-        renderType: renderType,
-        renderTypeName: renderTypeName,
-        activeRenderer: active ? active.getName() : null,
-        activeRendererClass: active ? active.className() : null
-    };
-    if (engine === "viewport") {
-        result.warning = "Engine Viewport opens a filename dialog unless DirectToFile + output path are set.";
-    }
-    return result;
-})()
-"""
 
 # ---------------------------------------------------------------------------
 # Phase 5: Pose reset
@@ -4391,35 +3939,9 @@ _TRIGGER_WEARABLE_SAVE_SCRIPT = "(function(){\n" + _RESOLVE_NODE_JS + """
 # Registry entries: script_id → (description, script_text)
 # Registered with DazScriptServer on startup so high-level tools call by ID.
 _REGISTRY: dict[str, tuple[str, str]] = {
-    "vangard-render": (
-        "Trigger a render using current DAZ Studio render settings",
-        _RENDER_SCRIPT,
-    ),
     "vangard-interactive-pose": (
         "Coordinate two characters for interactive poses (hug, handshake, etc)",
         _INTERACTIVE_POSE_SCRIPT,
-    ),
-    "vangard-render-with-camera": (
-        "Render from specific camera without changing viewport",
-        _RENDER_WITH_CAMERA_SCRIPT,
-    ),
-    "vangard-get-render-settings": (
-        "Get current render settings and configuration",
-        _GET_RENDER_SETTINGS_SCRIPT,
-    ),
-    "vangard-batch-render-cameras": (
-        "Render from multiple cameras in sequence",
-        _BATCH_RENDER_CAMERAS_SCRIPT,
-    ),
-    "vangard-render-animation": (
-        "Render animation frame range as image sequence",
-        _RENDER_ANIMATION_SCRIPT,
-    ),
-    # Phase 1.5: Render quality preset (used by daz_set_render_quality)
-    "vangard-set-render-quality": (
-        "Set Iray render quality preset (draft/preview/good/final) via Max Samples and "
-        "Render Quality properties",
-        _SET_RENDER_QUALITY_SCRIPT,
     ),
     # Phase 2: Content library
     "vangard-list-categories": (
@@ -4482,16 +4004,6 @@ _REGISTRY: dict[str, tuple[str, str]] = {
     "vangard-time-expression": (
         "Set keyframed morph animation for an expression with ease-in, hold, and ease-out phases",
         _TIME_EXPRESSION_SCRIPT,
-    ),
-    # Phase 5: Scene file operations
-    "vangard-set-render-output": (
-        "Set render output filename path and/or image dimensions (width x height)",
-        _SET_RENDER_OUTPUT_SCRIPT,
-    ),
-    "vangard-set-render-engine": (
-        "Set DS6 render engine via DzRenderOptions.renderType "
-        "(iray / multi_pass_opengl / viewport)",
-        _SET_RENDER_ENGINE_SCRIPT,
     ),
     # Phase 5: Pose reset
     "vangard-list-fitted-items": (

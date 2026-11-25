@@ -80,7 +80,24 @@ Requires dazpy 2.17.0 or later, for the new primitives these tools use
   - `daz_apply_lighting_preset` sets Scene Only on the real environment
     node (on Studio 4 and 6) instead of on whatever node was second in the
     scene. When no environment node exists yet, it says so.
-- 61 registered scripts are removed (107 to 46), and a unit test fails if any
+- The sync render tools (`daz_render`, `daz_render_with_camera`,
+  `daz_batch_render_cameras`, `daz_render_animation`) submit through
+  dazpy's `/render` and `/render/animation` endpoints, wait for the
+  request, and return `request_id` and `result`. A camera render switches
+  the viewport back to its previous camera afterwards.
+  `daz_render_animation_async` moves to `/render/animation` too. Settings
+  tools use `DazRenderSettings`.
+  - `daz_set_render_quality` applies dazpy's quality presets (for example,
+    "good" is 1500 samples, not 2000). It also sets Max Time and the
+    Rendering Quality toggle. The old script wrote a "Render Quality"
+    property that doesn't exist.
+  - `daz_get_render_settings` returns `engineState` (dazpy's verified
+    engine readback) and drops `aspectRatio`/`aspectWidth`/`aspectHeight`/
+    `renderType`.
+- The animation render tools default to the scene's animation range in
+  frames. The old script read DzTime ticks as frame numbers, so a default
+  range meant thousands of renders.
+- 69 registered scripts are removed (107 to 38), and a unit test fails if any
   registered script is no longer called by a tool.
 
 ### Fixed
