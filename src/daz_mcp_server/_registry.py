@@ -348,188 +348,22 @@ _INTERACTIVE_POSE_SCRIPT = """\
 # args: {cameraLabel}
 # Returns: {success, camera, previousCamera}
 # Set which camera is active in the viewport
-_SET_ACTIVE_CAMERA_SCRIPT = """\
-(function(){
-    var args = getArguments()[0] || {};
-    var cam = Scene.findNodeByLabel(args.cameraLabel);
-    if (!cam) cam = Scene.findNode(args.cameraLabel);
-    if (!cam) throw new Error("Camera not found: " + args.cameraLabel);
-    if (!cam.inherits("DzCamera")) throw new Error("Node is not a camera: " + args.cameraLabel);
-
-    var previousCamera = null;
-    var viewportMgr = MainWindow.getViewportMgr();
-    if (viewportMgr) {
-        var activeViewport = viewportMgr.getActiveViewport();
-        if (activeViewport) {
-            var prevCam = activeViewport.get3DViewport().getCamera();
-            if (prevCam) previousCamera = prevCam.getLabel();
-            activeViewport.get3DViewport().setCamera(cam);
-        }
-    }
-
-    return {
-        success: true,
-        camera: cam.getLabel(),
-        previousCamera: previousCamera
-    };
-})()
-"""
 
 # args: {cameraLabel, targetLabel, distance, angleHorizontal, angleVertical}
 # Returns: {success, camera, target, position}
 # Position camera orbiting around a target node at specified angle and distance
-_ORBIT_CAMERA_AROUND_SCRIPT = """\
-(function(){
-    var args = getArguments()[0] || {};
-    var cam = Scene.findNodeByLabel(args.cameraLabel);
-    if (!cam) cam = Scene.findNode(args.cameraLabel);
-    if (!cam) throw new Error("Camera not found: " + args.cameraLabel);
-
-    var target = Scene.findNodeByLabel(args.targetLabel);
-    if (!target) target = Scene.findNode(args.targetLabel);
-    if (!target) throw new Error("Target not found: " + args.targetLabel);
-
-    var distance = args.distance !== undefined ? args.distance : 200;
-    var angleH = args.angleHorizontal !== undefined ? args.angleHorizontal : 45;
-    var angleV = args.angleVertical !== undefined ? args.angleVertical : 15;
-
-    // Get target world position
-    var targetPos = target.getWSPos();
-    var targetY = targetPos.y;
-
-    // Calculate camera position using spherical coordinates
-    var angleHRad = angleH * (Math.PI / 180);
-    var angleVRad = angleV * (Math.PI / 180);
-
-    var x = targetPos.x + distance * Math.cos(angleVRad) * Math.sin(angleHRad);
-    var y = targetY + distance * Math.sin(angleVRad);
-    var z = targetPos.z + distance * Math.cos(angleVRad) * Math.cos(angleHRad);
-
-    // Set camera position
-    cam.findProperty("XTranslate").setValue(x);
-    cam.findProperty("YTranslate").setValue(y);
-    cam.findProperty("ZTranslate").setValue(z);
-
-    // Aim camera at target
-    cam.aimAt(targetPos);
-
-    return {
-        success: true,
-        camera: cam.getLabel(),
-        target: target.getLabel(),
-        position: {x: x, y: y, z: z},
-        targetPosition: {x: targetPos.x, y: targetPos.y, z: targetPos.z}
-    };
-})()
-"""
 
 # args: {cameraLabel, nodeLabel, distance}
 # Returns: {success, camera, node, position}
 # Frame camera to show a node by positioning at calculated distance
-_FRAME_CAMERA_TO_NODE_SCRIPT = """\
-(function(){
-    var args = getArguments()[0] || {};
-    var cam = Scene.findNodeByLabel(args.cameraLabel);
-    if (!cam) cam = Scene.findNode(args.cameraLabel);
-    if (!cam) throw new Error("Camera not found: " + args.cameraLabel);
-
-    var node = Scene.findNodeByLabel(args.nodeLabel);
-    if (!node) node = Scene.findNode(args.nodeLabel);
-    if (!node) throw new Error("Node not found: " + args.nodeLabel);
-
-    // Get node bounding box (getWSBoundingBox is on DzNode; getSize() returns scalar diagonal)
-    var bbox = node.getWSBoundingBox();
-    var center = bbox.getCenter();
-    var sizeX = bbox.maxX - bbox.minX;
-    var sizeY = bbox.maxY - bbox.minY;
-    var sizeZ = bbox.maxZ - bbox.minZ;
-    var maxDim = Math.max(sizeX, Math.max(sizeY, sizeZ));
-
-    // Calculate distance based on object size or use provided distance
-    var distance = args.distance !== undefined ? args.distance : maxDim * 2.5;
-
-    // Position camera in front of object (positive Z)
-    var camX = center.x;
-    var camY = center.y;
-    var camZ = center.z + distance;
-
-    cam.findProperty("XTranslate").setValue(camX);
-    cam.findProperty("YTranslate").setValue(camY);
-    cam.findProperty("ZTranslate").setValue(camZ);
-
-    // Aim camera at center
-    cam.aimAt(center);
-
-    return {
-        success: true,
-        camera: cam.getLabel(),
-        node: node.getLabel(),
-        position: {x: camX, y: camY, z: camZ},
-        nodeCenter: {x: center.x, y: center.y, z: center.z},
-        nodeSize: {x: sizeX, y: sizeY, z: sizeZ}
-    };
-})()
-"""
 
 # args: {cameraLabel}
 # Returns: {preset: {transforms, label}}
 # Save camera position and rotation as preset data
-_SAVE_CAMERA_PRESET_SCRIPT = """\
-(function(){
-    var args = getArguments()[0] || {};
-    var cam = Scene.findNodeByLabel(args.cameraLabel);
-    if (!cam) cam = Scene.findNode(args.cameraLabel);
-    if (!cam) throw new Error("Camera not found: " + args.cameraLabel);
-
-    var preset = {
-        label: cam.getLabel(),
-        transforms: {}
-    };
-
-    var props = ["XTranslate", "YTranslate", "ZTranslate",
-                 "XRotate", "YRotate", "ZRotate",
-                 "XScale", "YScale", "ZScale"];
-
-    for (var i = 0; i < props.length; i++) {
-        var prop = cam.findProperty(props[i]);
-        if (prop) {
-            preset.transforms[props[i]] = prop.getValue();
-        }
-    }
-
-    return {preset: preset};
-})()
-"""
 
 # args: {cameraLabel, preset}
 # Returns: {success, camera, applied}
 # Restore camera position and rotation from preset data
-_LOAD_CAMERA_PRESET_SCRIPT = """\
-(function(){
-    var args = getArguments()[0] || {};
-    var cam = Scene.findNodeByLabel(args.cameraLabel);
-    if (!cam) cam = Scene.findNode(args.cameraLabel);
-    if (!cam) throw new Error("Camera not found: " + args.cameraLabel);
-
-    var preset = args.preset;
-    if (!preset || !preset.transforms) throw new Error("Invalid preset data");
-
-    var applied = [];
-    for (var propName in preset.transforms) {
-        var prop = cam.findProperty(propName);
-        if (prop) {
-            prop.setValue(preset.transforms[propName]);
-            applied.push(propName);
-        }
-    }
-
-    return {
-        success: true,
-        camera: cam.getLabel(),
-        applied: applied
-    };
-})()
-"""
 
 # args: {cameraLabel, outputPath}
 # Returns: {success, camera, outputPath}
@@ -917,142 +751,6 @@ _RENDER_ANIMATION_SCRIPT = """\
 # Returns: {preset, subject, lights_created:[{label,type,position}], environment_mode}
 # Creates lights relative to subject bounding box center.
 # Genesis figures face +Z so "front" = positive Z side.
-_APPLY_LIGHTING_PRESET_SCRIPT = """\
-(function(){
-    var args = getArguments()[0] || {};
-    var preset = args.preset || "three-point";
-    var subjectLabel = args.subjectLabel;
-
-    // Get subject center if provided
-    var subjectCenter = { x: 0, y: 150, z: 0 };
-    var subjectHeight = 170;
-    if (subjectLabel) {
-        var subjectNode = Scene.findNodeByLabel(subjectLabel);
-        if (!subjectNode) subjectNode = Scene.findNode(subjectLabel);
-        if (subjectNode) {
-            var bbox = subjectNode.getWSBoundingBox();
-            subjectCenter = {
-                x: (bbox.minX + bbox.maxX) / 2,
-                y: (bbox.minY + bbox.maxY) / 2,
-                z: (bbox.minZ + bbox.maxZ) / 2
-            };
-            subjectHeight = bbox.maxY - bbox.minY;
-        }
-    }
-
-    var faceHeight = subjectCenter.y + subjectHeight * 0.2;  // ~head height
-    var R = subjectHeight * 1.2;  // light orbit radius
-
-    // Lighting configurations: [label, flux, azimuthDeg, elevDeg, lightClass, shadowSoftness]
-    // azimuth: 0=front(+Z), 90=right(+X), 180=back, -90=left
-    var configs = {
-        "three-point": [
-            ["Key Light",  2000, 45,   35,  "DzSpotLight", 30],
-            ["Fill Light",  800, -45,  20,  "DzSpotLight", 60],
-            ["Rim Light",  1200, 180,  45,  "DzDistantLight", 20]
-        ],
-        "rembrandt": [
-            ["Key Light",  2200, 45,   45,  "DzSpotLight", 20],
-            ["Fill Light",  400, -90,  10,  "DzSpotLight", 80]
-        ],
-        "butterfly": [
-            ["Key Light",  2000,  0,   45,  "DzSpotLight", 25],
-            ["Fill Light",  500,  0,   -5,  "DzSpotLight", 80]
-        ],
-        "split": [
-            ["Key Light",  2200, 90,   15,  "DzSpotLight", 15],
-            ["Rim Light",   800, -90,  20,  "DzSpotLight", 40]
-        ],
-        "loop": [
-            ["Key Light",  2000, 35,   30,  "DzSpotLight", 35],
-            ["Fill Light",  700, -50,  15,  "DzSpotLight", 70],
-            ["Rim Light",   900, 160,  40,  "DzSpotLight", 25]
-        ]
-    };
-
-    var lightDefs = configs[preset];
-    if (!lightDefs) throw new Error("Unknown preset: " + preset +
-        ". Valid: three-point, rembrandt, butterfly, split, loop");
-
-    // Remove existing preset lights with same names to avoid duplicates
-    var existingLabels = {};
-    for (var d = 0; d < lightDefs.length; d++) {
-        existingLabels[lightDefs[d][0]] = 1;
-    }
-    for (var ni = 0; ni < Scene.getNumLights(); ni++) {
-        var existingLight = Scene.getLight(ni);
-        if (existingLabels[existingLight.getLabel()]) {
-            Scene.removeNode(existingLight);
-            ni--;
-        }
-    }
-
-    var created = [];
-
-    for (var i = 0; i < lightDefs.length; i++) {
-        var def = lightDefs[i];
-        var label     = def[0];
-        var flux      = def[1];
-        var azimuthDeg = def[2];
-        var elevDeg   = def[3];
-        var lightClass = def[4];
-        var softness  = def[5];
-
-        var azRad = azimuthDeg * Math.PI / 180;
-        var elRad = elevDeg * Math.PI / 180;
-
-        var lx = subjectCenter.x + R * Math.sin(azRad) * Math.cos(elRad);
-        var ly = subjectCenter.y + R * Math.sin(elRad) + subjectHeight * 0.1;
-        var lz = subjectCenter.z + R * Math.cos(azRad) * Math.cos(elRad);
-
-        var light = null;
-        if (lightClass === "DzSpotLight") {
-            light = new DzSpotLight();
-        } else {
-            light = new DzDistantLight();
-        }
-
-        Scene.addNode(light);
-        light.setLabel(label);
-
-        var fluxProp = light.findProperty("Flux");
-        if (fluxProp) fluxProp.setValue(flux);
-
-        var softProp = light.findProperty("Shadow Softness");
-        if (softProp) softProp.setValue(softness);
-
-        var xtp = light.findProperty("XTranslate");
-        var ytp = light.findProperty("YTranslate");
-        var ztp = light.findProperty("ZTranslate");
-        if (xtp) xtp.setValue(lx);
-        if (ytp) ytp.setValue(ly);
-        if (ztp) ztp.setValue(lz);
-
-        light.aimAt(new DzVec3(subjectCenter.x, faceHeight, subjectCenter.z));
-
-        created.push({
-            label: label,
-            type: lightClass,
-            position: { x: Math.round(lx), y: Math.round(ly), z: Math.round(lz) },
-            flux: flux
-        });
-    }
-
-    // Set environment to scene-lights-only
-    var envNode = Scene.getNode(1);
-    if (envNode) {
-        var envMode = envNode.findProperty("Environment Mode");
-        if (envMode) envMode.setValue(3);
-    }
-
-    return {
-        preset: preset,
-        subject: subjectLabel || null,
-        lights_created: created,
-        environment_mode: "Scene Only (3)"
-    };
-})()
-"""
 
 # ---------------------------------------------------------------------------
 # Phase 1: Scene Validation Script
@@ -3032,115 +2730,11 @@ _TIME_EXPRESSION_SCRIPT = """\
 # Phase 5: Light management
 # ---------------------------------------------------------------------------
 
-_LIST_LIGHTS_SCRIPT = """\
-(function(){
-    var lights = [];
-    for (var i = 0; i < Scene.getNumLights(); i++) {
-        var l = Scene.getLight(i);
-        var pos = l.getWSPos();
-        var fluxProp = l.findProperty("Flux");
-        var visibleProp = l.findProperty("Visible");
-        lights.push({
-            index: i,
-            label: l.getLabel(),
-            name: l.getName(),
-            type: l.className(),
-            position: {
-                x: Math.round(pos.x * 100) / 100,
-                y: Math.round(pos.y * 100) / 100,
-                z: Math.round(pos.z * 100) / 100
-            },
-            flux: fluxProp ? Math.round(fluxProp.getValue()) : null,
-            enabled: visibleProp ? (visibleProp.getValue() !== 0) : true
-        });
-    }
-    return { light_count: lights.length, lights: lights };
-})()
-"""
-
-_CREATE_LIGHT_SCRIPT = """\
-(function(){
-    var args = getArguments()[0] || {};
-    var t = (args.lightType || "spot").toLowerCase();
-    var light;
-    if (t === "distant") {
-        light = new DzDistantLight();
-    } else if (t === "point") {
-        light = new DzPointLight();
-    } else {
-        light = new DzSpotLight();
-        t = "spot";
-    }
-    light.setLabel(args.label || (t + "_light"));
-    Scene.addNode(light);
-    // See _CREATE_CAMERA_SCRIPT for why this is needed: a script-created node's
-    // internal name is empty until set explicitly, and daz_list_lights (via
-    // dazpy) resolves nodes by that name.
-    var baseName = String(args.label || (t + "_light")).replace(/[^A-Za-z0-9_]/g, "_") || "Light";
-    var candidateName = baseName, nameSuffix = 1;
-    while (Scene.findNode(candidateName)) {
-        candidateName = baseName + "_" + (++nameSuffix);
-    }
-    light.setName(candidateName);
-    var xp = light.findProperty("XTranslate");
-    var yp = light.findProperty("YTranslate");
-    var zp = light.findProperty("ZTranslate");
-    if (xp) xp.setValue(args.x !== undefined ? args.x : 0);
-    if (yp) yp.setValue(args.y !== undefined ? args.y : 200);
-    if (zp) zp.setValue(args.z !== undefined ? args.z : 200);
-    if (args.flux !== undefined && args.flux !== null) {
-        var fp = light.findProperty("Flux");
-        if (fp) fp.setValue(args.flux);
-    }
-    if (args.aimAtLabel) {
-        var target = Scene.findNodeByLabel(args.aimAtLabel);
-        if (!target) target = Scene.findNode(args.aimAtLabel);
-        if (target) {
-            var bbox = target.getWSBoundingBox();
-            var cx = (bbox.minX + bbox.maxX) / 2;
-            var cy = (bbox.minY + bbox.maxY) / 2;
-            var cz = (bbox.minZ + bbox.maxZ) / 2;
-            light.aimAt(new DzVec3(cx, cy, cz));
-        }
-    }
-    var pos = light.getWSPos();
-    var fp2 = light.findProperty("Flux");
-    return {
-        label: light.getLabel(),
-        type: t,
-        position: { x: pos.x, y: pos.y, z: pos.z },
-        flux: fp2 ? fp2.getValue() : null
-    };
-})()
-"""
 
 # ---------------------------------------------------------------------------
 # Phase 5: Camera management
 # ---------------------------------------------------------------------------
 
-_LIST_CAMERAS_SCRIPT = """\
-(function(){
-    var cameras = [];
-    for (var i = 0; i < Scene.getNumCameras(); i++) {
-        var c = Scene.getCamera(i);
-        var pos = c.getWSPos();
-        var focalProp = c.getFocalLengthControl();
-        cameras.push({
-            index: i,
-            label: c.getLabel(),
-            name: c.getName(),
-            type: c.className(),
-            position: {
-                x: Math.round(pos.x * 100) / 100,
-                y: Math.round(pos.y * 100) / 100,
-                z: Math.round(pos.z * 100) / 100
-            },
-            focal_length: focalProp ? Math.round(focalProp.getValue() * 10) / 10 : null
-        });
-    }
-    return { camera_count: cameras.length, cameras: cameras };
-})()
-"""
 
 _CREATE_CAMERA_SCRIPT = """\
 (function(){
@@ -4805,26 +4399,6 @@ _REGISTRY: dict[str, tuple[str, str]] = {
         "Coordinate two characters for interactive poses (hug, handshake, etc)",
         _INTERACTIVE_POSE_SCRIPT,
     ),
-    "vangard-set-active-camera": (
-        "Set which camera is active in the viewport",
-        _SET_ACTIVE_CAMERA_SCRIPT,
-    ),
-    "vangard-orbit-camera-around": (
-        "Position camera orbiting around a target node at specified angle and distance",
-        _ORBIT_CAMERA_AROUND_SCRIPT,
-    ),
-    "vangard-frame-camera-to-node": (
-        "Frame camera to show a node by positioning at calculated distance",
-        _FRAME_CAMERA_TO_NODE_SCRIPT,
-    ),
-    "vangard-save-camera-preset": (
-        "Save camera position and rotation as preset data",
-        _SAVE_CAMERA_PRESET_SCRIPT,
-    ),
-    "vangard-load-camera-preset": (
-        "Restore camera position and rotation from preset data",
-        _LOAD_CAMERA_PRESET_SCRIPT,
-    ),
     "vangard-render-with-camera": (
         "Render from specific camera without changing viewport",
         _RENDER_WITH_CAMERA_SCRIPT,
@@ -4840,11 +4414,6 @@ _REGISTRY: dict[str, tuple[str, str]] = {
     "vangard-render-animation": (
         "Render animation frame range as image sequence",
         _RENDER_ANIMATION_SCRIPT,
-    ),
-    # Phase 1: Lighting presets
-    "vangard-apply-lighting-preset": (
-        "Create a professional lighting setup (three-point, rembrandt, butterfly, split, loop)",
-        _APPLY_LIGHTING_PRESET_SCRIPT,
     ),
     # Phase 1.5: Render quality preset (used by daz_set_render_quality)
     "vangard-set-render-quality": (
@@ -4913,24 +4482,6 @@ _REGISTRY: dict[str, tuple[str, str]] = {
     "vangard-time-expression": (
         "Set keyframed morph animation for an expression with ease-in, hold, and ease-out phases",
         _TIME_EXPRESSION_SCRIPT,
-    ),
-    # Phase 5: Light management
-    "vangard-list-lights": (
-        "List all lights in the scene with type, position, and flux",
-        _LIST_LIGHTS_SCRIPT,
-    ),
-    "vangard-create-light": (
-        "Create a new light (spot/distant/point) and add it to the scene",
-        _CREATE_LIGHT_SCRIPT,
-    ),
-    # Phase 5: Camera management
-    "vangard-list-cameras": (
-        "List all cameras in the scene with position and focal length",
-        _LIST_CAMERAS_SCRIPT,
-    ),
-    "vangard-create-camera": (
-        "Create a new camera and add it to the scene",
-        _CREATE_CAMERA_SCRIPT,
     ),
     # Phase 5: Scene file operations
     "vangard-set-render-output": (

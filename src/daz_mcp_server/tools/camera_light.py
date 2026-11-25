@@ -1,7 +1,8 @@
 """Camera and lighting tools for the Vangard DAZ MCP server."""
 from __future__ import annotations
 
-import json
+import math
+import re
 from typing import Any
 
 from fastmcp.exceptions import ToolError
@@ -10,8 +11,12 @@ from dazpy import shot_library as sl
 from dazpy.math3 import Vec3
 from dazpy.shots import CAMERA_ANGLES, Framing, Lens, Placement, Shot, apply_shot, framing_transform
 
-from .._mcp import mcp, _execute_by_id, _execute
-from .._client import get_scene
+from dazpy import DazRenderSettings
+from dazpy.exceptions import PropertyNotFoundError
+
+from .._mcp import mcp
+from .._client import get_daz_client, get_scene
+from .._errors import run_tool
 from .. import _shots
 
 
@@ -41,6 +46,123 @@ TIME_OF_DAY_PRESETS: dict[str, dict[str, Any]] = {
 # ---------------------------------------------------------------------------
 # Camera tools
 # ---------------------------------------------------------------------------
+
+_COMPOSITION_RULES: dict[str, tuple[float, float, str]] = {
+    # rule: (screen x of the subject, camera elevation deg, explanation)
+    "rule-of-thirds": (sl.THIRD_X, 0.0, "Subject on the right vertical third at eye level"),
+    "golden-ratio": (sl.GOLDEN_X, 0.0, "Subject on the right golden section (0.382 / 0.618 split)"),
+    "center-frame": (0.0, 0.0, "Subject centred in frame"),
+    "leading-lines": (-sl.THIRD_X, -10.0,
+                      "Low angle, subject on the left third: the frame leads in diagonally"),
+}
+
+#: angle: (camera elevation deg, roll deg, note)
+_CAMERA_ANGLES: dict[str, tuple[float, float, str]] = {
+    "eye-level": (CAMERA_ANGLES["eye_level"], 0.0, "Camera at eye height — neutral perspective"),
+    "high-angle": (CAMERA_ANGLES["high"], 0.0,
+                   "Camera above subject — creates vulnerable or diminished feel"),
+    "low-angle": (CAMERA_ANGLES["low"], 0.0,
+                  "Camera below eye level — creates powerful or dominant feel"),
+    "dutch-angle": (0.0, 15.0, "Camera rolled 15° about the lens axis — unease or tension"),
+    "overhead": (89.0, 0.0, "Bird's eye view from directly overhead"),
+    "worms-eye": (CAMERA_ANGLES["worms_eye"], 0.0, "Low looking up — extreme dramatic low angle"),
+    "over-shoulder": (0.0, 0.0, "Over-the-shoulder perspective — conversation/reaction shot"),
+}
+
+
+_PRESET_TRANSFORMS = ("XTranslate", "YTranslate", "ZTranslate", "XRotate", "YRotate",
+                      "ZRotate", "XScale", "YScale", "ZScale")
+
+# preset -> [(label, flux, azimuth deg, elevation deg, light type, shadow softness)]
+_LIGHTING_PRESETS: dict[str, list[tuple[str, float, float, float, str, float]]] = {
+    "three-point": [("Key Light", 2000, 45, 35, "spot", 30),
+                    ("Fill Light", 800, -45, 20, "spot", 60),
+                    ("Rim Light", 1200, 180, 45, "distant", 20)],
+    "rembrandt": [("Key Light", 2200, 45, 45, "spot", 20),
+                  ("Fill Light", 400, -90, 10, "spot", 80)],
+    "butterfly": [("Key Light", 2000, 0, 45, "spot", 25),
+                  ("Fill Light", 500, 0, -5, "spot", 80)],
+    "split": [("Key Light", 2200, 90, 15, "spot", 15),
+              ("Rim Light", 800, -90, 20, "spot", 40)],
+    "loop": [("Key Light", 2000, 35, 30, "spot", 35),
+             ("Fill Light", 700, -50, 15, "spot", 70),
+             ("Rim Light", 900, 160, 40, "spot", 25)],
+}
+
+
+def _unique_name(scene: Any, label: str, fallback: str) -> str:
+    """An internal node name from *label* that no scene node uses yet."""
+    base = re.sub(r"[^A-Za-z0-9_]", "_", label) or fallback
+    name, n = base, 1
+    while scene.find_nodes(name):
+        n += 1
+        name = f"{base}_{n}"
+    return name
+
+
+def _box_center(node: Any) -> tuple[float, float, float]:
+    """World centre of *node*'s bounding box (its origin if it has no geometry)."""
+    box = node.bounding_box()
+    if not box:
+        p = node.position
+        return (p["x"], p["y"], p["z"])
+    return tuple((box["min"][k] + box["max"][k]) / 2 for k in "xyz")  # type: ignore[return-value]
+
+
+def _tint_lights(intensity: float, color: tuple[int, int, int] | list[int]) -> int:
+    """Set every scene light's Intensity and Color; returns how many."""
+    lights = get_scene().lights()
+    for light in lights:
+        light.intensity = intensity
+        light.set_color(*color)
+    return len(lights)
+
+
+def _preset_light_position(center: dict, radius: float, height: float,
+                           az_deg: float, el_deg: float) -> tuple[float, float, float]:
+    a, e = math.radians(az_deg), math.radians(el_deg)
+    return (center["x"] + radius * math.sin(a) * math.cos(e),
+            center["y"] + radius * math.sin(e) + height * 0.1,
+            center["z"] + radius * math.cos(a) * math.cos(e))
+
+
+def _place_preset_light(scene: Any, spec: tuple, center: dict, radius: float, height: float,
+                        aim: tuple[float, float, float]) -> dict[str, Any]:
+    """Create one preset light on a sphere around *center*, aimed at *aim*."""
+    label, flux, az, el, kind, softness = spec
+    pos = _preset_light_position(center, radius, height, az, el)
+    light = scene.create_light(kind)
+    light.label = label
+    light.set_position(*pos)
+    light.set_numeric_property("Flux", float(flux))
+    light.set_numeric_property("Shadow Softness", float(softness))
+    light.aim_at(*aim)
+    return {"label": label, "type": "DzSpotLight" if kind == "spot" else "DzDistantLight",
+            "position": {k: round(v) for k, v in zip("xyz", pos)}, "flux": flux}
+
+
+def _apply_lighting_preset(preset: str, subject_label: str | None) -> dict[str, Any]:
+    scene = get_scene()
+    center, height = {"x": 0.0, "y": 150.0, "z": 0.0}, 170.0
+    if subject_label:
+        box = scene.resolve_node(subject_label).bounding_box()
+        if box:
+            center = {k: (box["min"][k] + box["max"][k]) / 2 for k in "xyz"}
+            height = box["max"]["y"] - box["min"]["y"]
+    face_y = center["y"] + height * 0.2
+    radius = height * 1.2
+    defs = _LIGHTING_PRESETS[preset]
+    labels = {d[0] for d in defs}
+    for old in scene.light_info():  # replace a previous run's lights
+        if old.label in labels:
+            scene.resolve_node(str(old.element_id)).delete()
+    aim = (center["x"], face_y, center["z"])
+    created = [_place_preset_light(scene, d, center, radius, height, aim) for d in defs]
+    env_set = DazRenderSettings(get_daz_client()).set_environment_mode("scene_only")
+    return {"preset": preset, "subject": subject_label, "lights_created": created,
+            "environment_mode": "Scene Only (3)" if env_set else
+            "unchanged (no environment node yet; it is created by the first Iray render)"}
+
 
 @mcp.tool()
 async def daz_set_active_camera(camera_label: str) -> dict[str, Any]:
@@ -72,7 +194,13 @@ async def daz_set_active_camera(camera_label: str) -> dict[str, Any]:
         available cameras. The viewport updates immediately to show the
         camera's current view.
     """
-    return await _execute_by_id("vangard-set-active-camera", {"cameraLabel": camera_label})
+    def _run() -> dict[str, Any]:
+        scene = get_scene()
+        previous = scene.set_viewport_camera(camera_label)
+        return {"success": True, "camera": scene.viewport_camera().label,
+                "previousCamera": previous}
+
+    return await run_tool(_run)
 
 
 @mcp.tool()
@@ -126,16 +254,21 @@ async def daz_orbit_camera_around(
 
         Camera is automatically aimed at the target's world position after positioning.
     """
-    return await _execute_by_id(
-        "vangard-orbit-camera-around",
-        {
-            "cameraLabel": camera_label,
-            "targetLabel": target_label,
-            "distance": distance,
-            "angleHorizontal": angle_horizontal,
-            "angleVertical": angle_vertical,
-        },
-    )
+    def _run() -> dict[str, Any]:
+        scene = get_scene()
+        cam = scene.resolve_node(camera_label)
+        target = scene.resolve_node(target_label)
+        t = target.position
+        h, v = math.radians(angle_horizontal), math.radians(angle_vertical)
+        pos = {"x": t["x"] + distance * math.cos(v) * math.sin(h),
+               "y": t["y"] + distance * math.sin(v),
+               "z": t["z"] + distance * math.cos(v) * math.cos(h)}
+        cam.set_position(pos["x"], pos["y"], pos["z"])
+        cam.aim_at(t["x"], t["y"], t["z"])
+        return {"success": True, "camera": cam.describe().label,
+                "target": target.describe().label, "position": pos, "targetPosition": t}
+
+    return await run_tool(_run)
 
 
 @mcp.tool()
@@ -184,14 +317,24 @@ async def daz_frame_camera_to_node(
         - Camera is aimed at the center of the node's bounding box
         - Useful for automatically framing objects of varying sizes
     """
-    args: dict[str, Any] = {
-        "cameraLabel": camera_label,
-        "nodeLabel": node_label,
-    }
-    if distance is not None:
-        args["distance"] = distance
+    def _run() -> dict[str, Any]:
+        scene = get_scene()
+        cam = scene.resolve_node(camera_label)
+        node = scene.resolve_node(node_label)
+        box = node.bounding_box()
+        if not box:
+            raise ToolError(f"Node has no geometry to frame: {node_label}")
+        center = {k: (box["min"][k] + box["max"][k]) / 2 for k in "xyz"}
+        size = {k: box["max"][k] - box["min"][k] for k in "xyz"}
+        dist = distance if distance is not None else max(size.values()) * 2.5
+        pos = {"x": center["x"], "y": center["y"], "z": center["z"] + dist}
+        cam.set_position(pos["x"], pos["y"], pos["z"])
+        cam.aim_at(center["x"], center["y"], center["z"])
+        return {"success": True, "camera": cam.describe().label,
+                "node": node.describe().label, "position": pos, "nodeCenter": center,
+                "nodeSize": size}
 
-    return await _execute_by_id("vangard-frame-camera-to-node", args)
+    return await run_tool(_run)
 
 
 @mcp.tool()
@@ -231,7 +374,13 @@ async def daz_save_camera_preset(camera_label: str) -> dict[str, Any]:
         - Does not include camera-specific settings (focal length, DOF, etc.)
         - Preset data can be applied to any camera, not just the original
     """
-    return await _execute_by_id("vangard-save-camera-preset", {"cameraLabel": camera_label})
+    def _run() -> dict[str, Any]:
+        cam = get_scene().resolve_node(camera_label)
+        transforms = {d.name: d.value for d in cam.property_details("transform")
+                      if d.name in _PRESET_TRANSFORMS}
+        return {"preset": {"label": cam.describe().label, "transforms": transforms}}
+
+    return await run_tool(_run)
 
 
 @mcp.tool()
@@ -270,15 +419,21 @@ async def daz_load_camera_preset(camera_label: str, preset: dict[str, Any]) -> d
         - Useful for saving/loading camera positions across sessions
         - Can be used to synchronize multiple cameras
     """
-    return await _execute_by_id(
-        "vangard-load-camera-preset",
-        {"cameraLabel": camera_label, "preset": preset},
-    )
+    if not isinstance(preset, dict) or not isinstance(preset.get("transforms"), dict):
+        raise ToolError("Invalid preset data: expected {'transforms': {...}}")
 
+    def _run() -> dict[str, Any]:
+        scene = get_scene()
+        cam = scene.resolve_node(camera_label)
+        info = cam.describe()
+        names = list(preset["transforms"])
+        results = scene.set_numeric_properties(
+            [(str(info.element_id), n, preset["transforms"][n]) for n in names])
+        return {"success": True, "camera": info.label,
+                "applied": [n for n, r in zip(names, results) if r.ok]}
 
-# ---------------------------------------------------------------------------
-# Lighting preset / composition tools
-# ---------------------------------------------------------------------------
+    return await run_tool(_run)
+
 
 @mcp.tool()
 async def daz_apply_lighting_preset(
@@ -320,33 +475,9 @@ async def daz_apply_lighting_preset(
             "environment_mode": "Scene Only (3)"
         }
     """
-    args: dict[str, Any] = {"preset": preset}
-    if subject_label is not None:
-        args["subjectLabel"] = subject_label
-    return await _execute_by_id("vangard-apply-lighting-preset", args)
-
-
-_COMPOSITION_RULES: dict[str, tuple[float, float, str]] = {
-    # rule: (screen x of the subject, camera elevation deg, explanation)
-    "rule-of-thirds": (sl.THIRD_X, 0.0, "Subject on the right vertical third at eye level"),
-    "golden-ratio": (sl.GOLDEN_X, 0.0, "Subject on the right golden section (0.382 / 0.618 split)"),
-    "center-frame": (0.0, 0.0, "Subject centred in frame"),
-    "leading-lines": (-sl.THIRD_X, -10.0,
-                      "Low angle, subject on the left third: the frame leads in diagonally"),
-}
-
-#: angle: (camera elevation deg, roll deg, note)
-_CAMERA_ANGLES: dict[str, tuple[float, float, str]] = {
-    "eye-level": (CAMERA_ANGLES["eye_level"], 0.0, "Camera at eye height — neutral perspective"),
-    "high-angle": (CAMERA_ANGLES["high"], 0.0,
-                   "Camera above subject — creates vulnerable or diminished feel"),
-    "low-angle": (CAMERA_ANGLES["low"], 0.0,
-                  "Camera below eye level — creates powerful or dominant feel"),
-    "dutch-angle": (0.0, 15.0, "Camera rolled 15° about the lens axis — unease or tension"),
-    "overhead": (89.0, 0.0, "Bird's eye view from directly overhead"),
-    "worms-eye": (CAMERA_ANGLES["worms_eye"], 0.0, "Low looking up — extreme dramatic low angle"),
-    "over-shoulder": (0.0, 0.0, "Over-the-shoulder perspective — conversation/reaction shot"),
-}
+    if preset not in _LIGHTING_PRESETS:
+        raise ToolError(f"Unknown preset: {preset}. Valid: {', '.join(_LIGHTING_PRESETS)}")
+    return await run_tool(lambda: _apply_lighting_preset(preset, subject_label))
 
 
 @mcp.tool()
@@ -541,7 +672,15 @@ async def daz_list_lights() -> dict[str, Any]:
         - ``flux`` is in DAZ Studio's internal units (roughly equivalent to
           Watts for Iray); ``null`` if the light has no Flux property.
     """
-    return await _execute_by_id("vangard-list-lights")
+    def _run() -> dict[str, Any]:
+        lights = [{"index": li.index, "label": li.label, "name": li.name, "type": li.type,
+                   "position": {k: round(v, 2) for k, v in zip("xyz", li.position)},
+                   "flux": round(li.flux) if li.flux is not None else None,
+                   "enabled": li.on}
+                  for li in get_scene().light_info()]
+        return {"light_count": len(lights), "lights": lights}
+
+    return await run_tool(_run)
 
 
 @mcp.tool()
@@ -586,23 +725,24 @@ async def daz_create_light(
         raise ToolError(
             f"light_type must be one of {valid_types}, got '{light_type}'"
         )
-    return await _execute_by_id(
-        "vangard-create-light",
-        {
-            "lightType": light_type,
-            "label": label,
-            "x": x,
-            "y": y,
-            "z": z,
-            "flux": flux,
-            "aimAtLabel": aim_at_label,
-        },
-    )
+    def _run() -> dict[str, Any]:
+        scene = get_scene()
+        light = scene.create_light(light_type, name=_unique_name(scene, label, "Light"))
+        light.label = label
+        light.set_position(x, y, z)
+        if flux is not None:
+            light.set_numeric_property("Flux", float(flux))
+        if aim_at_label:
+            light.aim_at(*_box_center(scene.resolve_node(aim_at_label)))
+        try:  # "Flux" is the property name; its label is "Luminous Flux (Lumen)"
+            flux_now = light.property_detail("Flux").value
+        except PropertyNotFoundError:
+            flux_now = None  # light types without a Flux dial
+        return {"label": label, "type": light_type, "position": light.position,
+                "flux": flux_now}
 
+    return await run_tool(_run)
 
-# ---------------------------------------------------------------------------
-# Camera listing / creation
-# ---------------------------------------------------------------------------
 
 @mcp.tool()
 async def daz_list_cameras() -> dict[str, Any]:
@@ -621,7 +761,14 @@ async def daz_list_cameras() -> dict[str, Any]:
         daz_list_cameras()
         # → {"camera_count": 2, "cameras": [{"label": "Camera 1", ...}]}
     """
-    return await _execute_by_id("vangard-list-cameras")
+    def _run() -> dict[str, Any]:
+        cams = [{"index": c.index, "label": c.label, "name": c.name, "type": c.type,
+                 "position": {k: round(v, 2) for k, v in zip("xyz", c.position)},
+                 "focal_length": round(c.focal_length, 1) if c.focal_length is not None else None}
+                for c in get_scene().camera_info()]
+        return {"camera_count": len(cams), "cameras": cams}
+
+    return await run_tool(_run)
 
 
 @mcp.tool()
@@ -659,22 +806,19 @@ async def daz_create_camera(
         - Use daz_set_active_camera to switch the active viewport camera.
         - Use daz_list_cameras to confirm the camera was added.
     """
-    return await _execute_by_id(
-        "vangard-create-camera",
-        {
-            "label": label,
-            "x": x,
-            "y": y,
-            "z": z,
-            "aimAtLabel": aim_at_label,
-            "focalLength": focal_length,
-        },
-    )
+    def _run() -> dict[str, Any]:
+        scene = get_scene()
+        cam = scene.create_camera(_unique_name(scene, label, "Camera"))
+        cam.label = label
+        cam.set_position(x, y, z)
+        if focal_length:
+            cam.focal_length = focal_length
+        if aim_at_label:
+            cam.aim_at(*_box_center(scene.resolve_node(aim_at_label)))
+        return {"label": label, "position": cam.position, "focal_length": cam.focal_length}
 
+    return await run_tool(_run)
 
-# ---------------------------------------------------------------------------
-# New tools: mood / time-of-day lighting via inline DazScript
-# ---------------------------------------------------------------------------
 
 @mcp.tool()
 async def daz_set_mood_lighting(
@@ -714,26 +858,10 @@ async def daz_set_mood_lighting(
         raise ToolError(f"Unknown mood '{mood}'. Valid moods: {valid}")
 
     preset = MOOD_PRESETS[mood]
-    intensity = preset["intensity"]
-    r, g, b = preset["color"]
-
-    script = f"""
-(function() {{
-    var count = 0;
-    var numLights = Scene.getNumLights();
-    for (var i = 0; i < numLights; i++) {{
-        var light = Scene.getLight(i);
-        var ip = light.findPropertyByLabel('Intensity');
-        if (ip) {{ ip.setValue({intensity}); }}
-        var cp = light.findPropertyByLabel('Diffuse Color');
-        if (cp) {{ cp.setValue(new Color({r}, {g}, {b})); }}
-        count++;
-    }}
-    return {{ mood: {json.dumps(mood)}, lights_adjusted: count,
-              intensity: {intensity}, color: [{r}, {g}, {b}] }};
-}})()
-"""
-    return await _execute(script)
+    preset = MOOD_PRESETS[mood]
+    adjusted = await run_tool(lambda: _tint_lights(preset["intensity"], preset["color"]))
+    return {"mood": mood, "lights_adjusted": adjusted, "intensity": preset["intensity"],
+            "color": list(preset["color"])}
 
 
 @mcp.tool()
@@ -773,23 +901,7 @@ async def daz_apply_time_of_day(
         raise ToolError(f"Unknown time_of_day '{time_of_day}'. Valid values: {valid}")
 
     preset = TIME_OF_DAY_PRESETS[time_of_day]
-    intensity = preset["intensity"]
-    r, g, b = preset["color"]
-
-    script = f"""
-(function() {{
-    var count = 0;
-    var numLights = Scene.getNumLights();
-    for (var i = 0; i < numLights; i++) {{
-        var light = Scene.getLight(i);
-        var ip = light.findPropertyByLabel('Intensity');
-        if (ip) {{ ip.setValue({intensity}); }}
-        var cp = light.findPropertyByLabel('Diffuse Color');
-        if (cp) {{ cp.setValue(new Color({r}, {g}, {b})); }}
-        count++;
-    }}
-    return {{ time_of_day: {json.dumps(time_of_day)}, lights_adjusted: count,
-              intensity: {intensity}, color: [{r}, {g}, {b}] }};
-}})()
-"""
-    return await _execute(script)
+    preset = TIME_OF_DAY_PRESETS[time_of_day]
+    adjusted = await run_tool(lambda: _tint_lights(preset["intensity"], preset["color"]))
+    return {"time_of_day": time_of_day, "lights_adjusted": adjusted,
+            "intensity": preset["intensity"], "color": list(preset["color"])}

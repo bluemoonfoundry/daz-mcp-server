@@ -69,7 +69,18 @@ Requires dazpy 2.17.0 or later, for the new primitives these tools use
     lists internal bone names.
   - `daz_reach_toward` reports `converged`, `finalError` and `iterations`
     instead of `targetDistance`.
-- 51 registered scripts are removed (107 to 56), and a unit test fails if any
+- The camera and light tools use dazpy: set active camera, orbit, frame,
+  camera presets, list/create lights and cameras, lighting presets, mood
+  and time of day.
+  - `daz_set_active_camera` also accepts Studio's built-in view cameras
+    ("Perspective View", ...).
+  - `daz_set_mood_lighting` and `daz_apply_time_of_day` now set the light
+    color. They wrote to a "Diffuse Color" property that Studio lights
+    don't have.
+  - `daz_apply_lighting_preset` sets Scene Only on the real environment
+    node (on Studio 4 and 6) instead of on whatever node was second in the
+    scene. When no environment node exists yet, it says so.
+- 61 registered scripts are removed (107 to 46), and a unit test fails if any
   registered script is no longer called by a tool.
 
 ### Fixed
