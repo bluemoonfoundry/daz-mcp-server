@@ -1204,153 +1204,18 @@ _RENDER_ANIMATION_SCRIPT = """\
 # args: {nodeLabel, propertyName, frame, value}
 # Returns: {success, node, property, frame, value}
 # Set a keyframe on a property at specified frame
-_SET_KEYFRAME_SCRIPT = """\
-(function(){
-    var args = getArguments()[0] || {};
-    var node = Scene.findNodeByLabel(args.nodeLabel);
-    if (!node) node = Scene.findNode(args.nodeLabel);
-    if (!node) throw new Error("Node not found: " + args.nodeLabel);
-
-    var prop = null;
-    for (var p = 0; p < node.getNumProperties(); p++) {
-        var pr = node.getProperty(p);
-        if (pr.getLabel() === args.propertyName || pr.getName() === args.propertyName) {
-            prop = pr;
-            break;
-        }
-    }
-
-    if (!prop) throw new Error("Property not found: " + args.propertyName);
-    if (!prop.inherits("DzNumericProperty")) throw new Error("Property is not numeric: " + args.propertyName);
-
-    var frame = args.frame;
-    var value = args.value;
-
-    // Set value at frame — two-arg setValue creates a keyframe (DzFloatProperty)
-    prop.setValue(frame, value);
-
-    return {
-        success: true,
-        node: node.getLabel(),
-        property: prop.getLabel(),
-        frame: frame,
-        value: value
-    };
-})()
-"""
 
 # args: {nodeLabel, propertyName}
 # Returns: {keyframes: [{frame, value}], count}
 # Get all keyframes for a property
-_GET_KEYFRAMES_SCRIPT = """\
-(function(){
-    var args = getArguments()[0] || {};
-    var node = Scene.findNodeByLabel(args.nodeLabel);
-    if (!node) node = Scene.findNode(args.nodeLabel);
-    if (!node) throw new Error("Node not found: " + args.nodeLabel);
-
-    var prop = null;
-    for (var p = 0; p < node.getNumProperties(); p++) {
-        var pr = node.getProperty(p);
-        if (pr.getLabel() === args.propertyName || pr.getName() === args.propertyName) {
-            prop = pr;
-            break;
-        }
-    }
-
-    if (!prop) throw new Error("Property not found: " + args.propertyName);
-    if (!prop.inherits("DzNumericProperty")) throw new Error("Property is not numeric: " + args.propertyName);
-
-    var keyframes = [];
-    var numKeys = prop.getNumKeys();
-
-    for (var i = 0; i < numKeys; i++) {
-        var frame = prop.getKeyTime(i);
-        var value = prop.getKeyValue(i);
-        keyframes.push({frame: frame, value: value});
-    }
-
-    return {
-        keyframes: keyframes,
-        count: numKeys
-    };
-})()
-"""
 
 # args: {nodeLabel, propertyName, frame}
 # Returns: {success, node, property, frame, removed}
 # Remove a keyframe at specified frame
-_REMOVE_KEYFRAME_SCRIPT = """\
-(function(){
-    var args = getArguments()[0] || {};
-    var node = Scene.findNodeByLabel(args.nodeLabel);
-    if (!node) node = Scene.findNode(args.nodeLabel);
-    if (!node) throw new Error("Node not found: " + args.nodeLabel);
-
-    var prop = null;
-    for (var p = 0; p < node.getNumProperties(); p++) {
-        var pr = node.getProperty(p);
-        if (pr.getLabel() === args.propertyName || pr.getName() === args.propertyName) {
-            prop = pr;
-            break;
-        }
-    }
-
-    if (!prop) throw new Error("Property not found: " + args.propertyName);
-    if (!prop.inherits("DzNumericProperty")) throw new Error("Property is not numeric: " + args.propertyName);
-
-    var frame = args.frame;
-
-    // Find and remove keyframe at the given frame
-    var keyIndex = prop.findKeyIndex(frame);
-    var removed = keyIndex >= 0;
-    if (removed) {
-        prop.deleteKeys(frame, frame);
-    }
-
-    return {
-        success: true,
-        node: node.getLabel(),
-        property: prop.getLabel(),
-        frame: frame,
-        removed: removed
-    };
-})()
-"""
 
 # args: {nodeLabel, propertyName}
 # Returns: {success, node, property, removed}
 # Remove all keyframes from a property
-_CLEAR_ANIMATION_SCRIPT = """\
-(function(){
-    var args = getArguments()[0] || {};
-    var node = Scene.findNodeByLabel(args.nodeLabel);
-    if (!node) node = Scene.findNode(args.nodeLabel);
-    if (!node) throw new Error("Node not found: " + args.nodeLabel);
-
-    var prop = null;
-    for (var p = 0; p < node.getNumProperties(); p++) {
-        var pr = node.getProperty(p);
-        if (pr.getLabel() === args.propertyName || pr.getName() === args.propertyName) {
-            prop = pr;
-            break;
-        }
-    }
-
-    if (!prop) throw new Error("Property not found: " + args.propertyName);
-    if (!prop.inherits("DzNumericProperty")) throw new Error("Property is not numeric: " + args.propertyName);
-
-    var numKeys = prop.getNumKeys();
-    prop.deleteAllKeys();
-
-    return {
-        success: true,
-        node: node.getLabel(),
-        property: prop.getLabel(),
-        removed: numKeys
-    };
-})()
-"""
 
 # args: {frame}
 # Returns: {success, frame, previousFrame}
@@ -5576,22 +5441,6 @@ _REGISTRY: dict[str, tuple[str, str]] = {
     "vangard-load-camera-preset": (
         "Restore camera position and rotation from preset data",
         _LOAD_CAMERA_PRESET_SCRIPT,
-    ),
-    "vangard-set-keyframe": (
-        "Set a keyframe on a property at specified frame",
-        _SET_KEYFRAME_SCRIPT,
-    ),
-    "vangard-get-keyframes": (
-        "Get all keyframes for a property",
-        _GET_KEYFRAMES_SCRIPT,
-    ),
-    "vangard-remove-keyframe": (
-        "Remove a keyframe at specified frame",
-        _REMOVE_KEYFRAME_SCRIPT,
-    ),
-    "vangard-clear-animation": (
-        "Remove all keyframes from a property",
-        _CLEAR_ANIMATION_SCRIPT,
     ),
     "vangard-render-with-camera": (
         "Render from specific camera without changing viewport",

@@ -5,8 +5,8 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
-Requires dazpy 2.17.0 or later (`DazNode.set_numeric_candidates`,
-`DazSkeleton.set_bone_axes`/`bone_names`, `DazScene.viewport_camera`).
+Requires dazpy 2.17.0 or later, for the new primitives these tools use
+(node references, property search, material, keyframe and pose helpers).
 
 ### Changed
 
@@ -21,6 +21,30 @@ Requires dazpy 2.17.0 or later (`DazNode.set_numeric_candidates`,
 - `daz_direct_gaze` with `direction="character"` aims at the target figure's
   head instead of its root (feet). The result adds `requested`, and
   `applied` now reports the rotation the head kept after its joint limits.
+- Node tools use dazpy and accept an elementID or `Parent/Label` path
+  anywhere a node label is taken. An ambiguous label is an error that lists
+  the candidates' elementIDs. Covered: `daz_get_node`, `daz_find_nodes`,
+  `daz_set_property`, `daz_delete_node`, `daz_set_parent`, `daz_set_morph`,
+  `daz_list_morphs`, `daz_search_morphs`, `daz_get_node_hierarchy` and the
+  material and keyframe tools.
+  - `daz_get_node` also returns modifier-stack properties (morph dials). The
+    old script meant to, but its dedupe kept only one, because every morph
+    channel is named `Value`.
+  - Property and morph names match case-insensitively.
+  - `daz_set_parent(node, "Scene")` un-parents the node. It used to fail with
+    "Node not found: Scene".
+- `daz_scene_info`, `daz_load_file(merge=False)` and the checkpoint tools use
+  dazpy.
+  - Replace-mode load clears the scene and then merges, so Studio's "save
+    changes?" prompt can't block the server.
+  - `daz_save_scene_state`/`daz_restore_scene_state` use `DazSceneState`.
+    They now restore bone rotations and fit-to targets too, check each
+    figure after restoring, and report `skipped` and `complete`. `restored`
+    lists internal node names.
+- The material tools use dazpy. A missing-zone error lists the available
+  zones, and `daz_set_material_property` reports the value Studio kept.
+- 37 registered scripts are removed, and a unit test fails if any registered
+  script is no longer called by a tool.
 
 ### Fixed
 
@@ -35,6 +59,11 @@ Requires dazpy 2.17.0 or later (`DazNode.set_numeric_candidates`,
   `Scene.getActiveCamera` doesn't exist. It now uses the active viewport
   camera, including Studio's built-in Perspective View. The neck fallback
   also finds Genesis 9's `neck2` (daz-mcp-server-w88).
+- The keyframe tools (`daz_set_keyframe`, `daz_get_keyframes`,
+  `daz_remove_keyframe`, `daz_clear_animation`) used the frame number as a
+  DzTime tick count, so "frame 30" was keyed at frame 0.19 (Studio runs at
+  160 ticks per frame). Frames are now converted, and `daz_get_keyframes`
+  reports real frames.
 
 ## [0.10.0] - 2026-11-24
 
