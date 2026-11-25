@@ -18,7 +18,6 @@ async def _register_scripts(client: AsyncDazClient) -> None:
             break  # DAZ Studio not running; remaining registrations skipped
 
 
-
 # ---------------------------------------------------------------------------
 # Embedded DazScript fragments
 #
@@ -244,92 +243,12 @@ _LOAD_FILE_SCRIPT = """\
 # includeZero: if true, return all morphs; if false, only return morphs with non-zero values
 # Returns: {morphs: [{label, name, value, path}], count}
 # Lists all numeric properties (morphs) on a node
-_LIST_MORPHS_SCRIPT = "(function(){\n" + _RESOLVE_NODE_JS + """
-    var args = getArguments()[0] || {};
-    var node = resolveNode(args.nodeLabel);
-
-    var includeZero = args.includeZero !== undefined ? args.includeZero : false;
-    var morphs = [];
-
-    for (var i = 0; i < node.getNumProperties(); i++) {
-        var prop = node.getProperty(i);
-        if (prop.inherits("DzNumericProperty")) {
-            var value = prop.getValue();
-
-            // Skip zero-valued morphs if includeZero is false
-            if (!includeZero && value === 0) {
-                continue;
-            }
-
-            // Get property path (useful for organizing morphs)
-            var path = prop.getPath ? prop.getPath() : "";
-
-            morphs.push({
-                label: prop.getLabel(),
-                name: prop.getName(),
-                value: value,
-                path: path
-            });
-        }
-    }
-
-    return {
-        morphs: morphs,
-        count: morphs.length,
-        nodeLabel: node.getLabel()
-    };
-})()
-"""
 
 # args: {nodeLabel, pattern, includeZero}
 # pattern: substring to search for in morph label or name (case-insensitive)
 # includeZero: if true, return all matching morphs; if false, only non-zero values
 # Returns: {morphs: [{label, name, value, path}], count, pattern}
 # Searches for morphs matching a pattern
-_SEARCH_MORPHS_SCRIPT = "(function(){\n" + _RESOLVE_NODE_JS + """
-    var args = getArguments()[0] || {};
-    var node = resolveNode(args.nodeLabel);
-
-    var pattern = args.pattern ? args.pattern.toLowerCase() : "";
-    var includeZero = args.includeZero !== undefined ? args.includeZero : false;
-    var morphs = [];
-
-    for (var i = 0; i < node.getNumProperties(); i++) {
-        var prop = node.getProperty(i);
-        if (prop.inherits("DzNumericProperty")) {
-            var label = prop.getLabel().toLowerCase();
-            var name = prop.getName().toLowerCase();
-            var value = prop.getValue();
-
-            // Check if label or name contains pattern
-            var matches = (label.indexOf(pattern) !== -1) || (name.indexOf(pattern) !== -1);
-
-            if (matches) {
-                // Skip zero-valued morphs if includeZero is false
-                if (!includeZero && value === 0) {
-                    continue;
-                }
-
-                var path = prop.getPath ? prop.getPath() : "";
-
-                morphs.push({
-                    label: prop.getLabel(),
-                    name: prop.getName(),
-                    value: value,
-                    path: path
-                });
-            }
-        }
-    }
-
-    return {
-        morphs: morphs,
-        count: morphs.length,
-        pattern: args.pattern,
-        nodeLabel: node.getLabel()
-    };
-})()
-"""
 
 # args: {nodeLabel, maxDepth}
 # maxDepth: maximum recursion depth (default 10, 0 = unlimited)
@@ -383,49 +302,10 @@ _GET_NODE_HIERARCHY_SCRIPT = "(function(){\n" + _RESOLVE_NODE_JS + """
 # args: {nodeLabel}
 # Returns: {node, children: [{label, name, type}], count}
 # Lists direct children of a node
-_LIST_CHILDREN_SCRIPT = "(function(){\n" + _RESOLVE_NODE_JS + """
-    var args = getArguments()[0] || {};
-    var node = resolveNode(args.nodeLabel);
-
-    var children = [];
-    for (var i = 0; i < node.getNumNodeChildren(); i++) {
-        var child = node.getNodeChild(i);
-        children.push({
-            label: child.getLabel(),
-            name: child.getName(),
-            type: child.className(),
-            elementID: child.elementID
-        });
-    }
-
-    return {
-        node: node.getLabel(),
-        children: children,
-        count: children.length
-    };
-})()
-"""
 
 # args: {nodeLabel}
 # Returns: {node, parent: {label, name, type} | null}
 # Gets parent node of a node
-_GET_PARENT_SCRIPT = "(function(){\n" + _RESOLVE_NODE_JS + """
-    var args = getArguments()[0] || {};
-    var node = resolveNode(args.nodeLabel);
-
-    var parent = node.getNodeParent();
-
-    return {
-        node: node.getLabel(),
-        parent: parent ? {
-            label: parent.getLabel(),
-            name: parent.getName(),
-            type: parent.className(),
-            elementID: parent.elementID
-        } : null
-    };
-})()
-"""
 
 # args: {nodeLabel, parentLabel, maintainWorldTransform}
 # maintainWorldTransform: if true, adjust local transform to maintain world position
@@ -993,134 +873,14 @@ _BATCH_SET_PROPERTIES_SCRIPT = """\
 # args: {nodeLabels: [string], transforms: {propertyName: value}}
 # Returns: {results: [{success, node, applied, error}], successCount, failureCount}
 # Apply same transform properties to multiple nodes
-_BATCH_TRANSFORM_SCRIPT = """\
-(function(){
-    var args = getArguments()[0] || {};
-    var nodeLabels = args.nodeLabels || [];
-    var transforms = args.transforms || {};
-    var results = [];
-    var successCount = 0;
-    var failureCount = 0;
-
-    for (var i = 0; i < nodeLabels.length; i++) {
-        var nodeLabel = nodeLabels[i];
-        var result = { success: false, node: nodeLabel, applied: [] };
-
-        try {
-            var n = Scene.findNodeByLabel(nodeLabel);
-            if (!n) n = Scene.findNode(nodeLabel);
-            if (!n) throw new Error("Node not found: " + nodeLabel);
-
-            for (var propName in transforms) {
-                var prop = null;
-                for (var p = 0; p < n.getNumProperties(); p++) {
-                    var pr = n.getProperty(p);
-                    if (pr.getLabel() === propName || pr.getName() === propName) {
-                        prop = pr;
-                        break;
-                    }
-                }
-
-                if (prop && prop.inherits("DzNumericProperty")) {
-                    prop.setValue(transforms[propName]);
-                    result.applied.push(prop.getLabel());
-                }
-            }
-
-            result.success = true;
-            successCount++;
-        } catch (e) {
-            result.error = e.message || String(e);
-            failureCount++;
-        }
-
-        results.push(result);
-    }
-
-    return {
-        results: results,
-        successCount: successCount,
-        failureCount: failureCount,
-        total: nodeLabels.length
-    };
-})()
-"""
 
 # args: {nodeLabels: [string], visible: boolean}
 # Returns: {results: [{success, node, visible, error}], successCount, failureCount}
 # Show or hide multiple nodes
-_BATCH_VISIBILITY_SCRIPT = """\
-(function(){
-    var args = getArguments()[0] || {};
-    var nodeLabels = args.nodeLabels || [];
-    var visible = args.visible !== undefined ? args.visible : true;
-    var results = [];
-    var successCount = 0;
-    var failureCount = 0;
-
-    for (var i = 0; i < nodeLabels.length; i++) {
-        var nodeLabel = nodeLabels[i];
-        var result = { success: false, node: nodeLabel };
-
-        try {
-            var n = Scene.findNodeByLabel(nodeLabel);
-            if (!n) n = Scene.findNode(nodeLabel);
-            if (!n) throw new Error("Node not found: " + nodeLabel);
-
-            n.setVisible(visible);
-            result.success = true;
-            result.visible = visible;
-            successCount++;
-        } catch (e) {
-            result.error = e.message || String(e);
-            failureCount++;
-        }
-
-        results.push(result);
-    }
-
-    return {
-        results: results,
-        successCount: successCount,
-        failureCount: failureCount,
-        total: nodeLabels.length
-    };
-})()
-"""
 
 # args: {nodeLabels: [string], addToSelection: boolean}
 # Returns: {selected: [labels], count}
 # Select multiple nodes (replace or add to current selection)
-_BATCH_SELECT_SCRIPT = """\
-(function(){
-    var args = getArguments()[0] || {};
-    var nodeLabels = args.nodeLabels || [];
-    var addToSelection = args.addToSelection !== undefined ? args.addToSelection : false;
-    var selected = [];
-
-    // Clear selection if replacing
-    if (!addToSelection) {
-        Scene.selectAllNodes(false);
-    }
-
-    for (var i = 0; i < nodeLabels.length; i++) {
-        var nodeLabel = nodeLabels[i];
-        var n = Scene.findNodeByLabel(nodeLabel);
-        if (!n) n = Scene.findNode(nodeLabel);
-
-        if (n) {
-            n.select(true);
-            selected.push(n.getLabel());
-        }
-    }
-
-    return {
-        selected: selected,
-        count: selected.length,
-        total: nodeLabels.length
-    };
-})()
-"""
 
 # args: {cameraLabel}
 # Returns: {success, camera, previousCamera}
@@ -1775,73 +1535,14 @@ _CLEAR_ANIMATION_SCRIPT = """\
 # args: {frame}
 # Returns: {success, frame, previousFrame}
 # Set current animation frame
-_SET_FRAME_SCRIPT = """\
-(function(){
-    var args = getArguments()[0] || {};
-    var frame = args.frame;
-    var previousFrame = Scene.getFrame();
-    Scene.setFrame(frame);
-
-    return {
-        success: true,
-        frame: frame,
-        previousFrame: previousFrame
-    };
-})()
-"""
 
 # args: {startFrame, endFrame}
 # Returns: {success, startFrame, endFrame, previousStart, previousEnd}
 # Set animation frame range
-_SET_FRAME_RANGE_SCRIPT = """\
-(function(){
-    var args = getArguments()[0] || {};
-    var startFrame = args.startFrame;
-    var endFrame = args.endFrame;
-
-    var timeStep = Scene.getTimeStep();
-    var anim = Scene.getAnimRange();
-    // DzTimeRange: .start and .end are tick-count properties (not methods)
-    var previousStart = Math.round(anim.start / timeStep);
-    var previousEnd   = Math.round(anim.end   / timeStep);
-
-    Scene.setAnimRange(new DzTimeRange(startFrame * timeStep, endFrame * timeStep));
-
-    return {
-        success: true,
-        startFrame: startFrame,
-        endFrame: endFrame,
-        previousStart: previousStart,
-        previousEnd: previousEnd
-    };
-})()
-"""
 
 # args: none
 # Returns: {currentFrame, startFrame, endFrame, fps}
 # Get animation timeline info
-_GET_ANIMATION_INFO_SCRIPT = """\
-(function(){
-    var args = getArguments()[0] || {};
-    var currentFrame = Scene.getFrame();
-    var timeStep     = Scene.getTimeStep();
-    var anim         = Scene.getAnimRange();
-    // DzTimeRange: .start and .end are tick-count properties (not methods)
-    var startFrame = Math.round(anim.start / timeStep);
-    var endFrame   = Math.round(anim.end   / timeStep);
-    // DAZ Studio uses 4800 ticks/second; getFPS() does not exist
-    var fps = Math.round(4800 / timeStep);
-
-    return {
-        currentFrame: currentFrame,
-        startFrame: startFrame,
-        endFrame: endFrame,
-        fps: fps,
-        totalFrames: endFrame - startFrame + 1,
-        durationSeconds: (endFrame - startFrame + 1) / fps
-    };
-})()
-"""
 
 # ---------------------------------------------------------------------------
 # Phase 1: Spatial Query Scripts
@@ -1849,88 +1550,12 @@ _GET_ANIMATION_INFO_SCRIPT = """\
 
 # args: {nodeLabel}
 # Returns: {node, world_position, local_position, rotation, scale}
-_GET_WORLD_POSITION_SCRIPT = """\
-(function(){
-    var args = getArguments()[0] || {};
-    var node = Scene.findNodeByLabel(args.nodeLabel);
-    if (!node) node = Scene.findNode(args.nodeLabel);
-    if (!node) throw new Error("Node not found: " + args.nodeLabel);
-
-    var wsPos = node.getWSPos();
-    var lPos = node.getLocalPos ? node.getLocalPos() : node.getOrigin();
-    var wsRot = node.getWSRot();
-    var wsScale = node.getWSScale();
-
-    return {
-        node: node.getLabel(),
-        world_position: { x: wsPos.x, y: wsPos.y, z: wsPos.z },
-        local_position: { x: lPos.x, y: lPos.y, z: lPos.z },
-        rotation: { x: wsRot.x, y: wsRot.y, z: wsRot.z },
-        scale: { x: wsScale.x, y: wsScale.y, z: wsScale.z }
-    };
-})()
-"""
 
 # args: {nodeLabel}
 # Returns: {node, min, max, center, width, height, depth}
-_GET_BOUNDING_BOX_SCRIPT = """\
-(function(){
-    var args = getArguments()[0] || {};
-    var node = Scene.findNodeByLabel(args.nodeLabel);
-    if (!node) node = Scene.findNode(args.nodeLabel);
-    if (!node) throw new Error("Node not found: " + args.nodeLabel);
-
-    var bbox = node.getWSBoundingBox();
-    return {
-        node: node.getLabel(),
-        min: { x: bbox.minX, y: bbox.minY, z: bbox.minZ },
-        max: { x: bbox.maxX, y: bbox.maxY, z: bbox.maxZ },
-        center: {
-            x: (bbox.minX + bbox.maxX) / 2,
-            y: (bbox.minY + bbox.maxY) / 2,
-            z: (bbox.minZ + bbox.maxZ) / 2
-        },
-        width:  bbox.maxX - bbox.minX,
-        height: bbox.maxY - bbox.minY,
-        depth:  bbox.maxZ - bbox.minZ
-    };
-})()
-"""
 
 # args: {node1Label, node2Label}
 # Returns: {node1, node2, distance, vector, horizontal_distance, vertical_distance}
-_CALCULATE_DISTANCE_SCRIPT = """\
-(function(){
-    var args = getArguments()[0] || {};
-    var n1 = Scene.findNodeByLabel(args.node1Label);
-    if (!n1) n1 = Scene.findNode(args.node1Label);
-    if (!n1) throw new Error("Node not found: " + args.node1Label);
-
-    var n2 = Scene.findNodeByLabel(args.node2Label);
-    if (!n2) n2 = Scene.findNode(args.node2Label);
-    if (!n2) throw new Error("Node not found: " + args.node2Label);
-
-    var p1 = n1.getWSPos();
-    var p2 = n2.getWSPos();
-
-    var dx = p2.x - p1.x;
-    var dy = p2.y - p1.y;
-    var dz = p2.z - p1.z;
-
-    var distance = Math.sqrt(dx*dx + dy*dy + dz*dz);
-    var horizontal_distance = Math.sqrt(dx*dx + dz*dz);
-    var vertical_distance = Math.abs(dy);
-
-    return {
-        node1: n1.getLabel(),
-        node2: n2.getLabel(),
-        distance: distance,
-        vector: { dx: dx, dy: dy, dz: dz },
-        horizontal_distance: horizontal_distance,
-        vertical_distance: vertical_distance
-    };
-})()
-"""
 
 # args: {node1Label, node2Label}
 # Returns: {node1, node2, distance, direction, angle_horizontal, angle_vertical,
@@ -1939,127 +1564,9 @@ _CALCULATE_DISTANCE_SCRIPT = """\
 # Angles are from node1's perspective looking toward node2.
 # angle_horizontal: 0=front(+Z), 90=right, 180=back, -90=left (in node1 local space)
 # angle_vertical: positive=above, negative=below
-_GET_SPATIAL_RELATIONSHIP_SCRIPT = """\
-(function(){
-    var args = getArguments()[0] || {};
-    var n1 = Scene.findNodeByLabel(args.node1Label);
-    if (!n1) n1 = Scene.findNode(args.node1Label);
-    if (!n1) throw new Error("Node not found: " + args.node1Label);
-
-    var n2 = Scene.findNodeByLabel(args.node2Label);
-    if (!n2) n2 = Scene.findNode(args.node2Label);
-    if (!n2) throw new Error("Node not found: " + args.node2Label);
-
-    var p1 = n1.getWSPos();
-    var p2 = n2.getWSPos();
-
-    var dx = p2.x - p1.x;
-    var dy = p2.y - p1.y;
-    var dz = p2.z - p1.z;
-
-    var distance = Math.sqrt(dx*dx + dy*dy + dz*dz);
-    var horizontal_distance = Math.sqrt(dx*dx + dz*dz);
-
-    // Horizontal angle: 0=+Z(front for Genesis), 90=+X(right), -90=-X(left), 180=back
-    var angle_horizontal = Math.atan2(dx, dz) * 180 / Math.PI;
-    // Vertical angle: positive=above node1, negative=below
-    var angle_vertical = Math.atan2(dy, horizontal_distance) * 180 / Math.PI;
-
-    // Direction label
-    var absH = Math.abs(angle_horizontal);
-    var hDir = "";
-    if (absH < 22.5) hDir = "front";
-    else if (absH < 67.5) hDir = angle_horizontal > 0 ? "front-right" : "front-left";
-    else if (absH < 112.5) hDir = angle_horizontal > 0 ? "right" : "left";
-    else if (absH < 157.5) hDir = angle_horizontal > 0 ? "back-right" : "back-left";
-    else hDir = "back";
-
-    var vDir = "";
-    if (angle_vertical > 15) vDir = " above";
-    else if (angle_vertical < -15) vDir = " below";
-
-    // Bounding box overlap check
-    var bb1 = n1.getWSBoundingBox();
-    var bb2 = n2.getWSBoundingBox();
-    var overlapping = (
-        bb1.minX <= bb2.maxX && bb1.maxX >= bb2.minX &&
-        bb1.minY <= bb2.maxY && bb1.maxY >= bb2.minY &&
-        bb1.minZ <= bb2.maxZ && bb1.maxZ >= bb2.minZ
-    );
-
-    var n2Label = n2.getLabel();
-    var n1Label = n1.getLabel();
-    var relPos = n2Label + " is " + hDir + vDir + " of " + n1Label +
-                 " (" + Math.round(distance) + " cm away)";
-
-    return {
-        node1: n1Label,
-        node2: n2Label,
-        distance: distance,
-        direction: hDir + vDir,
-        angle_horizontal: angle_horizontal,
-        angle_vertical: angle_vertical,
-        relative_position: relPos,
-        overlapping: overlapping
-    };
-})()
-"""
 
 # args: {node1Label, node2Label}
 # Returns: {node1, node2, overlapping, penetration_depth, suggestion}
-_CHECK_OVERLAP_SCRIPT = """\
-(function(){
-    var args = getArguments()[0] || {};
-    var n1 = Scene.findNodeByLabel(args.node1Label);
-    if (!n1) n1 = Scene.findNode(args.node1Label);
-    if (!n1) throw new Error("Node not found: " + args.node1Label);
-
-    var n2 = Scene.findNodeByLabel(args.node2Label);
-    if (!n2) n2 = Scene.findNode(args.node2Label);
-    if (!n2) throw new Error("Node not found: " + args.node2Label);
-
-    var bb1 = n1.getWSBoundingBox();
-    var bb2 = n2.getWSBoundingBox();
-
-    var overlapX = Math.min(bb1.maxX, bb2.maxX) - Math.max(bb1.minX, bb2.minX);
-    var overlapY = Math.min(bb1.maxY, bb2.maxY) - Math.max(bb1.minY, bb2.minY);
-    var overlapZ = Math.min(bb1.maxZ, bb2.maxZ) - Math.max(bb1.minZ, bb2.minZ);
-
-    var overlapping = overlapX > 0 && overlapY > 0 && overlapZ > 0;
-    var penetration_depth = 0;
-    var suggestion = "";
-
-    if (overlapping) {
-        // Penetration depth = minimum overlap axis
-        penetration_depth = Math.min(overlapX, overlapY, overlapZ);
-
-        // Suggest moving n2 along the axis of least penetration
-        var p1 = n1.getWSPos();
-        var p2 = n2.getWSPos();
-        var dx = p2.x - p1.x;
-        var dz = p2.z - p1.z;
-        var moveAmount = Math.round(penetration_depth + 5);
-
-        if (Math.abs(dx) >= Math.abs(dz)) {
-            var dir = dx >= 0 ? "+" : "-";
-            suggestion = "Move " + n2.getLabel() + " " + moveAmount +
-                         " cm in " + dir + "X to resolve collision";
-        } else {
-            var dir2 = dz >= 0 ? "+" : "-";
-            suggestion = "Move " + n2.getLabel() + " " + moveAmount +
-                         " cm in " + dir2 + "Z to resolve collision";
-        }
-    }
-
-    return {
-        node1: n1.getLabel(),
-        node2: n2.getLabel(),
-        overlapping: overlapping,
-        penetration_depth: penetration_depth,
-        suggestion: suggestion
-    };
-})()
-"""
 
 # ---------------------------------------------------------------------------
 # Phase 1: Property Introspection Scripts
@@ -2644,146 +2151,6 @@ _RESTORE_SCENE_STATE_SCRIPT = """\
 })()
 """
 
-_GET_SCENE_LAYOUT_SCRIPT = """\
-(function(){
-    var args = getArguments()[0] || {};
-    var includeTypes = args.includeTypes || ["figures", "cameras", "lights", "props"];
-    var incl = {};
-    for (var t = 0; t < includeTypes.length; t++) incl[includeTypes[t]] = true;
-
-    var nodeList = [];
-
-    function bboxData(node) {
-        var bb = node.getWSBoundingBox();
-        if (!bb) return null;
-        return {
-            width:  Math.round((bb.maxX - bb.minX) * 10) / 10,
-            height: Math.round((bb.maxY - bb.minY) * 10) / 10,
-            depth:  Math.round((bb.maxZ - bb.minZ) * 10) / 10,
-            center: {
-                x: Math.round((bb.minX + bb.maxX) / 2 * 10) / 10,
-                y: Math.round((bb.minY + bb.maxY) / 2 * 10) / 10,
-                z: Math.round((bb.minZ + bb.maxZ) / 2 * 10) / 10
-            }
-        };
-    }
-
-    function posData(node) {
-        var p = node.getWSPos();
-        return {x: Math.round(p.x*10)/10, y: Math.round(p.y*10)/10, z: Math.round(p.z*10)/10};
-    }
-
-    if (incl["figures"]) {
-        for (var i = 0; i < Scene.getNumSkeletons(); i++) {
-            var s = Scene.getSkeleton(i);
-            var e = {label: s.getLabel(), type: "figure", position: posData(s)};
-            var bb = bboxData(s);
-            if (bb) e.bounds = bb;
-            nodeList.push(e);
-        }
-    }
-
-    if (incl["cameras"]) {
-        for (var ci = 0; ci < Scene.getNumCameras(); ci++) {
-            var c = Scene.getCamera(ci);
-            nodeList.push({label: c.getLabel(), type: "camera", position: posData(c)});
-        }
-    }
-
-    if (incl["lights"]) {
-        for (var li = 0; li < Scene.getNumLights(); li++) {
-            var l = Scene.getLight(li);
-            var le = {label: l.getLabel(), type: "light", position: posData(l), nodeClass: l.className()};
-            var fp = l.findProperty("Flux");
-            if (fp) le.flux = fp.getValue();
-            nodeList.push(le);
-        }
-    }
-
-    if (incl["props"]) {
-        // Enumerate non-skeleton/camera/light nodes (skip root [0] and env [1])
-        var skelLabels = {};
-        for (var si = 0; si < Scene.getNumSkeletons(); si++) skelLabels[Scene.getSkeleton(si).getLabel()] = true;
-
-        for (var ni = 2; ni < Scene.getNumNodes(); ni++) {
-            var n = Scene.getNode(ni);
-            if (!n) continue;
-            var cls = n.className();
-            if (cls.indexOf("Camera") >= 0 || cls.indexOf("Light") >= 0) continue;
-            if (cls.indexOf("Skeleton") >= 0 || cls.indexOf("Figure") >= 0) continue;
-            if (skelLabels[n.getLabel()]) continue;
-            // Skip bones (parent is a skeleton)
-            var parent = n.getNodeParent();
-            if (parent) {
-                var pcls = parent.className();
-                if (pcls.indexOf("Skeleton") >= 0 || pcls.indexOf("Figure") >= 0) continue;
-            }
-            var pe = {label: n.getLabel(), type: "prop", position: posData(n)};
-            var pbb = bboxData(n);
-            if (pbb) pe.bounds = pbb;
-            nodeList.push(pe);
-        }
-    }
-
-    return {nodes: nodeList, count: nodeList.length, include_types: includeTypes};
-})()
-"""
-
-_FIND_NEARBY_NODES_SCRIPT = """\
-(function(){
-    var args = getArguments()[0] || {};
-    var center = Scene.findNodeByLabel(args.nodeLabel);
-    if (!center) center = Scene.findNode(args.nodeLabel);
-    if (!center) throw new Error("Node not found: " + args.nodeLabel);
-
-    var radius = args.radius || 100;
-    var includeTypes = args.includeTypes || null;
-    var cp = center.getWSPos();
-
-    var nearby = [];
-
-    for (var i = 0; i < Scene.getNumNodes(); i++) {
-        var n = Scene.getNode(i);
-        if (!n || n.elementID === center.elementID) continue;
-
-        var np = n.getWSPos();
-        var dx = np.x - cp.x;
-        var dy = np.y - cp.y;
-        var dz = np.z - cp.z;
-        var dist = Math.sqrt(dx*dx + dy*dy + dz*dz);
-        if (dist > radius) continue;
-
-        var cls = n.className();
-        var nodeType = "prop";
-        if (cls.indexOf("Camera") >= 0) nodeType = "camera";
-        else if (cls.indexOf("Light") >= 0) nodeType = "light";
-        else if (cls.indexOf("Skeleton") >= 0 || cls.indexOf("Figure") >= 0) nodeType = "figure";
-
-        if (includeTypes && includeTypes.indexOf(nodeType) < 0) continue;
-
-        var hAngle = Math.atan2(dx, dz) * 180 / Math.PI;
-        var dir;
-        if      (hAngle > -22.5  && hAngle <=  22.5)  dir = "front";
-        else if (hAngle >  22.5  && hAngle <=  67.5)  dir = "front-right";
-        else if (hAngle >  67.5  && hAngle <= 112.5)  dir = "right";
-        else if (hAngle > 112.5  && hAngle <= 157.5)  dir = "back-right";
-        else if (hAngle >  157.5 || hAngle <= -157.5) dir = "back";
-        else if (hAngle > -157.5 && hAngle <= -112.5) dir = "back-left";
-        else if (hAngle > -112.5 && hAngle <=  -67.5) dir = "left";
-        else                                            dir = "front-left";
-
-        nearby.push({
-            label: n.getLabel(),
-            type: nodeType,
-            distance: Math.round(dist * 10) / 10,
-            direction: dir
-        });
-    }
-
-    nearby.sort(function(a, b) { return a.distance - b.distance; });
-    return {center_node: center.getLabel(), radius: radius, nearby_nodes: nearby, count: nearby.length};
-})()
-"""
 
 # args: {char1Label, char2Label,
 #        dialogueBeats: [{speaker, startFrame, endFrame, emotion, gesture?}]}
@@ -4627,29 +3994,6 @@ _TIME_EXPRESSION_SCRIPT = """\
 # Phase 5: Materials / Surfaces
 # ---------------------------------------------------------------------------
 
-_LIST_MATERIALS_SCRIPT = """\
-(function(){
-    var args = getArguments()[0] || {};
-    var node = Scene.findNodeByLabel(args.nodeLabel);
-    if (!node) node = Scene.findNode(args.nodeLabel);
-    if (!node) throw new Error("Node not found: " + args.nodeLabel);
-    var obj = node.getObject();
-    if (!obj) throw new Error("Node has no geometry: " + args.nodeLabel);
-    var shape = obj.getCurrentShape();
-    if (!shape) throw new Error("Node has no material shape: " + args.nodeLabel);
-    var mats = [];
-    for (var i = 0; i < shape.getNumMaterials(); i++) {
-        var mat = shape.getMaterial(i);
-        mats.push({
-            index: i,
-            name: mat.getName(),
-            label: mat.getLabel(),
-            shader: mat.className()
-        });
-    }
-    return { node: node.getLabel(), material_count: mats.length, materials: mats };
-})()
-"""
 
 _GET_MATERIAL_SCRIPT = """\
 (function(){
@@ -5016,54 +4360,6 @@ _CREATE_CAMERA_SCRIPT = """\
 # Phase 5: Scene file operations
 # ---------------------------------------------------------------------------
 
-_SAVE_SCENE_SCRIPT = """\
-(function(){
-    var args = getArguments()[0] || {};
-    var filePath = args.filePath || null;
-    var currentFile = Scene.getFilename();
-    if (filePath) {
-        Scene.saveScene(filePath);
-    } else {
-        var cf = currentFile || "";
-        if (cf) {
-            Scene.saveScene(cf);
-        } else {
-            throw new Error("No file path provided and scene has no current filename. Provide a file_path to save.");
-        }
-    }
-    var savedFile = Scene.getFilename();
-    return { saved: true, file_path: savedFile || filePath || currentFile || "unknown" };
-})()
-"""
-
-_GET_SELECTED_NODES_SCRIPT = """\
-(function(){
-    var selected = [];
-    var primary = Scene.getPrimarySelection();
-    if (primary) {
-        selected.push({
-            label: primary.getLabel(),
-            name: primary.getName(),
-            type: primary.className(),
-            primary: true
-        });
-    }
-    try {
-        var list = Scene.getSelectedNodeList();
-        for (var i = 0; i < list.length; i++) {
-            var n = list[i];
-            if (primary && n.getName() === primary.getName()) continue;
-            selected.push({
-                label: n.getLabel(),
-                name: n.getName(),
-                type: n.className(),
-                primary: false
-            });
-        }
-    } catch(e) {}
-    return { count: selected.length, nodes: selected };
-})()
-"""
 
 _SET_RENDER_OUTPUT_SCRIPT = """\
 (function(){
@@ -5814,99 +5110,6 @@ _GET_DFORCE_INFLUENCE_WEIGHTS_SCRIPT = """\
 })()
 """
 
-_COLLECT_POSE_SCRIPT = """\
-(function(){
-    var args = getArguments()[0] || {};
-    var figLabel = args.figureLabel;
-    var fig = Scene.findNodeByLabel(figLabel);
-    if (!fig) fig = Scene.findNode(figLabel);
-    if (!fig) throw new Error("Figure not found: " + figLabel);
-
-    var bones = {};
-    var count = 0;
-
-    function collectBone(node) {
-        var boneName = node.getName();
-        var xr = node.findProperty("XRotate");
-        var yr = node.findProperty("YRotate");
-        var zr = node.findProperty("ZRotate");
-        var xt = node.findProperty("XTranslate");
-        var yt = node.findProperty("YTranslate");
-        var zt = node.findProperty("ZTranslate");
-        var hasData = xr || yr || zr || xt || yt || zt;
-        if (hasData) {
-            bones[boneName] = {
-                xr: xr ? xr.getValue() : 0,
-                yr: yr ? yr.getValue() : 0,
-                zr: zr ? zr.getValue() : 0,
-                xt: xt ? xt.getValue() : 0,
-                yt: yt ? yt.getValue() : 0,
-                zt: zt ? zt.getValue() : 0
-            };
-            count++;
-        }
-        for (var i = 0; i < node.getNumNodeChildren(); i++) {
-            collectBone(node.getNodeChild(i));
-        }
-    }
-    collectBone(fig);
-
-    return {
-        figure: fig.getLabel(),
-        figure_name: fig.getName(),
-        bone_count: count,
-        bones: bones
-    };
-})()
-"""
-
-_APPLY_POSE_SCRIPT = """\
-(function(){
-    var args = getArguments()[0] || {};
-    var figLabel = args.figureLabel;
-    var bonesData = args.bones || {};
-
-    var fig = Scene.findNodeByLabel(figLabel);
-    if (!fig) fig = Scene.findNode(figLabel);
-    if (!fig) throw new Error("Figure not found: " + figLabel);
-
-    var applied = 0;
-    var skipped = 0;
-
-    function applyBone(node) {
-        var boneName = node.getName();
-        var data = bonesData[boneName];
-        if (data) {
-            var xr = node.findProperty("XRotate");
-            var yr = node.findProperty("YRotate");
-            var zr = node.findProperty("ZRotate");
-            var xt = node.findProperty("XTranslate");
-            var yt = node.findProperty("YTranslate");
-            var zt = node.findProperty("ZTranslate");
-            if (xr && data.xr !== undefined) xr.setValue(data.xr);
-            if (yr && data.yr !== undefined) yr.setValue(data.yr);
-            if (zr && data.zr !== undefined) zr.setValue(data.zr);
-            if (xt && data.xt !== undefined) xt.setValue(data.xt);
-            if (yt && data.yt !== undefined) yt.setValue(data.yt);
-            if (zt && data.zt !== undefined) zt.setValue(data.zt);
-            applied++;
-        } else {
-            skipped++;
-        }
-        for (var i = 0; i < node.getNumNodeChildren(); i++) {
-            applyBone(node.getNodeChild(i));
-        }
-    }
-    applyBone(fig);
-
-    return {
-        success: true,
-        figure: fig.getLabel(),
-        bones_applied: applied,
-        bones_skipped: skipped
-    };
-})()
-"""
 
 # ---------------------------------------------------------------------------
 # Phase 6.4: Material preset scripts
@@ -7002,25 +6205,9 @@ _REGISTRY: dict[str, tuple[str, str]] = {
         "Load a file into the current DAZ Studio scene",
         _LOAD_FILE_SCRIPT,
     ),
-    "vangard-list-morphs": (
-        "List all morphs (numeric properties) on a node with current values",
-        _LIST_MORPHS_SCRIPT,
-    ),
-    "vangard-search-morphs": (
-        "Search morphs by name pattern (case-insensitive substring match)",
-        _SEARCH_MORPHS_SCRIPT,
-    ),
     "vangard-get-node-hierarchy": (
         "Get complete hierarchy tree for a node with recursive children",
         _GET_NODE_HIERARCHY_SCRIPT,
-    ),
-    "vangard-list-children": (
-        "List direct children of a node",
-        _LIST_CHILDREN_SCRIPT,
-    ),
-    "vangard-get-parent": (
-        "Get parent node of a node",
-        _GET_PARENT_SCRIPT,
     ),
     "vangard-set-parent": (
         "Set parent of a node (parenting operation)",
@@ -7045,18 +6232,6 @@ _REGISTRY: dict[str, tuple[str, str]] = {
     "vangard-batch-set-properties": (
         "Set multiple properties on one or more nodes with individual error handling",
         _BATCH_SET_PROPERTIES_SCRIPT,
-    ),
-    "vangard-batch-transform": (
-        "Apply same transform properties to multiple nodes",
-        _BATCH_TRANSFORM_SCRIPT,
-    ),
-    "vangard-batch-visibility": (
-        "Show or hide multiple nodes",
-        _BATCH_VISIBILITY_SCRIPT,
-    ),
-    "vangard-batch-select": (
-        "Select multiple nodes (replace or add to current selection)",
-        _BATCH_SELECT_SCRIPT,
     ),
     "vangard-set-active-camera": (
         "Set which camera is active in the viewport",
@@ -7094,18 +6269,6 @@ _REGISTRY: dict[str, tuple[str, str]] = {
         "Remove all keyframes from a property",
         _CLEAR_ANIMATION_SCRIPT,
     ),
-    "vangard-set-frame": (
-        "Set current animation frame",
-        _SET_FRAME_SCRIPT,
-    ),
-    "vangard-set-frame-range": (
-        "Set animation frame range (start and end)",
-        _SET_FRAME_RANGE_SCRIPT,
-    ),
-    "vangard-get-animation-info": (
-        "Get animation timeline info (current frame, range, fps)",
-        _GET_ANIMATION_INFO_SCRIPT,
-    ),
     "vangard-render-with-camera": (
         "Render from specific camera without changing viewport",
         _RENDER_WITH_CAMERA_SCRIPT,
@@ -7121,27 +6284,6 @@ _REGISTRY: dict[str, tuple[str, str]] = {
     "vangard-render-animation": (
         "Render animation frame range as image sequence",
         _RENDER_ANIMATION_SCRIPT,
-    ),
-    # Phase 1: Spatial queries
-    "vangard-get-world-position": (
-        "Get world-space position, local position, rotation, and scale of a node",
-        _GET_WORLD_POSITION_SCRIPT,
-    ),
-    "vangard-get-bounding-box": (
-        "Get bounding box (min, max, center, dimensions) of a node",
-        _GET_BOUNDING_BOX_SCRIPT,
-    ),
-    "vangard-calculate-distance": (
-        "Calculate distance and direction vector between two nodes",
-        _CALCULATE_DISTANCE_SCRIPT,
-    ),
-    "vangard-get-spatial-relationship": (
-        "Get natural language spatial relationship between two nodes",
-        _GET_SPATIAL_RELATIONSHIP_SCRIPT,
-    ),
-    "vangard-check-overlap": (
-        "Check if two nodes have overlapping bounding boxes",
-        _CHECK_OVERLAP_SCRIPT,
     ),
     # Phase 1: Property introspection
     "vangard-inspect-properties": (
@@ -7168,7 +6310,6 @@ _REGISTRY: dict[str, tuple[str, str]] = {
         "Render Quality properties",
         _SET_RENDER_QUALITY_SCRIPT,
     ),
-    # Phase 2: Emotional direction
     # Phase 2: Content library
     "vangard-list-categories": (
         "List content library subdirectories under a parent path across all content directories",
@@ -7178,7 +6319,6 @@ _REGISTRY: dict[str, tuple[str, str]] = {
         "List .duf files in a content library category path across all content directories",
         _BROWSE_CATEGORY_SCRIPT,
     ),
-    # Phase 2: Scene composition
     # Phase 2: Checkpoint system
     "vangard-save-scene-state": (
         "Serialize all node transforms, morphs, and light properties for checkpoint storage",
@@ -7189,15 +6329,6 @@ _REGISTRY: dict[str, tuple[str, str]] = {
         _RESTORE_SCENE_STATE_SCRIPT,
     ),
     # Phase 2: Scene layout & proximity
-    "vangard-get-scene-layout": (
-        "Get spatial map of all scene nodes (figures, cameras, lights, props) with "
-        "positions and bounds",
-        _GET_SCENE_LAYOUT_SCRIPT,
-    ),
-    "vangard-find-nearby-nodes": (
-        "Find all nodes within a radius of a target node",
-        _FIND_NEARBY_NODES_SCRIPT,
-    ),
     "vangard-animate-conversation": (
         "Choreograph animated conversation between two characters with look-at and "
         "emotion keyframes",
@@ -7251,10 +6382,6 @@ _REGISTRY: dict[str, tuple[str, str]] = {
         _TIME_EXPRESSION_SCRIPT,
     ),
     # Phase 5: Materials / Surfaces
-    "vangard-list-materials": (
-        "List all material zones on a scene node with name, label, and shader type",
-        _LIST_MATERIALS_SCRIPT,
-    ),
     "vangard-get-material": (
         "Get all properties of a named material zone on a node (numeric, color, image types)",
         _GET_MATERIAL_SCRIPT,
@@ -7292,14 +6419,6 @@ _REGISTRY: dict[str, tuple[str, str]] = {
         _CREATE_CAMERA_SCRIPT,
     ),
     # Phase 5: Scene file operations
-    "vangard-save-scene": (
-        "Save the current scene to disk (save or save-as)",
-        _SAVE_SCENE_SCRIPT,
-    ),
-    "vangard-get-selected-nodes": (
-        "Return the currently selected nodes in the DAZ Studio viewport",
-        _GET_SELECTED_NODES_SCRIPT,
-    ),
     "vangard-set-render-output": (
         "Set render output filename path and/or image dimensions (width x height)",
         _SET_RENDER_OUTPUT_SCRIPT,
@@ -7369,15 +6488,6 @@ _REGISTRY: dict[str, tuple[str, str]] = {
     "vangard-set-dforce-surface-property": (
         "Set a per-surface dForce simulation property via DzDForceSettingsProvider",
         _SET_DFORCE_SURFACE_PROPERTY_SCRIPT,
-    ),
-    # Phase 6.3: Pose library
-    "vangard-collect-pose": (
-        "Collect all bone rotation/translation values from a figure and return as structured data",
-        _COLLECT_POSE_SCRIPT,
-    ),
-    "vangard-apply-pose": (
-        "Apply a dict of bone rotation/translation values to a figure by bone name",
-        _APPLY_POSE_SCRIPT,
     ),
     # Phase 6.4: Material preset
     "vangard-apply-material-preset": (
