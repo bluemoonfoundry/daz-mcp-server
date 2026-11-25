@@ -3130,22 +3130,21 @@ def _write_node_config(config: dict, skip_missing: bool, scale: float) -> dict:
             entry["missing"] = True
         else:
             entry["failed"].append({"property": name, "error": r.error})
-    out, ok, bad, skipped = [], 0, 0, 0
+    return _summarize_node_writes(per_node, skip_missing)
+
+
+def _summarize_node_writes(per_node: dict[str, dict], skip_missing: bool) -> dict:
+    out, counts = [], {"ok": 0, "bad": 0, "skipped": 0}
     for label, e in per_node.items():
         if e["missing"]:
-            if skip_missing:
-                out.append({"node": label, "status": "skipped", "reason": "not found in scene"})
-                skipped += 1
-            else:
-                out.append({"node": label, "status": "error", "reason": "not found in scene"})
-                bad += 1
+            key = "skipped" if skip_missing else "bad"
+            counts[key] += 1
+            out.append({"node": label, "status": "skipped" if skip_missing else "error",
+                        "reason": "not found in scene"})
             continue
         status = "ok" if not e["failed"] else ("partial" if e["applied"] else "error")
-        if status == "error":
-            bad += 1
-        else:
-            ok += 1
+        counts["bad" if status == "error" else "ok"] += 1
         out.append({"node": label, "status": status, "applied": e["applied"],
                     "failed": e["failed"]})
-    return {"results": out, "successCount": ok, "failureCount": bad, "skippedCount": skipped,
-            "totalNodes": len(config)}
+    return {"results": out, "successCount": counts["ok"], "failureCount": counts["bad"],
+            "skippedCount": counts["skipped"], "totalNodes": len(per_node)}
