@@ -43,8 +43,8 @@ Requires dazpy 2.17.0 or later, for the new primitives these tools use
     lists internal node names.
 - The material tools use dazpy. A missing-zone error lists the available
   zones, and `daz_set_material_property` reports the value Studio kept.
-- 37 registered scripts are removed, and a unit test fails if any registered
-  script is no longer called by a tool.
+- 43 registered scripts are removed (106 to 63), and a unit test fails if any
+  registered script is no longer called by a tool.
 
 ### Fixed
 
