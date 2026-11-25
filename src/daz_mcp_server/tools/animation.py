@@ -7,7 +7,7 @@ from dazpy.exceptions import PropertyNotFoundError
 from fastmcp.exceptions import ToolError
 
 from .._mcp import mcp
-from .._client import get_scene, get_daz_client, run_dazpy
+from .._client import get_scene, run_dazpy
 from .._errors import handle_dazpy_error, run_tool
 
 
@@ -378,21 +378,11 @@ async def daz_get_animation_info() -> dict[str, Any]:
     """
     def _run() -> dict:
         scene = get_scene()
-        client = get_daz_client()
         current = scene.frame()
         anim = scene.anim_range()
         # DAZ Studio uses 4800 ticks/second; time_step = ticks per frame
-        # getTimeStep() returns a DzTime object, which serialises to a dict;
-        # .valueOf() yields the tick count (Number(ts) would return 0).
-        ts_result = client.execute(
-            "(function(){ return Scene.getTimeStep().valueOf(); })();"
-        )
-        raw_step = ts_result.value
-        step = (
-            raw_step
-            if isinstance(raw_step, (int, float)) and not isinstance(raw_step, bool) and raw_step > 0
-            else 160  # 160 ticks @ 30 fps
-        )
+        # (dazpy falls back to 160, i.e. 30 fps, on a non-numeric reply).
+        step = scene.time_step()
         fps = round(4800 / step)
         start = anim["start"]
         end = anim["end"]

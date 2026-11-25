@@ -7,41 +7,14 @@ from typing import Any
 from fastmcp.exceptions import ToolError
 
 from .._mcp import mcp
-from .._client import get_daz_client, get_scene, run_dazpy
+from .._client import get_scene, run_dazpy
 from .._errors import handle_dazpy_error
 
 NODE_TYPES = ("figures", "wearables", "bones", "cameras", "lights", "props")
 
-# One round trip: every scene node's world transform plus a coarse type.
-# Follower figures (clothing, eyelashes) are parented to a DzFigure and are
+# Every node's world transform plus a coarse type, in one round trip
+# (dazpy all_node_transforms). Follower figures (clothing, eyelashes) are
 # typed "wearables" so a "figures" filter returns only the characters.
-_TYPED_TRANSFORMS_SCRIPT = """(function() {
-    function nodeType(n) {
-        if (n.inherits("DzCamera")) return "cameras";
-        if (n.inherits("DzLight")) return "lights";
-        if (n.inherits("DzBone")) return "bones";
-        if (n.inherits("DzSkeleton")) {
-            var p = n.getNodeParent();
-            return (p && p.inherits("DzFigure")) ? "wearables" : "figures";
-        }
-        return "props";
-    }
-    var result = [];
-    for (var i = 0; i < Scene.getNumNodes(); i++) {
-        var n = Scene.getNode(i);
-        var pos = n.getWSPos();
-        var rot = n.getWSRot();
-        result.push({
-            name: n.getName(),
-            label: n.getLabel(),
-            type: nodeType(n),
-            position: [pos.x, pos.y, pos.z],
-            rotation: [rot.x, rot.y, rot.z],
-            visible: n.isVisible()
-        });
-    }
-    return result;
-})();"""
 
 
 def _type_filter(include_types: list[str] | None) -> set[str] | None:
@@ -59,7 +32,7 @@ def _type_filter(include_types: list[str] | None) -> set[str] | None:
 
 def _typed_transforms() -> list[dict[str, Any]]:
     """Return every scene node's transform dict with a ``type`` key."""
-    return get_daz_client().execute(_TYPED_TRANSFORMS_SCRIPT).value or []
+    return get_scene().all_node_transforms()
 
 
 @mcp.tool()

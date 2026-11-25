@@ -76,11 +76,11 @@ def typed_scene(monkeypatch):
         return SimpleNamespace(value=[dict(t) for t in TRANSFORMS])
 
     client.execute = execute
-    monkeypatch.setattr(spatial, "get_daz_client", lambda: client)
     chair = SimpleNamespace(position={"x": 30, "y": 0, "z": 0})
     monkeypatch.setattr(
         spatial, "get_scene",
-        lambda: SimpleNamespace(find_node_by_label=lambda label: chair),
+        lambda: SimpleNamespace(find_node_by_label=lambda label: chair,
+                                all_node_transforms=lambda: execute("").value),
     )
     return client
 
@@ -89,7 +89,7 @@ async def test_scene_layout_unfiltered_returns_all_with_types(typed_scene):
     result = await spatial.daz_get_scene_layout()
     assert result["count"] == len(TRANSFORMS)
     assert [n["type"] for n in result["nodes"]] == [t["type"] for t in TRANSFORMS]
-    assert "DzSkeleton" in typed_scene.scripts[0]
+    assert len(typed_scene.scripts) == 1  # one all_node_transforms() round trip
 
 
 async def test_scene_layout_filters_by_type(typed_scene):

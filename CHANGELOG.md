@@ -179,6 +179,9 @@ Requires dazpy 2.17.0 or later, for the new primitives these tools use
   - `daz_load_file` for OBJ uses the silent unit-scale importer.
   `daz_execute`, `daz_execute_file(_async)` and `daz_validate_script` run
   your own script by design.
+- `daz_get_animation_info` and the spatial tools (`daz_get_scene_layout`,
+  `daz_find_nearby`) no longer send inline DazScript; they use dazpy's
+  `time_step()` and typed `all_node_transforms()`.
 - 102 registered scripts are removed (107 to 5), and a unit test fails if any
   registered script is no longer called by a tool.
 
