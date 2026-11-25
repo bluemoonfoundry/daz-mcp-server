@@ -18,6 +18,7 @@ from dazpy.shots import (CameraKeyframe, Keyframed, Lens, Placement, Sequence, S
 from .._mcp import mcp, _execute_by_id
 from .._client import get_scene
 from .._errors import run_tool
+from .. import _cinematic_lighting as _lighting
 from .. import _shots
 from .._emotions import AXIS_BY_PROPERTY, _EMOTION_DEFINITIONS, resolve_bone
 
@@ -1608,16 +1609,15 @@ async def daz_animate_light(
     if pulse_count < 1:
         raise ToolError("pulse_count must be at least 1")
 
-    return await _execute_by_id("vangard-animate-light", {
-        "lightLabel": light_label,
-        "movementType": movement_type,
-        "startFrame": start_frame,
-        "endFrame": end_frame,
-        "intensity": intensity,
-        "flickerAmount": flicker_amount,
-        "strobeInterval": strobe_interval,
-        "pulseCount": pulse_count,
-    })
+    result = await run_tool(lambda: _lighting.animate_light(
+        light_label, movement_type, start_frame, end_frame, intensity, flicker_amount,
+        strobe_interval, pulse_count))
+    result["suggestions"] = [
+        "Use daz_render_animation to render the lighting animation",
+        "Combine with daz_animate_camera_movement for cinematic effect",
+        "Layer multiple lights with offset timing for rich atmosphere",
+    ]
+    return result
 
 
 @mcp.tool()
@@ -1703,13 +1703,14 @@ async def daz_create_light_sequence(
     if start_frame < 0 or end_frame <= start_frame:
         raise ToolError("start_frame must be >= 0 and end_frame must be > start_frame")
 
-    return await _execute_by_id("vangard-create-light-sequence", {
-        "sequenceType": sequence_type,
-        "subjectLabel": subject_label,
-        "startFrame": start_frame,
-        "endFrame": end_frame,
-        "createLights": create_lights,
-    })
+    result = await run_tool(lambda: _lighting.light_sequence(
+        sequence_type, start_frame, end_frame, create_lights))
+    result["suggestions"] = [
+        "Position lights in scene before rendering",
+        "Use daz_render_animation to render the full sequence",
+        "Adjust Flux values with daz_set_keyframe to fine-tune timing",
+    ]
+    return result
 
 
 # ---------------------------------------------------------------------------
@@ -2382,10 +2383,10 @@ async def daz_set_scene_atmosphere(
 
     Args:
         environment_mode: Sets the overall lighting environment:
-            - 0 = Sun-Sky Only  (outdoor sky, no HDRI dome)
-            - 1 = Dome Only     (HDRI dome image, no sun-sky)
-            - 2 = Sun-Sky + Dome (combined)
-            - 3 = Scene Only    (use only scene lights — disables dome/sun entirely)
+            - 0 = Dome and Scene (HDRI dome plus scene lights; Studio's default)
+            - 1 = Dome Only      (HDRI dome image, scene lights ignored)
+            - 2 = Sun-Sky Only   (procedural sun and sky)
+            - 3 = Scene Only     (use only scene lights — disables dome/sun entirely)
             Mode 3 is required when using lighting presets or the daz_apply_visual_style
             tool so that scene lights are not washed out by ambient dome light.
         environment_intensity: Brightness of the HDRI dome/sun-sky (0.0–10.0).
@@ -2436,7 +2437,7 @@ async def daz_set_scene_atmosphere(
     if environment_mode is not None and environment_mode not in _VALID_ENV_MODES:
         raise ToolError(
             f"Invalid environment_mode {environment_mode}. "
-            "Valid: 0 (Sun-Sky Only), 1 (Dome Only), 2 (Sun-Sky+Dome), 3 (Scene Only)"
+            "Valid: 0 (Dome and Scene), 1 (Dome Only), 2 (Sun-Sky Only), 3 (Scene Only)"
         )
     if environment_intensity is not None and not 0.0 <= environment_intensity <= 10.0:
         raise ToolError("environment_intensity must be between 0.0 and 10.0")
@@ -2447,14 +2448,16 @@ async def daz_set_scene_atmosphere(
     if sun_light_intensity is not None and not 0.0 <= sun_light_intensity <= 10.0:
         raise ToolError("sun_light_intensity must be between 0.0 and 10.0")
 
-    return await _execute_by_id("vangard-set-scene-atmosphere", {
-        "environmentMode": environment_mode,
-        "environmentIntensity": environment_intensity,
-        "drawDome": draw_dome,
-        "domeScale": dome_scale,
-        "domeRotation": dome_rotation,
-        "sunLightIntensity": sun_light_intensity,
-    })
+    result = await run_tool(lambda: _lighting.scene_atmosphere(
+        environment_mode, environment_intensity, draw_dome, dome_scale, dome_rotation,
+        sun_light_intensity))
+    result["suggestions"] = [
+        "Mode 3 (Scene Only) works best with daz_apply_lighting_preset presets",
+        "Mode 1 (Dome Only) requires loading an HDRI map first",
+        "Rotate dome to match light direction with key lights",
+        "Lower environmentIntensity (0.1-0.5) to blend HDRI with scene lights",
+    ]
+    return result
 
 
 @mcp.tool()
@@ -2520,11 +2523,14 @@ async def daz_apply_visual_style(
     if not 0.1 <= intensity <= 5.0:
         raise ToolError("intensity must be between 0.1 and 5.0")
 
-    return await _execute_by_id("vangard-apply-visual-style", {
-        "styleName": style_name,
-        "subjectLabel": subject_label,
-        "intensity": intensity,
-    })
+    result = await run_tool(lambda: _lighting.visual_style(style_name, subject_label, intensity))
+    result["suggestions"] = [
+        "Adjust intensity (0.5–2.0) to scale the whole look brighter or darker",
+        "Fine-tune individual lights with daz_set_property on Style_Key/Fill/Rim",
+        "Combine with daz_set_scene_atmosphere to control the environment dome",
+        "Use daz_animate_light on Style_Key for dynamic lighting within the style",
+    ]
+    return result
 
 
 # ---------------------------------------------------------------------------

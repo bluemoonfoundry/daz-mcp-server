@@ -124,7 +124,19 @@ Requires dazpy 2.17.0 or later, for the new primitives these tools use
   never found (they were looked up only among the figure's direct
   children; daz-mcp-server-onf), and expression names missed stock
   Genesis 8/9 controls. Results add `bodyNotFound`.
-- 87 registered scripts are removed (107 to 20), and a unit test fails if any
+- `daz_animate_light`, `daz_create_light_sequence`,
+  `daz_set_scene_atmosphere` and `daz_apply_visual_style` use dazpy (new
+  module `_cinematic_lighting.py`). Fixes:
+  - Light keys land on real frames; they used DzTime ticks.
+  - `color-cycle` now animates the light's Color. It keyed "Color/Red"
+    etc., which don't exist, and silently fell back to flux.
+  - Atmosphere and visual style set the real environment node instead of
+    `Scene.getNode(1)`. Without an environment node they say so instead
+    of failing silently.
+  - The environment mode names are corrected: 0 Dome and Scene, 1 Dome
+    Only, 2 Sun-Sky Only, 3 Scene Only.
+  - Visual-style lights are aimed with `aimAt`.
+- 91 registered scripts are removed (107 to 16), and a unit test fails if any
   registered script is no longer called by a tool.
 
 ### Fixed
