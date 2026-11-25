@@ -97,7 +97,18 @@ Requires dazpy 2.17.0 or later, for the new primitives these tools use
 - The animation render tools default to the scene's animation range in
   frames. The old script read DzTime ticks as frame numbers, so a default
   range meant thousands of renders.
-- 69 registered scripts are removed (107 to 38), and a unit test fails if any
+- Wardrobe tools on dazpy: `daz_list_fitted_items`, `daz_fit_clothing`,
+  `daz_unfit_item`, `daz_get_figure_info`, `daz_set_subdivision`,
+  `daz_run_dforce_simulation`, `daz_export_fbx` and `daz_export_obj`.
+  - `daz_set_subdivision` sets the mesh's View SubD Level. It always failed
+    on Genesis 8/9: it searched the figure for a "SubDivision Level"
+    property, but the level lives on the mesh shape. The result adds
+    `render_level`.
+  - `daz_run_dforce_simulation(node_label)` simulates only that node. It
+    used to just select the node and simulate the whole scene.
+  - Export errors (missing exporter, write failure) are now reported.
+    `exported_nodes` is `["(whole scene)"]` when no nodes are named.
+- 76 registered scripts are removed (107 to 31), and a unit test fails if any
   registered script is no longer called by a tool.
 
 ### Fixed

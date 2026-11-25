@@ -15,12 +15,6 @@ from daz_mcp_server._registry import _REGISTRY
 from daz_mcp_server.tools import animation
 
 
-def test_figure_info_script_uses_element_id_property():
-    script = _REGISTRY["vangard-get-figure-info"][1]
-    assert "getElementID" not in script
-    assert "fig.elementID" in script
-
-
 def test_no_registered_script_calls_get_element_id():
     offenders = [sid for sid, entry in _REGISTRY.items() if "getElementID" in entry[1]]
     assert offenders == []

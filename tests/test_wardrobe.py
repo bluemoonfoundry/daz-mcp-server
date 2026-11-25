@@ -1,249 +1,188 @@
-"""Mock tests for Phase 6.1 wardrobe tools.
-
-Tools covered
--------------
-- daz_list_fitted_items
-- daz_fit_clothing
-- daz_unfit_item
-
-All tests use respx to intercept HTTP at the transport layer — no DAZ Studio
-or DazScriptServer required.
-"""
-
+"""Unit tests (no Studio) for the wardrobe tools on dazpy: fitting, figure
+info, subdivision, dForce simulation and FBX/OBJ export (daz-mcp-server-1kd)."""
 from __future__ import annotations
 
+from types import SimpleNamespace
+
 import pytest
-import pytest_asyncio
-import respx
-import httpx
-from dazpy.aio import AsyncDazClient
+from dazpy import FittedItem, NodeInfo, NumericPropertyWrite, PropertyDetails
+from dazpy.exceptions import DazError, NodeNotFoundError, PropertyNotFoundError
+from fastmcp.exceptions import ToolError
 
-from daz_mcp_server._client import set_async_daz_client
-from daz_mcp_server.tools.wardrobe import daz_list_fitted_items, daz_fit_clothing, daz_unfit_item
-
-BASE_URL = "http://localhost:18811"
+from daz_mcp_server.tools import wardrobe
 
 
-def _ok(result):
-    return httpx.Response(
-        200,
-        json={"success": True, "result": result, "output": [], "error": None},
-    )
+def _detail(name, label, value, path):
+    return PropertyDetails(label, name, "DzFloatProperty", value, 0.0, 1.0, 0.0, path, True)
 
 
-def _fail(error):
-    return httpx.Response(
-        200,
-        json={"success": False, "result": None, "output": [], "error": error},
-    )
+class FakeNode:
+    def __init__(self, scene, label, eid, *, name=None, bones=(), props=None):
+        self.scene = scene
+        self.label = label
+        self.eid = eid
+        self.name = name or label.replace(" ", "")
+        self.bones = list(bones)
+        self.props = dict(props or {})
+        self.fitted: list[FittedItem] = []
+        self.fit_calls = []
+        self.selected = False
+
+    def describe(self):
+        return NodeInfo(self.label, self.name, "DzFigure", self.eid, None, 0)
+
+    def fitted_item_info(self):
+        return list(self.fitted)
+
+    def fit_to(self, figure):
+        self.fit_calls.append(figure.label)
+        return "setFollowTarget"
+
+    def unfit(self):
+        return {"previous_figure": "Genesis9", "actions": ["cleared follow target"]}
+
+    def bone_names(self):
+        return list(self.bones)
+
+    def property_details(self, kind="all"):
+        return [_detail(n, n, v, p) for n, (v, p) in self.props.items()]
+
+    def property_detail(self, name):
+        if name not in self.props:
+            raise PropertyNotFoundError(name)
+        v, p = self.props[name]
+        return _detail(name, name, v, p)
+
+    def set_numeric_property(self, name, value, **_):
+        if name not in self.props:
+            raise PropertyNotFoundError(name)
+        self.props[name] = (value, self.props[name][1])
+        return NumericPropertyWrite(name, name, value)
+
+    def select(self, on=True):
+        self.selected = on
+
+    def subdivision(self):
+        return {"view": 1, "render": 3} if self.bones else None
+
+    def set_subdivision(self, view, render=None):
+        if not self.bones:
+            raise PropertyNotFoundError("no SubD")
+        return {"previous": {"view": 1, "render": 3}, "current": {"view": view, "render": 3}}
 
 
-@pytest_asyncio.fixture(autouse=True)
-async def daz_client():
-    async with AsyncDazClient(host="localhost", port=18811, token="") as client:
-        set_async_daz_client(client)
-        yield client
-    set_async_daz_client(None)
+class FakeScene:
+    def __init__(self):
+        self.nodes = {}
+        g9 = FakeNode(self, "Genesis 9", 1, name="Genesis9", bones=["hip", "l_upperarm"],
+                      props={"SubDivision Level": (1, "/Mesh Resolution"),
+                             "Smile": (0.5, "/Pose Controls/Head/Expressions"),
+                             "Height": (0.0, "/Actor/Body"),
+                             "XTranslate": (3.0, "/General/Transforms")})
+        g9.fitted = [FittedItem("Shirt", "Shirt", "clothing", 5),
+                     FittedItem("Hair", "Hair", "hair", 6)]
+        self.nodes = {"Genesis 9": g9, "Shirt": FakeNode(self, "Shirt", 5),
+                      "Box": FakeNode(self, "Box", 7)}
+        self.sim_calls = []
+        self.exports = []
+        self.select_all_calls = []
+
+    def resolve_node(self, ref):
+        for n in self.nodes.values():
+            if ref in (n.label, str(n.eid)):
+                return n
+        raise NodeNotFoundError(f"Node not found: {ref!r}")
+
+    def run_dforce_simulation(self, nodes=None, *, wait=True, **_):
+        self.sim_calls.append([n.label for n in nodes] if nodes else None)
+
+    def select_all(self, on=True):
+        self.select_all_calls.append(on)
+
+    def export_fbx(self, path, **kw):
+        if path.endswith("fail.fbx"):
+            raise DazError("DzFbxExporter failed writing")
+        self.exports.append(("fbx", path, kw))
+
+    def export_obj(self, path, **kw):
+        self.exports.append(("obj", path, kw))
 
 
-@pytest.fixture
-def mock_daz():
-    with respx.mock(base_url=BASE_URL, assert_all_called=False) as router:
-        yield router
+@pytest.fixture()
+def scene(monkeypatch):
+    s = FakeScene()
+    monkeypatch.setattr(wardrobe, "get_scene", lambda: s)
+    return s
 
 
-# ---------------------------------------------------------------------------
-# daz_list_fitted_items
-# ---------------------------------------------------------------------------
-
-class TestListFittedItems:
-    async def test_returns_dict(self, mock_daz):
-        payload = {
-            "figure": "Genesis 9",
-            "fitted_count": 2,
-            "fitted_items": [
-                {
-                    "label": "Sci-Fi Bodysuit",
-                    "name": "SciFiBodysuit",
-                    "type": "clothing",
-                    "element_id": 42,
-                },
-                {"label": "Boots", "name": "Boots", "type": "prop", "element_id": 43},
-            ],
-        }
-        mock_daz.post("/scripts/vangard-list-fitted-items/execute").mock(return_value=_ok(payload))
-        result = await daz_list_fitted_items("Genesis 9")
-        assert result["figure"] == "Genesis 9"
-        assert result["fitted_count"] == 2
-
-    async def test_empty_wardrobe(self, mock_daz):
-        payload = {"figure": "Genesis 9", "fitted_count": 0, "fitted_items": []}
-        mock_daz.post("/scripts/vangard-list-fitted-items/execute").mock(return_value=_ok(payload))
-        result = await daz_list_fitted_items("Genesis 9")
-        assert result["fitted_count"] == 0
-        assert result["fitted_items"] == []
-
-    async def test_items_have_type_field(self, mock_daz):
-        items = [
-            {"label": "Hair", "name": "Hair", "type": "hair", "element_id": 10},
-            {"label": "Dress", "name": "Dress", "type": "clothing", "element_id": 11},
-            {"label": "Sword", "name": "Sword", "type": "prop", "element_id": 12},
-        ]
-        mock_daz.post("/scripts/vangard-list-fitted-items/execute").mock(
-            return_value=_ok({"figure": "Genesis 9", "fitted_count": 3, "fitted_items": items})
-        )
-        result = await daz_list_fitted_items("Genesis 9")
-        types = {i["type"] for i in result["fitted_items"]}
-        assert types == {"hair", "clothing", "prop"}
-
-    async def test_figure_not_found_raises(self, mock_daz):
-        from fastmcp.exceptions import ToolError
-        mock_daz.post("/scripts/vangard-list-fitted-items/execute").mock(
-            return_value=_fail("Figure not found: Ghost")
-        )
-        with pytest.raises(ToolError):
-            await daz_list_fitted_items("Ghost")
-
-    async def test_sends_figure_label_in_args(self, mock_daz):
-        captured = {}
-
-        def capture(request, route):
-            import json
-            body = json.loads(request.content)
-            captured["args"] = body.get("args", {})
-            return _ok({"figure": "Genesis 9", "fitted_count": 0, "fitted_items": []})
-
-        mock_daz.post("/scripts/vangard-list-fitted-items/execute").mock(side_effect=capture)
-        await daz_list_fitted_items("Genesis 9")
-        assert captured["args"]["figureLabel"] == "Genesis 9"
+async def test_list_fitted_items(scene):
+    r = await wardrobe.daz_list_fitted_items("Genesis 9")
+    assert r == {"figure": "Genesis 9", "fitted_count": 2, "fitted_items": [
+        {"label": "Shirt", "name": "Shirt", "type": "clothing", "element_id": 5},
+        {"label": "Hair", "name": "Hair", "type": "hair", "element_id": 6}]}
 
 
-# ---------------------------------------------------------------------------
-# daz_fit_clothing
-# ---------------------------------------------------------------------------
-
-class TestFitClothing:
-    async def test_successful_fit(self, mock_daz):
-        payload = {
-            "success": True,
-            "clothing": "Sci-Fi Bodysuit",
-            "figure": "Genesis 9",
-            "method": "setFollowTarget",
-        }
-        mock_daz.post("/scripts/vangard-fit-clothing/execute").mock(return_value=_ok(payload))
-        result = await daz_fit_clothing("Sci-Fi Bodysuit", "Genesis 9")
-        assert result["success"] is True
-        assert result["clothing"] == "Sci-Fi Bodysuit"
-        assert result["figure"] == "Genesis 9"
-
-    async def test_method_field_present(self, mock_daz):
-        payload = {
-            "success": True,
-            "clothing": "Hat",
-            "figure": "Genesis 9",
-            "method": "addNodeChild",
-        }
-        mock_daz.post("/scripts/vangard-fit-clothing/execute").mock(return_value=_ok(payload))
-        result = await daz_fit_clothing("Hat", "Genesis 9")
-        assert "method" in result
-
-    async def test_clothing_not_found_raises(self, mock_daz):
-        from fastmcp.exceptions import ToolError
-        mock_daz.post("/scripts/vangard-fit-clothing/execute").mock(
-            return_value=_fail("Clothing node not found: NonExistent")
-        )
-        with pytest.raises(ToolError):
-            await daz_fit_clothing("NonExistent", "Genesis 9")
-
-    async def test_figure_not_found_raises(self, mock_daz):
-        from fastmcp.exceptions import ToolError
-        mock_daz.post("/scripts/vangard-fit-clothing/execute").mock(
-            return_value=_fail("Figure not found: Ghost")
-        )
-        with pytest.raises(ToolError):
-            await daz_fit_clothing("Dress", "Ghost")
-
-    async def test_sends_correct_args(self, mock_daz):
-        captured = {}
-
-        def capture(request, route):
-            import json
-            body = json.loads(request.content)
-            captured["args"] = body.get("args", {})
-            return _ok({
-                "success": True,
-                "clothing": "Dress",
-                "figure": "G9",
-                "method": "setFollowTarget",
-            })
-
-        mock_daz.post("/scripts/vangard-fit-clothing/execute").mock(side_effect=capture)
-        await daz_fit_clothing("Dress", "G9")
-        assert captured["args"]["clothingLabel"] == "Dress"
-        assert captured["args"]["figureLabel"] == "G9"
+async def test_list_fitted_items_missing_figure(scene):
+    with pytest.raises(ToolError, match="Node not found"):
+        await wardrobe.daz_list_fitted_items("Ghost")
 
 
-# ---------------------------------------------------------------------------
-# daz_unfit_item
-# ---------------------------------------------------------------------------
+async def test_fit_and_unfit(scene):
+    r = await wardrobe.daz_fit_clothing("Shirt", "Genesis 9")
+    assert r == {"success": True, "clothing": "Shirt", "figure": "Genesis 9",
+                 "method": "setFollowTarget"}
+    assert scene.nodes["Shirt"].fit_calls == ["Genesis 9"]
+    r = await wardrobe.daz_unfit_item("Shirt")
+    assert r == {"success": True, "item": "Shirt", "previous_figure": "Genesis9",
+                 "actions": ["cleared follow target"]}
 
-class TestUnfitItem:
-    async def test_successful_unfit(self, mock_daz):
-        payload = {
-            "success": True,
-            "item": "Sci-Fi Bodysuit",
-            "previous_figure": "Genesis 9",
-            "actions": ["cleared follow target"],
-        }
-        mock_daz.post("/scripts/vangard-unfit-item/execute").mock(return_value=_ok(payload))
-        result = await daz_unfit_item("Sci-Fi Bodysuit")
-        assert result["success"] is True
-        assert result["previous_figure"] == "Genesis 9"
 
-    async def test_actions_list_present(self, mock_daz):
-        payload = {
-            "success": True,
-            "item": "Hat",
-            "previous_figure": "Genesis 9",
-            "actions": ["detached from parent"],
-        }
-        mock_daz.post("/scripts/vangard-unfit-item/execute").mock(return_value=_ok(payload))
-        result = await daz_unfit_item("Hat")
-        assert isinstance(result["actions"], list)
-        assert len(result["actions"]) > 0
+async def test_unfit_nothing_fitted(scene, monkeypatch):
+    monkeypatch.setattr(FakeNode, "unfit", lambda self: {"previous_figure": None, "actions": []})
+    r = await wardrobe.daz_unfit_item("Box")
+    assert r["actions"] == ["no fitting relationship found"]
 
-    async def test_no_relationship_still_succeeds(self, mock_daz):
-        payload = {
-            "success": True,
-            "item": "Free Prop",
-            "previous_figure": None,
-            "actions": ["no fitting relationship found"],
-        }
-        mock_daz.post("/scripts/vangard-unfit-item/execute").mock(return_value=_ok(payload))
-        result = await daz_unfit_item("Free Prop")
-        assert result["success"] is True
-        assert result["previous_figure"] is None
 
-    async def test_item_not_found_raises(self, mock_daz):
-        from fastmcp.exceptions import ToolError
-        mock_daz.post("/scripts/vangard-unfit-item/execute").mock(
-            return_value=_fail("Item not found: Ghost")
-        )
-        with pytest.raises(ToolError):
-            await daz_unfit_item("Ghost")
+async def test_set_subdivision_reports_old_level(scene):
+    r = await wardrobe.daz_set_subdivision("Genesis 9", 3)
+    assert r == {"success": True, "node": "Genesis 9", "property": "SubDIALevel",
+                 "old_level": 1, "new_level": 3, "render_level": 3}
+    with pytest.raises(ToolError, match="between 0 and 4"):
+        await wardrobe.daz_set_subdivision("Genesis 9", 7)
 
-    async def test_sends_item_label_in_args(self, mock_daz):
-        captured = {}
 
-        def capture(request, route):
-            import json
-            body = json.loads(request.content)
-            captured["args"] = body.get("args", {})
-            return _ok({
-                "success": True, "item": "Boots",
-                "previous_figure": None, "actions": []
-            })
+async def test_set_subdivision_unsupported(scene):
+    with pytest.raises(ToolError, match="No subdivision property"):
+        await wardrobe.daz_set_subdivision("Box", 1)
 
-        mock_daz.post("/scripts/vangard-unfit-item/execute").mock(side_effect=capture)
-        await daz_unfit_item("Boots")
-        assert captured["args"]["itemLabel"] == "Boots"
+
+async def test_figure_info(scene):
+    r = await wardrobe.daz_get_figure_info("Genesis 9")
+    assert r["generation"] == "Genesis9" and r["fitted_item_count"] == 2
+    assert r["subdivision_level"] == 1
+    assert [m["name"] for m in r["active_morphs"]] == ["Smile"]
+
+
+async def test_run_dforce_simulation(scene):
+    r = await wardrobe.daz_run_dforce_simulation("Shirt")
+    assert scene.sim_calls == [["Shirt"]] and r["node"] == "Shirt"
+    r = await wardrobe.daz_run_dforce_simulation()
+    assert scene.sim_calls[-1] is None and r["node"] == "all simulatable nodes"
+
+
+async def test_export_selected_nodes(scene):
+    r = await wardrobe.daz_export_fbx("C:/out/a.fbx", ["Genesis 9", "Shirt"], scale_factor=2.0)
+    kind, path, kw = scene.exports[0]
+    assert (kind, path, kw["selected_only"]) == ("fbx", "C:/out/a.fbx", True)
+    assert kw["options"]["Scale"] == 2.0 and kw["options"]["Morphs"] is True
+    assert scene.select_all_calls[0] is False
+    assert scene.nodes["Shirt"].selected and r["exported_nodes"] == ["Genesis 9", "Shirt"]
+
+
+async def test_export_whole_scene_and_errors(scene):
+    r = await wardrobe.daz_export_obj("C:/out/a.obj")
+    assert scene.exports[0][2]["selected_only"] is False and r["format"] == "Wavefront Object"
+    with pytest.raises(ToolError, match="None of the specified nodes"):
+        await wardrobe.daz_export_obj("C:/out/b.obj", ["Ghost"])
+    with pytest.raises(ToolError, match="failed"):
+        await wardrobe.daz_export_fbx("C:/out/fail.fbx")
