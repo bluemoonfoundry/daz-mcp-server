@@ -887,7 +887,9 @@ async def daz_auto_improve_scene() -> dict[str, Any]:
 @mcp.tool()
 async def daz_suggest_next_action() -> dict[str, Any]:
     """Suggest the next action to take based on scene state."""
-    scene_info = await _execute_by_id("vangard-scene-info")
+    from .scene import daz_scene_info  # pylint: disable=import-outside-toplevel
+
+    scene_info = await daz_scene_info()
     suggestions = []
     if isinstance(scene_info, dict):
         if not scene_info.get("figures"):

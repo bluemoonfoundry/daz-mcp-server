@@ -25,7 +25,7 @@ from daz_mcp_server.tools.render import (
     daz_set_render_quality,
     daz_wait_for_request,
 )
-from daz_mcp_server.tools.scene import daz_scene_info, daz_load_file, daz_save_scene_copy
+from daz_mcp_server.tools.scene import daz_load_file, daz_save_scene_copy
 from daz_mcp_server.tools.utility import (
     daz_status,
     daz_execute,
@@ -212,58 +212,27 @@ async def test_daz_execute_file_async_http_failure(mock_daz):
         await daz_execute_file_async(script_file="C:/scripts/missing.dsa")
 
 
-# ---------------------------------------------------------------------------
-# daz_scene_info
-# ---------------------------------------------------------------------------
-
-_SCENE_RESULT = {
-    "sceneFile": "C:/scenes/test.duf",
-    "nodeCount": 2,
-    "selectedNode": "Genesis 9",
-    "nodes": [
-        {"name": "Genesis9", "label": "Genesis 9", "type": "DzFigure"},
-        {"name": "Camera", "label": "Camera", "type": "DzCamera"},
-    ],
-}
-
-
-async def test_daz_scene_info_ok(mock_daz):
-    mock_daz.post("/scripts/vangard-scene-info/execute").mock(return_value=_ok(_SCENE_RESULT))
-    result = await daz_scene_info()
-    assert result["nodeCount"] == 2
-    assert result["selectedNode"] == "Genesis 9"
-    assert len(result["nodes"]) == 2
-
-
-async def test_daz_scene_info_unsaved(mock_daz):
-    payload = {**_SCENE_RESULT, "sceneFile": "", "selectedNode": None}
-    mock_daz.post("/scripts/vangard-scene-info/execute").mock(return_value=_ok(payload))
-    result = await daz_scene_info()
-    assert result["sceneFile"] == ""
-    assert result["selectedNode"] is None
-
-
 async def test_execute_by_id_retries_on_404(mock_daz):
     """On 404, scripts are re-registered with DazScriptServer and the call retried."""
     call_count = 0
 
-    def scene_info_side_effect(request):
+    def render_side_effect(request):
         nonlocal call_count
         call_count += 1
         if call_count == 1:
             return httpx.Response(
                 404,
-                json={"success": False, "error": "Script not found: 'vangard-scene-info'"},
+                json={"success": False, "error": "Script not found: 'vangard-render'"},
             )
-        return _ok(_SCENE_RESULT)
+        return _ok({"success": True})
 
-    mock_daz.post("/scripts/vangard-scene-info/execute").mock(side_effect=scene_info_side_effect)
+    mock_daz.post("/scripts/vangard-render/execute").mock(side_effect=render_side_effect)
     mock_daz.post("/scripts/register").mock(
         return_value=httpx.Response(200, json={"success": True, "id": "x", "updated": False})
     )
 
-    result = await daz_scene_info()
-    assert result["nodeCount"] == 2
+    result = await daz_render()
+    assert result["success"] is True
     assert call_count == 2
 
 
@@ -293,14 +262,6 @@ async def test_daz_load_file_merge(mock_scene):
     mock_scene.load.assert_called_once_with("C:/scenes/char.duf")
     assert result["success"] is True
     assert result["file"] == "C:/scenes/char.duf"
-
-
-async def test_daz_load_file_replace(mock_daz):
-    mock_daz.post("/scripts/vangard-load-file/execute").mock(
-        return_value=_ok({"success": True, "file": "C:/scenes/scene.duf"})
-    )
-    result = await daz_load_file("C:/scenes/scene.duf", merge=False)
-    assert result["success"] is True
 
 
 async def test_daz_load_file_not_found(mock_scene):

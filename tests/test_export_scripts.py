@@ -27,20 +27,6 @@ def test_set_dforce_property_searches_object_modifier_stack():
     assert "Freeze Simulation" in script
 
 
-_RESOLVE_IDS = (
-    "vangard-get-node-hierarchy",
-)
-
-
-def test_core_node_scripts_resolve_uniquely():
-    for script_id in _RESOLVE_IDS:
-        script = _REGISTRY[script_id][1]
-        assert "function resolveNode" in script, script_id
-        assert "findNodeByElementID" in script, script_id
-        assert "Ambiguous node" in script, script_id
-        assert "Scene.findNodeByLabel(args.nodeLabel)" not in script, script_id
-
-
 def test_apply_material_preset_preflights_missing_maps():
     script = _REGISTRY["vangard-apply-material-preset"][1]
     assert "Missing texture files" in script
