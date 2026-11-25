@@ -9,9 +9,23 @@ from typing import Any
 
 from fastmcp.exceptions import ToolError
 
-from .._mcp import mcp, _execute_by_id
-from .._client import get_daz_client, run_dazpy
-from .._errors import handle_dazpy_error
+from dazpy.exceptions import MaterialError
+
+from .._mcp import mcp
+from .._client import get_scene
+from .._errors import run_tool
+
+_STOCK_UBER_PRESET = "Shader Presets/Iray/DAZ Uber/!Iray Uber Base.duf"
+
+
+async def _material_tool(fn: Any) -> dict[str, Any]:
+    """run_tool, plus MaterialError/ValueError -> ToolError with dazpy's message."""
+    def _wrapped() -> dict[str, Any]:
+        try:
+            return fn()
+        except (MaterialError, ValueError) as e:
+            raise ToolError(str(e)) from e
+    return await run_tool(_wrapped)
 
 _MAP_EXT = re.compile(r"\.(?:jpe?g|png|tiff?|gif|bmp|exr|hdr|dsf)$", re.I)
 
@@ -72,44 +86,16 @@ async def daz_list_materials(node_label: str) -> dict[str, Any]:
 
         daz_list_materials("My Dress Prop")
     """
-    def _run() -> dict | None:
-        client = get_daz_client()
-        script = f"""(function() {{
-            var node = Scene.findNodeByLabel({json.dumps(node_label)});
-            if (!node) return null;
-            var obj = node.getObject();
-            if (!obj) return [];
-            var shape = obj.getCurrentShape();
-            if (!shape) return [];
-            var result = [];
-            for (var i = 0; i < shape.getNumMaterials(); i++) {{
-                var m = shape.getMaterial(i);
-                var lbl = (typeof m.getLabel === "function") ? m.getLabel() : m.getName();
-                result.push({{
-                    index:  i,
-                    name:   m.getName(),
-                    label:  lbl,
-                    shader: m.className()
-                }});
-            }}
-            return result;
-        }})();"""
-        data = client.execute(script).value
-        if data is None:
-            return None
+    def _run() -> dict[str, Any]:
+        mats = get_scene().resolve_node(node_label).material_info()
         return {
             "node": node_label,
-            "material_count": len(data),
-            "materials": data,
+            "material_count": len(mats),
+            "materials": [{"index": m.index, "name": m.name, "label": m.label,
+                           "shader": m.shader} for m in mats],
         }
 
-    try:
-        result = await run_dazpy(_run)
-    except Exception as e:
-        handle_dazpy_error(e)
-    if result is None:
-        raise ToolError(f"Node not found: {node_label!r}")
-    return result
+    return await _material_tool(_run)
 
 
 @mcp.tool()
@@ -137,10 +123,16 @@ async def daz_get_material(node_label: str, material_name: str) -> dict[str, Any
         daz_get_material("Genesis 9", "Skin")
         daz_get_material("Genesis 9", "Cornea")
     """
-    return await _execute_by_id(
-        "vangard-get-material",
-        {"nodeLabel": node_label, "materialName": material_name},
-    )
+    def _run() -> dict[str, Any]:
+        node = get_scene().resolve_node(node_label)
+        mat = node.resolve_material(material_name)
+        info = mat.describe()
+        props = [{"name": p.name, "label": p.label, "type": p.type, "value": p.value}
+                 for p in mat.property_values()]
+        return {"node": node.describe().label, "material": info.label, "shader": info.shader,
+                "property_count": len(props), "properties": props}
+
+    return await _material_tool(_run)
 
 
 @mcp.tool()
@@ -180,15 +172,14 @@ async def daz_set_material_property(
         # Make a surface transparent
         daz_set_material_property("My Prop", "Glass", "Cutout Opacity", 0.1)
     """
-    return await _execute_by_id(
-        "vangard-set-material-property",
-        {
-            "nodeLabel": node_label,
-            "materialName": material_name,
-            "propertyName": property_name,
-            "value": value,
-        },
-    )
+    def _run() -> dict[str, Any]:
+        node = get_scene().resolve_node(node_label)
+        mat = node.resolve_material(material_name)
+        written = mat.set_property_value(property_name, value)
+        return {"node": node.describe().label, "material": mat.describe().label,
+                "property": written.label, "type": written.type, "value": written.value}
+
+    return await _material_tool(_run)
 
 
 @mcp.tool()
@@ -234,15 +225,14 @@ async def daz_apply_material_preset(
         map_paths = extract_preset_map_paths(preset_path)
     except (OSError, json.JSONDecodeError, UnicodeDecodeError, gzip.BadGzipFile) as exc:
         raise ToolError(f"Failed to read material preset {preset_path!r}: {exc}") from exc
-    return await _execute_by_id(
-        "vangard-apply-material-preset",
-        {
-            "nodeLabel": node_label,
-            "presetPath": preset_path,
-            "mapPaths": map_paths,
-            "allowMissing": allow_missing,
-        },
-    )
+    def _run() -> dict[str, Any]:
+        node = get_scene().resolve_node(node_label)
+        mats = node.apply_surface_preset(preset_path, map_paths=map_paths,
+                                         allow_missing=allow_missing)
+        return {"success": True, "node": node.describe().label, "preset": preset_path,
+                "materials": [m.label for m in mats], "material_count": len(mats)}
+
+    return await _material_tool(_run)
 
 
 @mcp.tool()
@@ -289,10 +279,22 @@ async def daz_convert_to_iray_uber(
         daz_convert_to_iray_uber("Genesis 9")
         daz_convert_to_iray_uber("MyImportedProp", "C:/Library/Shader Presets/Custom.duf")
     """
-    return await _execute_by_id(
-        "vangard-convert-to-iray-uber",
-        {"nodeLabel": node_label, "presetPath": preset_path},
-    )
+    def _run() -> dict[str, Any]:
+        scene = get_scene()
+        node = scene.resolve_node(node_label)
+        path = preset_path or scene.content_path(_STOCK_UBER_PRESET)
+        if not path:
+            raise ToolError(
+                "No presetPath given and the stock 'Iray Uber Base' preset could not be "
+                "located in any configured content directory. Pass an explicit presetPath."
+            )
+        before = [{"label": m.label, "shader": m.shader} for m in node.material_info()]
+        after = [{"label": m.label, "shader": m.shader}
+                 for m in node.apply_surface_preset(path)]
+        return {"success": True, "node": node.describe().label, "preset": path,
+                "before": before, "after": after}
+
+    return await _material_tool(_run)
 
 
 @mcp.tool()
@@ -330,12 +332,14 @@ async def daz_copy_material(
         daz_copy_material("Genesis 9", "Skin", "Clone 1", "Skin")
         daz_copy_material("Hero Suit", "Metal", "Villain Suit", "Metal")
     """
-    return await _execute_by_id(
-        "vangard-copy-material",
-        {
-            "sourceNodeLabel": source_node,
-            "sourceMaterialName": source_material_name,
-            "destNodeLabel": dest_node,
-            "destMaterialName": dest_material_name,
-        },
-    )
+    def _run() -> dict[str, Any]:
+        scene = get_scene()
+        src = scene.resolve_node(source_node).resolve_material(source_material_name)
+        dst = scene.resolve_node(dest_node).resolve_material(dest_material_name)
+        copied, skipped = dst.copy_from(src)
+        return {"success": True,
+                "source": f"{source_node}/{src.describe().label}",
+                "destination": f"{dest_node}/{dst.describe().label}",
+                "properties_copied": copied, "properties_skipped": skipped}
+
+    return await _material_tool(_run)

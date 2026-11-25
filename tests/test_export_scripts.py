@@ -27,13 +27,6 @@ def test_set_dforce_property_searches_object_modifier_stack():
     assert "Freeze Simulation" in script
 
 
-def test_apply_material_preset_preflights_missing_maps():
-    script = _REGISTRY["vangard-apply-material-preset"][1]
-    assert "Missing texture files" in script
-    assert script.index("mapPaths") < script.index("openFile(presetPath")
-    assert "allowMissing" in script
-
-
 def test_every_registered_script_is_called_by_a_tool():
     """A registered script no tool calls is dead weight re-registered on every
     connection (daz-mcp-server-b7q)."""
