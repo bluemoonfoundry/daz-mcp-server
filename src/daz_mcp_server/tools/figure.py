@@ -267,7 +267,9 @@ async def daz_interactive_pose(
       - char1: first character label
       - char2: second character label
       - interactionType: the interaction type used
-      - applied: list of pose components that were applied
+      - applied: list of staging steps that were applied
+      - alignment: per hand/foot target {anchor, converged, finalError (cm)}
+        from dazpy's interaction-recipe limb solver (works on Genesis 3/8/9)
 
     Example:
         # Position characters facing each other at conversation distance
@@ -284,17 +286,12 @@ async def daz_interactive_pose(
         you may need to fine-tune positions and rotations using daz_set_property
         or load artist-created pose presets.
     """
-    # Still a registered script: dazpy's interaction recipes (hug, handshake,
-    # face-each-other) are the intended replacement, migrated together with
-    # the cinematic choreography tools (daz-mcp-server-ord).
-    args: dict[str, Any] = {
-        "char1Label": char1_label,
-        "char2Label": char2_label,
-        "interactionType": interaction_type,
-    }
-    if distance is not None:
-        args["distance"] = distance
-    return await _execute_by_id("vangard-interactive-pose", args)
+    if interaction_type not in ("face-each-other", "hug", "shoulder-arm", "handshake"):
+        raise ToolError("interaction_type must be face-each-other, hug, shoulder-arm or "
+                        f"handshake; got {interaction_type!r}")
+    from .. import _cinematic_staging  # pylint: disable=import-outside-toplevel
+    return await run_tool(lambda: _cinematic_staging.interactive_pose(
+        char1_label, char2_label, interaction_type, distance))
 
 
 # ---------------------------------------------------------------------------

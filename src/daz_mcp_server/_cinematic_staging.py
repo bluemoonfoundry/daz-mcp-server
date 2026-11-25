@@ -178,3 +178,66 @@ def conversation(char1: str, char2: str, beats: list[dict]) -> dict:
     max_frame = max((b["frameRange"]["end"] for b in applied), default=0)
     return {"char1": figs[char1].describe().label, "char2": figs[char2].describe().label,
             "beatsApplied": applied, "totalFrames": max_frame, "beatCount": len(beats)}
+
+
+# --- daz_choreograph_action / daz_interactive_pose ---------------------------
+
+ACTION_SPACING = {"handshake": 60.0, "hug": 30.0, "fight": 100.0, "dance": 40.0}
+ACTION_SUGGESTIONS = {
+    "handshake": ["Use daz_interactive_pose with 'handshake' to bring the hands together",
+                  "Apply 'happy' or 'confident' emotion to both characters"],
+    "hug": ["Use daz_interactive_pose with 'hug' type for arm positioning",
+            "Apply 'loving' or 'happy' emotion to both characters"],
+    "fight": ["Apply fighting stance poses from content library",
+              "Apply 'angry' emotion", "Use low-angle camera for dramatic effect"],
+    "dance": ["Apply partner dance poses from content library",
+              "Use daz_create_character_path for dance movement",
+              "Apply 'happy' or 'excited' emotion"],
+}
+
+
+def choreograph(action: str, characters: list[str]) -> list[dict]:
+    """Face the first two characters toward each other at *action*'s spacing,
+    centred on the origin (as the replaced script did)."""
+    placed = arrange(characters[:2], "line", ACTION_SPACING[action], "center",
+                     {"x": 0.0, "y": 0.0, "z": 0.0})
+    return [{"character": c["label"], "position": c["position"], "rotation": c["rotation"]}
+            for c in placed["characters"]]
+
+
+def _space_pair(scene: Any, char1: str, char2: str, distance: float) -> None:
+    """Face two figures toward each other *distance* apart about their midpoint."""
+    p1 = scene.resolve_node(char1).position
+    p2 = scene.resolve_node(char2).position
+    mid = {"x": (p1["x"] + p2["x"]) / 2, "y": 0.0, "z": (p1["z"] + p2["z"]) / 2}
+    arrange([char1, char2], "line", distance, "center", mid)
+
+
+def interactive_pose(char1: str, char2: str, kind: str, distance: float | None) -> dict:
+    """Stage two figures with a dazpy interaction recipe (facing, then limb
+    targets solved per figure generation)."""
+    # pylint: disable=import-outside-toplevel
+    from dazpy._interaction import (build_face_each_other_recipe, build_handshake_recipe,
+                                    build_hug_recipe, build_touch_recipe)
+    scene = get_scene()
+    applied = []
+    if distance:
+        _space_pair(scene, char1, char2, float(distance))
+        applied.append(f"spaced {distance:g} cm apart")
+    recipe = {
+        "face-each-other": lambda: build_face_each_other_recipe(char1, char2),
+        "hug": lambda: build_hug_recipe(char1, char2),
+        "handshake": lambda: build_handshake_recipe(char1, char2),
+        "shoulder-arm": lambda: build_touch_recipe(char1, char2, source_anchor="r_hand",
+                                                   target_anchor="l_shoulder"),
+    }[kind]()
+    result = scene.apply_interaction_recipe(recipe, align_limb_targets=True).to_dict()
+    issues = result["prepared"].get("validation_issues", [])
+    if issues:
+        raise ToolError(f"Interaction recipe could not be prepared: {issues}")
+    applied.append("facing" if kind == "face-each-other" else kind)
+    return {"success": True, "char1": char1, "char2": char2, "interactionType": kind,
+            "applied": applied,
+            "alignment": [{"anchor": a["anchor_name"], "converged": a["converged"],
+                           "finalError": a["final_error"]}
+                          for a in result["alignment_results"]]}

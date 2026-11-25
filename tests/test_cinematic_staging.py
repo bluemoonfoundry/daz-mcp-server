@@ -140,3 +140,32 @@ async def test_conversation_keys_speaker_face_and_listener_look(scene):
         "head": {"x": [(10, -2.0), (40, -2.0)], "y": [(10, 30.0), (40, 30.0)]}}
     assert r["beatsApplied"][0]["actions"] == ["Applied happy emotion (1 morphs)",
                                                "Listener looks at speaker"]
+
+
+async def test_choreograph_faces_pair_at_action_spacing(scene):
+    r = await cinematic.daz_choreograph_action("fight", ["A", "B"])
+    assert r["positions"][0] == {"character": "A", "position": {"x": -50.0, "y": 0.0, "z": 0.0},
+                                 "rotation": 90.0}
+    assert r["positions"][1]["rotation"] == -90.0 and "angry" in " ".join(r["suggestions"])
+
+
+async def test_interactive_pose_uses_recipe(scene, monkeypatch):
+    from types import SimpleNamespace
+
+    from daz_mcp_server.tools import figure
+    seen = {}
+
+    def apply(recipe, align_limb_targets=False):
+        seen["recipe"] = recipe
+        seen["align"] = align_limb_targets
+        return SimpleNamespace(to_dict=lambda: {
+            "prepared": {"validation_issues": []},
+            "alignment_results": [{"anchor_name": "r_hand", "converged": True,
+                                   "final_error": 0.1}]})
+    scene.apply_interaction_recipe = apply
+    for n in scene.nodes.values():
+        n.position = {"x": 0.0, "y": 0.0, "z": 0.0}
+    r = await figure.daz_interactive_pose("A", "B", "handshake", distance=60)
+    assert seen["align"] is True and seen["recipe"].kind == "handshake"
+    assert r["applied"] == ["spaced 60 cm apart", "handshake"]
+    assert r["alignment"] == [{"anchor": "r_hand", "converged": True, "finalError": 0.1}]

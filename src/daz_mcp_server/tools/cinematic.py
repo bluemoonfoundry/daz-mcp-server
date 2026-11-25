@@ -1123,12 +1123,10 @@ async def daz_choreograph_action(
     if duration < 10 or duration > 1000:
         raise ToolError("duration must be between 10 and 1000 frames")
 
-    return await _execute_by_id("vangard-choreograph-action", {
-        "actionType": action_type,
-        "characters": characters,
-        "startFrame": start_frame,
-        "duration": duration,
-    })
+    positions = await run_tool(lambda: _staging.choreograph(action_type, characters))
+    return {"actionType": action_type, "characters": characters[:2], "positions": positions,
+            "frameRange": {"start": start_frame, "end": start_frame + duration},
+            "suggestions": list(_staging.ACTION_SUGGESTIONS[action_type])}
 
 
 # ---------------------------------------------------------------------------

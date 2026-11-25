@@ -148,7 +148,15 @@ Requires dazpy 2.17.0 or later, for the new primitives these tools use
   - The listener's neck and head turn toward the speaker's head through
     `DazSkeleton.look_at`, keyed at the beat's start and end frames. The
     old script keyed DzTime ticks and aimed with world angles.
-- 94 registered scripts are removed (107 to 13), and a unit test fails if any
+- `daz_interactive_pose` stages pairs with dazpy interaction recipes:
+  face-each-other, hug, handshake, and shoulder-arm (a touch recipe). The
+  hand/foot targets are solved per figure generation. The old script
+  hard-coded Genesis 8 arm bones (`rShldrBend`, ...), so its arm poses did
+  nothing on Genesis 9. The result adds `alignment` (each limb target's
+  convergence).
+- `daz_choreograph_action` places the pair facing each other at the
+  action's spacing through dazpy's batched staging.
+- 96 registered scripts are removed (107 to 11), and a unit test fails if any
   registered script is no longer called by a tool.
 
 ### Fixed
