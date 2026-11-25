@@ -298,11 +298,7 @@ async def daz_animate_conversation(
                     f"Valid: {', '.join(valid_emotions)}"
                 )
 
-    return await _execute_by_id("vangard-animate-conversation", {
-        "char1Label": char1_label,
-        "char2Label": char2_label,
-        "dialogueBeats": beats,
-    })
+    return await run_tool(lambda: _staging.conversation(char1_label, char2_label, beats))
 
 
 @mcp.tool()

@@ -93,3 +93,50 @@ async def test_path_missing_character(scene):
         await cinematic.daz_create_character_path("Z", [
             {"frame": 0, "position": {"x": 0, "y": 0, "z": 0}},
             {"frame": 9, "position": {"x": 1, "y": 0, "z": 0}}])
+
+
+class ConvSkel(FakeNode):
+    def __init__(self, label, eid, bones, dials):
+        super().__init__(label, eid)
+        self.bones, self.dials, self.bone_keys, self.keyed = bones, set(dials), {}, []
+        self.position = {"x": 0.0, "y": 0.0, "z": 0.0}
+
+    def bone_names(self):
+        return list(self.bones)
+
+    def key_numeric_candidates(self, slots):
+        out = []
+        for names, keys in slots:
+            hit = next((n for n in names if n in self.dials), None)
+            if hit:
+                self.keyed.append((hit, list(keys)))
+            out.append(NumericCandidateMatch(tuple(names), 0.0, hit, "property" if hit else None,
+                                             None))
+        return out
+
+    def look_at(self, point, chain):
+        from dazpy import BoneAim, LookAtResult
+        return LookAtResult([BoneAim(b, -2.0, 30.0) for b, _ in chain], [])
+
+    def key_bone_axes(self, data):
+        self.bone_keys.update(data)
+        return []
+
+    def find_bone(self, name):
+        from types import SimpleNamespace
+        return SimpleNamespace(position={"x": 100.0, "y": 150.0, "z": 0.0})
+
+
+async def test_conversation_keys_speaker_face_and_listener_look(scene):
+    scene.nodes["A"] = ConvSkel("A", 1, ["neck1", "head"], ["facs_ctrl_Happy"])
+    scene.nodes["B"] = ConvSkel("B", 2, ["neckLower", "head"], ["eCTRLHappy_HD"])
+    scene.find_skeleton_by_label = lambda label: scene.nodes[label]
+    r = await cinematic.daz_animate_conversation("A", "B", [
+        {"speaker": "A", "startFrame": 10, "endFrame": 40, "emotion": "happy",
+         "intensity": 0.5}])
+    assert scene.nodes["A"].keyed == [("facs_ctrl_Happy", [(10, 0.5)])]
+    assert scene.nodes["B"].bone_keys == {
+        "neckLower": {"x": [(10, -2.0), (40, -2.0)], "y": [(10, 30.0), (40, 30.0)]},
+        "head": {"x": [(10, -2.0), (40, -2.0)], "y": [(10, 30.0), (40, 30.0)]}}
+    assert r["beatsApplied"][0]["actions"] == ["Applied happy emotion (1 morphs)",
+                                               "Listener looks at speaker"]

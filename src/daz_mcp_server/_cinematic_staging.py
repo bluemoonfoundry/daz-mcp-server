@@ -118,3 +118,63 @@ def character_path(label: str, waypoints: list[dict[str, Any]]) -> dict:
             "keyframesSet": sum(len(k) for k in channels.values()),
             "frameRange": {"start": wps[0]["frame"], "end": wps[-1]["frame"]},
             "totalDistance": round(distance, 1)}
+
+
+# --- daz_animate_conversation -------------------------------------------------
+
+_LISTEN_CHAIN = (("neckLower", 0.3), ("head", 0.6))
+
+
+def _key_speaker_emotion(skel: Any, emotion: str, intensity: float, frame: int) -> int:
+    """Key the speaker's expression at *frame*: the stock face controller,
+    else the feature dials. Returns how many dials were keyed."""
+    from ._emotions import _EMOTION_DEFINITIONS  # pylint: disable=import-outside-toplevel
+    definition = _EMOTION_DEFINITIONS.get(emotion, {"morphs": []})
+    if definition.get("face"):
+        if skel.key_numeric_candidates([(definition["face"], [(frame, intensity)])])[0].found:
+            return 1
+    slots = [(m["names"], [(frame, m["value"] * intensity)]) for m in definition["morphs"]]
+    return sum(1 for r in (skel.key_numeric_candidates(slots) if slots else []) if r.found)
+
+
+def _key_listener_look(skel: Any, target: tuple[float, float, float],
+                       frames: tuple[int, int]) -> bool:
+    """Aim the listener's neck/head at *target* and key that at both frames."""
+    from ._emotions import resolve_bone  # pylint: disable=import-outside-toplevel
+    names = set(skel.bone_names())
+    chain = [(b, w) for b, w in ((resolve_bone(r, names), w) for r, w in _LISTEN_CHAIN) if b]
+    if not chain:
+        return False
+    aimed = skel.look_at(target, chain)
+    skel.key_bone_axes({a.bone: {"x": [(f, a.x) for f in frames],
+                                 "y": [(f, a.y) for f in frames]} for a in aimed.applied})
+    return bool(aimed.applied)
+
+
+def _conversation_beat(scene: Any, figs: dict, char1: str, char2: str, index: int,
+                       beat: dict) -> dict:
+    from .tools.morph import _gaze_target  # pylint: disable=import-outside-toplevel
+    speaker = beat["speaker"]
+    listener = char2 if speaker == char1 else char1
+    start = beat.get("startFrame", 0)
+    end = beat.get("endFrame", start + 30)
+    emotion = beat.get("emotion", "neutral")
+    actions = []
+    n = _key_speaker_emotion(figs[speaker], emotion, beat.get("intensity", 0.7), start)
+    if n:
+        actions.append(f"Applied {emotion} emotion ({n} morphs)")
+    if _key_listener_look(figs[listener], _gaze_target(scene, speaker), (start, end)):
+        actions.append("Listener looks at speaker")
+    return {"beat": index + 1, "speaker": speaker, "frameRange": {"start": start, "end": end},
+            "emotion": emotion, "actions": actions}
+
+
+def conversation(char1: str, char2: str, beats: list[dict]) -> dict:
+    """Key emotions on each beat's speaker and the listener looking at them."""
+    scene = get_scene()
+    figs = {char1: scene.resolve_node(char1), char2: scene.resolve_node(char2)}
+    applied = [_conversation_beat(scene, figs, char1, char2, i, beat)
+               for i, beat in enumerate(beats)]
+    max_frame = max((b["frameRange"]["end"] for b in applied), default=0)
+    return {"char1": figs[char1].describe().label, "char2": figs[char2].describe().label,
+            "beatsApplied": applied, "totalFrames": max_frame, "beatCount": len(beats)}

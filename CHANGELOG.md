@@ -142,7 +142,13 @@ Requires dazpy 2.17.0 or later, for the new primitives these tools use
   - `facing="camera"` now turns characters toward the active viewport
     camera; it used to just set rotation 0.
   - Paths key real frames; they used DzTime ticks.
-- 93 registered scripts are removed (107 to 14), and a unit test fails if any
+- `daz_animate_conversation` uses dazpy.
+  - The speaker's emotion uses the shared emotion definitions, so stock
+    Genesis 8/9 face controllers resolve.
+  - The listener's neck and head turn toward the speaker's head through
+    `DazSkeleton.look_at`, keyed at the beat's start and end frames. The
+    old script keyed DzTime ticks and aimed with world angles.
+- 94 registered scripts are removed (107 to 13), and a unit test fails if any
   registered script is no longer called by a tool.
 
 ### Fixed
