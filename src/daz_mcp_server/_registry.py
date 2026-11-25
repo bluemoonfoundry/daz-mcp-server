@@ -2047,125 +2047,6 @@ _APPLY_VISUAL_STYLE_SCRIPT = """\
 # Phase 4.13: Performance Timing scripts
 # ---------------------------------------------------------------------------
 
-_TIME_EXPRESSION_SCRIPT = """\
-(function(){
-    var args = getArguments()[0] || {};
-    var nodeLabel      = args.nodeLabel;
-    var morphList      = args.morphList || [];
-    var bodyAdjustments = args.bodyAdjustments || [];
-    var intensity      = args.intensity !== undefined ? args.intensity : 0.7;
-    var easeInStart    = args.easeInStart;
-    var holdStart      = args.holdStart;
-    var holdEnd        = args.holdEnd;
-    var easeOutEnd     = args.easeOutEnd;
-    var baselineFrame  = args.baselineFrame !== undefined ? args.baselineFrame : null;
-
-    var node = Scene.findNodeByLabel(nodeLabel) || Scene.findNode(nodeLabel);
-    if (!node) throw new Error("Node not found: " + nodeLabel);
-
-    var applied = [];
-    var notFound = [];
-    var keyframesSet = 0;
-
-    // Helper: set a keyframe on a property — two-arg setValue creates a keyframe (DzFloatProperty)
-    function setKey(prop, frame, value) {
-        prop.setValue(frame, value);
-        return true;
-    }
-
-    // Process each morph entry — try candidate names in order, first match wins
-    for (var i = 0; i < morphList.length; i++) {
-        var entry = morphList[i];
-        var peakValue = entry.value * intensity;
-        var found = false;
-
-        for (var j = 0; j < entry.names.length; j++) {
-            var prop = node.findProperty(entry.names[j]);
-            if (!prop || !prop.inherits("DzNumericProperty")) continue;
-
-            // Optional baseline keyframe (before ease-in, value=0)
-            if (baselineFrame !== null && baselineFrame < easeInStart) {
-                setKey(prop, baselineFrame, 0);
-                keyframesSet++;
-            }
-
-            // Ease-in start: value = 0
-            if (setKey(prop, easeInStart, 0)) keyframesSet++;
-
-            // Hold start: peak value
-            if (easeInStart < holdStart) {
-                if (setKey(prop, holdStart, peakValue)) keyframesSet++;
-            } else {
-                // No ease-in — jump straight to peak
-                if (setKey(prop, easeInStart, peakValue)) keyframesSet++;
-            }
-
-            // Hold end: still at peak
-            if (holdEnd > holdStart) {
-                if (setKey(prop, holdEnd, peakValue)) keyframesSet++;
-            }
-
-            // Ease-out end: back to 0
-            if (easeOutEnd > holdEnd) {
-                if (setKey(prop, easeOutEnd, 0)) keyframesSet++;
-            }
-
-            applied.push({morph: entry.names[j], peakValue: peakValue});
-            found = true;
-            break;
-        }
-
-        if (!found) notFound.push(entry.names[0] || "unknown");
-    }
-
-    // Process body adjustments (bone rotations)
-    var bodyApplied = [];
-    for (var k = 0; k < bodyAdjustments.length; k++) {
-        var adj = bodyAdjustments[k];
-        var peakRot = adj.value * intensity;
-        var bone = null;
-
-        for (var b = 0; b < node.getNumNodeChildren(); b++) {
-            var child = node.getNodeChild(b);
-            if (child && (child.getLabel() === adj.bone || child.getName() === adj.bone)) {
-                bone = child;
-                break;
-            }
-        }
-        if (!bone) bone = Scene.findNodeByLabel(adj.bone);
-        if (!bone) continue;
-
-        var boneProp = bone.findProperty(adj.property);
-        if (!boneProp) continue;
-
-        if (baselineFrame !== null && baselineFrame < easeInStart)
-            setKey(boneProp, baselineFrame, 0);
-
-        setKey(boneProp, easeInStart, 0);
-        setKey(boneProp, holdStart, peakRot);
-        if (holdEnd > holdStart) setKey(boneProp, holdEnd, peakRot);
-        if (easeOutEnd > holdEnd) setKey(boneProp, easeOutEnd, 0);
-
-        bodyApplied.push({bone: adj.bone, property: adj.property, peakValue: peakRot});
-        keyframesSet += 4;
-    }
-
-    return {
-        character: node.getLabel(),
-        easeInStart: easeInStart,
-        holdStart: holdStart,
-        holdEnd: holdEnd,
-        easeOutEnd: easeOutEnd,
-        intensity: intensity,
-        appliedMorphs: applied,
-        bodyAdjustments: bodyApplied,
-        notFound: notFound,
-        keyframesSet: keyframesSet,
-        durationFrames: easeOutEnd - easeInStart,
-        holdFrames: holdEnd - holdStart
-    };
-})()
-"""
 
 # ---------------------------------------------------------------------------
 # Phase 5: Materials / Surfaces
@@ -2980,10 +2861,6 @@ _REGISTRY: dict[str, tuple[str, str]] = {
         "Apply a holistic cinematic visual style (noir, golden-hour, high-key, etc.) "
         "to lights and environment",
         _APPLY_VISUAL_STYLE_SCRIPT,
-    ),
-    "vangard-time-expression": (
-        "Set keyframed morph animation for an expression with ease-in, hold, and ease-out phases",
-        _TIME_EXPRESSION_SCRIPT,
     ),
     # Phase 6.6: Scene export
     "vangard-import-obj": (

@@ -116,7 +116,15 @@ Requires dazpy 2.17.0 or later, for the new primitives these tools use
     or every one in the scene. It always failed before, because it called
     bake methods `DzSimulationMgr` doesn't have. The result reports
     `method: "freeze"` and `modifiers_frozen`.
-- 84 registered scripts are removed (107 to 23), and a unit test fails if any
+- `daz_export_node_config` / `daz_import_node_config` use dazpy. Import
+  applies the whole file in one Studio call.
+- `daz_time_expression` and `daz_sync_character_beats` key the stock
+  full-face controller (or the feature dials) and the body bones on dazpy.
+  This fixes three bugs: frames were used as DzTime ticks, body bones were
+  never found (they were looked up only among the figure's direct
+  children; daz-mcp-server-onf), and expression names missed stock
+  Genesis 8/9 controls. Results add `bodyNotFound`.
+- 87 registered scripts are removed (107 to 20), and a unit test fails if any
   registered script is no longer called by a tool.
 
 ### Fixed

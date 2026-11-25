@@ -19,7 +19,7 @@ from .._mcp import mcp, _execute_by_id
 from .._client import get_scene
 from .._errors import run_tool
 from .. import _shots
-from .._emotions import _EMOTION_DEFINITIONS
+from .._emotions import AXIS_BY_PROPERTY, _EMOTION_DEFINITIONS, resolve_bone
 
 _VALID_SHOT_TYPES = frozenset({
     "extreme-close-up", "close-up", "medium-close-up", "medium-shot",
@@ -2857,18 +2857,10 @@ async def daz_time_expression(
             f"baseline_frame ({baseline_frame}) must be before ease_in_start ({ease_in_start})"
         )
 
-    definition = _EMOTION_DEFINITIONS[emotion]
-    return await _execute_by_id("vangard-time-expression", {
-        "nodeLabel":        character_label,
-        "morphList":        definition["morphs"],
-        "bodyAdjustments":  definition["body"],
-        "intensity":        intensity,
-        "easeInStart":      ease_in_start,
-        "holdStart":        hold_start,
-        "holdEnd":          hold_end,
-        "easeOutEnd":       ease_out_end if ease_out_frames > 0 else hold_end,
-        "baselineFrame":    baseline_frame,
-    })
+    frames = (ease_in_start, hold_start, hold_end,
+              ease_out_end if ease_out_frames > 0 else hold_end)
+    return await run_tool(lambda: _time_expression(
+        character_label, emotion, intensity, frames, baseline_frame))
 
 
 @mcp.tool()
@@ -3011,19 +3003,13 @@ async def daz_sync_character_beats(
         hold_end      = peak_frame + char_hold
         ease_out_end  = hold_end + char_ease_out
 
-        definition = _EMOTION_DEFINITIONS[emotion]
+        frames = (ease_in_start, hold_start, hold_end,
+                  ease_out_end if char_ease_out > 0 else hold_end)
         try:
-            char_result = await _execute_by_id("vangard-time-expression", {
-                "nodeLabel":       label,
-                "morphList":       definition["morphs"],
-                "bodyAdjustments": definition["body"],
-                "intensity":       char_intensity,
-                "easeInStart":     ease_in_start,
-                "holdStart":       hold_start,
-                "holdEnd":         hold_end,
-                "easeOutEnd":      ease_out_end if char_ease_out > 0 else hold_end,
-                "baselineFrame":   None,
-            })
+            char_result = await run_tool(lambda label=label, emotion=emotion,  # noqa: E731
+                                         intensity=char_intensity, frames=frames:
+                                         _time_expression(label, emotion, intensity, frames,
+                                                          None))
             total_keyframes += char_result.get("keyframesSet", 0)
             results.append({"character": label, "status": "ok", "detail": char_result})
         except Exception as e:
@@ -3148,3 +3134,86 @@ def _summarize_node_writes(per_node: dict[str, dict], skip_missing: bool) -> dic
                     "failed": e["failed"]})
     return {"results": out, "successCount": counts["ok"], "failureCount": counts["bad"],
             "skippedCount": counts["skipped"], "totalNodes": len(per_node)}
+
+
+# --- timed expressions on dazpy frame-based keys -----------------------------
+
+def _expression_keys(peak: float, frames: tuple[int, int, int, int],
+                     baseline: int | None) -> list[tuple[int, float]]:
+    """0 -> peak -> hold -> 0 keys; a later key at the same frame wins."""
+    ease_in, hold_start, hold_end, ease_out = frames
+    keys: dict[int, float] = {}
+    if baseline is not None and baseline < ease_in:
+        keys[baseline] = 0.0
+    keys[ease_in] = 0.0
+    keys[max(ease_in, hold_start)] = peak
+    if hold_end > hold_start:
+        keys[hold_end] = peak
+    if ease_out > hold_end:
+        keys[ease_out] = 0.0
+    return sorted(keys.items())
+
+
+def _key_expression_face(skel: Any, definition: dict, intensity: float,
+                         frames: tuple[int, int, int, int],
+                         baseline: int | None) -> tuple[list, list, int]:
+    """Key the full-face controller, else the feature dials. Returns
+    (applied, not_found, keys written)."""
+    face = definition.get("face", [])
+    if face:
+        keys = _expression_keys(intensity, frames, baseline)
+        r = skel.key_numeric_candidates([(face, keys)])[0]
+        if r.found:
+            return [{"morph": r.matched, "peakValue": intensity}], [], len(keys)
+    applied, not_found, keyed = [], [], 0
+    slots = [(m["names"], m["value"] * intensity) for m in definition["morphs"]]
+    if not slots:
+        return applied, not_found, keyed
+    keyed_slots = [(names, _expression_keys(peak, frames, baseline)) for names, peak in slots]
+    for (names, peak), r in zip(slots, skel.key_numeric_candidates(keyed_slots)):
+        if r.found:
+            applied.append({"morph": r.matched, "peakValue": peak})
+            keyed += len(_expression_keys(peak, frames, baseline))
+        else:
+            not_found.append(names[0] if names else "unknown")
+    return applied, not_found, keyed
+
+
+def _key_expression_body(skel: Any, adjustments: list[dict], intensity: float,
+                         frames: tuple[int, int, int, int],
+                         baseline: int | None) -> tuple[list, list, int]:
+    """Key body bones (roles resolved per generation). Returns
+    (applied, missing roles, keys written)."""
+    bones = set(skel.bone_names())
+    body, missing, data = [], [], {}
+    for adj in adjustments:
+        bone = resolve_bone(adj["bone"], bones)
+        if bone is None:
+            missing.append(adj["bone"])
+            continue
+        peak = adj["value"] * intensity
+        data.setdefault(bone, {})[AXIS_BY_PROPERTY[adj["property"]]] = _expression_keys(
+            peak, frames, baseline)
+        body.append({"bone": bone, "property": adj["property"], "peakValue": peak})
+    if data:
+        skel.key_bone_axes(data)
+    return body, missing, sum(len(k) for axes in data.values() for k in axes.values())
+
+
+def _time_expression(label: str, emotion: str, intensity: float,
+                     frames: tuple[int, int, int, int], baseline: int | None) -> dict:
+    """Key *emotion* on *label*: the stock full-face controller when the figure
+    has one (else the feature dials), plus body bones resolved per generation.
+    Frames are timeline frames (the old script used them as DzTime ticks)."""
+    skel = get_scene().resolve_node(label)
+    definition = _EMOTION_DEFINITIONS[emotion]
+    applied, not_found, face_keys = _key_expression_face(skel, definition, intensity, frames,
+                                                         baseline)
+    body, body_missing, body_keys = _key_expression_body(skel, definition["body"], intensity,
+                                                         frames, baseline)
+    return {"character": skel.describe().label, "easeInStart": frames[0],
+            "holdStart": frames[1], "holdEnd": frames[2], "easeOutEnd": frames[3],
+            "intensity": intensity, "appliedMorphs": applied, "bodyAdjustments": body,
+            "notFound": not_found, "bodyNotFound": body_missing,
+            "keyframesSet": face_keys + body_keys,
+            "durationFrames": frames[3] - frames[0], "holdFrames": frames[2] - frames[1]}
