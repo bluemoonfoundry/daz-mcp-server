@@ -17,6 +17,7 @@ from dazpy.shots import (CameraKeyframe, Keyframed, Lens, Placement, Sequence, S
 
 from .._mcp import mcp, _execute_by_id
 from .._client import get_scene
+from .._errors import run_tool
 from .. import _shots
 from .._emotions import _EMOTION_DEFINITIONS
 
@@ -2608,10 +2609,7 @@ async def daz_export_node_config(
             )
 
     # Read from DAZ Studio
-    result = await _execute_by_id("vangard-read-node-config", {
-        "nodeLabels": node_labels or [],
-        "includeTypes": include_types,
-    })
+    result = await run_tool(lambda: _read_node_config(node_labels or [], include_types))
 
     # Write to disk (Python side handles file I/O)
     config_data = result.get("config", {})
@@ -2738,11 +2736,7 @@ async def daz_import_node_config(
         raise ToolError("No nodes to import (config is empty after filtering)")
 
     # Apply to DAZ Studio
-    result = await _execute_by_id("vangard-write-node-config", {
-        "config": config,
-        "skipMissing": skip_missing,
-        "scaleTransforms": scale_transforms,
-    })
+    result = await run_tool(lambda: _write_node_config(config, skip_missing, scale_transforms))
 
     return {
         "inputPath": str(input_file),
@@ -3058,3 +3052,100 @@ async def daz_sync_character_beats(
             "Call daz_set_frame_range to extend timeline to cover all beat frames",
         ],
     }
+
+
+# --- node config (export/import) on dazpy ----------------------------------
+
+_CFG_TRANSFORMS = ("XTranslate", "YTranslate", "ZTranslate", "XRotate", "YRotate", "ZRotate",
+                   "XScale", "YScale", "ZScale", "Scale")
+_CFG_LIGHT = ("Flux", "Shadow Softness", "Spread Angle", "Photometric Mode")
+_CFG_CAMERA = ("FocalLength", "Focal Distance", "Focus Distance", "F/Stop", "Depth of Field",
+               "DOF Active")
+
+
+def _skeleton_nodes(scene: Any) -> list:
+    return scene.skeletons()
+
+
+def _read_node_config(node_labels: list[str], include_types: list[str]) -> dict:
+    """Capture name-keyed numeric properties per node (one call per node)."""
+    scene = get_scene()
+    if node_labels:
+        nodes = []
+        for label in node_labels:
+            try:
+                nodes.append(scene.resolve_node(label))
+            except NodeNotFoundError:
+                continue
+    else:
+        nodes = list(_skeleton_nodes(scene))
+        nodes += [scene.resolve_node(str(c.element_id)) for c in scene.camera_info()]
+        nodes += [scene.resolve_node(str(li.element_id)) for li in scene.light_info()]
+    wanted = set()
+    if "transforms" in include_types:
+        wanted |= set(_CFG_TRANSFORMS)
+    if "lights" in include_types:
+        wanted |= set(_CFG_LIGHT)
+    if "cameras" in include_types:
+        wanted |= set(_CFG_CAMERA)
+    config: dict[str, dict] = {}
+    summary = {"nodes": 0, "properties": 0, "morphs": 0}
+    for node in nodes:
+        info = node.describe()
+        data: dict[str, Any] = {"_type": info.type}
+        others = {}
+        for d in node.property_details("numeric"):
+            if d.name in wanted:
+                data[d.name] = d.value
+            elif d.name not in _CFG_TRANSFORMS + _CFG_LIGHT + _CFG_CAMERA and d.value:
+                others[d.name] = d.value
+        if "morphs" in include_types:
+            data.update(others)
+            summary["morphs"] += len(others)
+        config[info.label] = data
+        summary["nodes"] += 1
+        summary["properties"] += len(data) - 1
+    return {"config": config, "summary": summary}
+
+
+def _write_node_config(config: dict, skip_missing: bool, scale: float) -> dict:
+    """Apply a node config in one dazpy batch; per-node ok/partial/skipped/error."""
+    ops, owners = [], []
+    for label, data in config.items():
+        for name, value in data.items():
+            if name == "_type":
+                continue
+            if scale != 1.0 and name in ("XTranslate", "YTranslate", "ZTranslate"):
+                value = value * scale
+            ops.append((label, name, value))
+            owners.append(label)
+    results = get_scene().set_numeric_properties(ops) if ops else []
+    per_node: dict[str, dict] = {label: {"node": label, "applied": [], "failed": [],
+                                         "missing": False} for label in config}
+    for (label, name, _value), r in zip(ops, results):
+        entry = per_node[label]
+        if r.ok:
+            entry["applied"].append(name)
+        elif (r.error or "").startswith("Node not found"):
+            entry["missing"] = True
+        else:
+            entry["failed"].append({"property": name, "error": r.error})
+    out, ok, bad, skipped = [], 0, 0, 0
+    for label, e in per_node.items():
+        if e["missing"]:
+            if skip_missing:
+                out.append({"node": label, "status": "skipped", "reason": "not found in scene"})
+                skipped += 1
+            else:
+                out.append({"node": label, "status": "error", "reason": "not found in scene"})
+                bad += 1
+            continue
+        status = "ok" if not e["failed"] else ("partial" if e["applied"] else "error")
+        if status == "error":
+            bad += 1
+        else:
+            ok += 1
+        out.append({"node": label, "status": status, "applied": e["applied"],
+                    "failed": e["failed"]})
+    return {"results": out, "successCount": ok, "failureCount": bad, "skippedCount": skipped,
+            "totalNodes": len(config)}
