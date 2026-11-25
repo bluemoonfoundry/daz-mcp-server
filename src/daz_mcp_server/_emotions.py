@@ -291,11 +291,15 @@ BONE_CANDIDATES: dict[str, tuple[str, ...]] = {
     # conventions match across these (verified live: +X on chestUpper and
     # spine4 tips the head forward by the same amount; -Z on lShldrBend and
     # l_upperarm lowers the arm identically).
+    "hip": ("hip",),
+    "chestLower": ("chestLower", "spine3"),
     "chestUpper": ("chestUpper", "spine4"),
     "abdomenLower": ("abdomenLower", "spine1"),
     "neckLower": ("neckLower", "neck1"),
     "neckUpper": ("neckUpper", "neck2"),
     "head": ("head",),
+    "lEye": ("lEye", "l_eye"),
+    "rEye": ("rEye", "r_eye"),
     "lShldr": ("lShldrBend", "l_upperarm", "lShldr"),
     "rShldr": ("rShldrBend", "r_upperarm", "rShldr"),
 }

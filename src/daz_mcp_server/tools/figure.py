@@ -13,7 +13,40 @@ from dazpy import DazPose
 
 from .._mcp import mcp, _execute_by_id
 from .._client import get_scene, run_dazpy
-from .._errors import handle_dazpy_error
+from .._emotions import resolve_bone
+from .._errors import handle_dazpy_error, run_tool
+from .morph import _gaze_target
+
+# Look-at chains, root to tip: (bone role, weight). Each bone turns `weight`
+# of the way toward the target from where its parents left it; the eyes
+# finish the aim. Roles resolve per figure generation via BONE_CANDIDATES.
+_EYES = [("lEye", 1.0), ("rEye", 1.0)]
+_LOOK_CHAINS: dict[str, list[tuple[str, float]]] = {
+    "eyes": _EYES,
+    "head": [("head", 0.6)] + _EYES,
+    "neck": [("neckLower", 0.3), ("neckUpper", 0.3), ("head", 0.6)] + _EYES,
+    "torso": [("chestLower", 0.15), ("chestUpper", 0.15), ("neckLower", 0.3),
+              ("neckUpper", 0.3), ("head", 0.6)] + _EYES,
+    "full": [("hip", 0.1), ("chestLower", 0.15), ("chestUpper", 0.15), ("neckLower", 0.3),
+             ("neckUpper", 0.3), ("head", 0.6)] + _EYES,
+}
+
+
+def _look(skel: Any, point: tuple[float, float, float], mode: str) -> dict[str, Any]:
+    """Aim *skel*'s look chain for *mode* at *point*; returns the common result keys."""
+    names = set(skel.bone_names())
+    chain = [(bone, w) for bone, w in
+             ((resolve_bone(role, names), w) for role, w in _LOOK_CHAINS[mode]) if bone]
+    result = skel.look_at(point, chain)
+    return {
+        "rotatedBones": [a.bone for a in result.applied],
+        "rotations": [{"bone": a.bone, "x": a.x, "y": a.y} for a in result.applied],
+    }
+
+
+def _check_mode(mode: str) -> None:
+    if mode not in _LOOK_CHAINS:
+        raise ToolError(f"mode must be one of {', '.join(_LOOK_CHAINS)}; got {mode!r}")
 
 # ---------------------------------------------------------------------------
 # Bone-group filter map (mirrors server.py _POSE_BONE_GROUPS)
@@ -56,9 +89,10 @@ async def daz_look_at_point(
 ) -> dict[str, Any]:
     """Make character look at a world-space point with configurable body involvement.
 
-    This helper uses cascading rotations from eyes through the body to create
-    natural-looking character attention. Different modes control how much of
-    the body participates in the look direction.
+    Turns a bone chain (hip/chest/neck/head/eyes, depending on mode) toward
+    the point, each bone a share of the way from where its parents left it;
+    the eyes finish the aim. Works in each bone's own frame, so it is correct
+    for turned figures (dazpy ``DazSkeleton.look_at``).
 
     Args:
         character_label: Display label or internal name of the character figure.
@@ -76,7 +110,9 @@ async def daz_look_at_point(
       - success: true on success
       - character: character label
       - mode: the mode used
-      - rotatedBones: list of bone labels that were rotated
+      - rotatedBones: internal names of the bones that were turned
+      - rotations: [{bone, x, y}] pitch/yaw (degrees) each bone kept after
+        its joint limits
 
     Example:
         # Character looks at point in front of them at eye level
@@ -85,13 +121,14 @@ async def daz_look_at_point(
         # Full body turn to look behind
         daz_look_at_point("Genesis 9", 0, 140, -150, mode="full")
     """
-    return await _execute_by_id("vangard-look-at-point", {
-        "characterLabel": character_label,
-        "targetX": target_x,
-        "targetY": target_y,
-        "targetZ": target_z,
-        "mode": mode,
-    })
+    _check_mode(mode)
+
+    def _run() -> dict[str, Any]:
+        skel = get_scene().resolve_node(character_label)
+        out = _look(skel, (target_x, target_y, target_z), mode)
+        return {"success": True, "character": skel.describe().label, "mode": mode, **out}
+
+    return await run_tool(_run)
 
 
 @mcp.tool()
@@ -121,7 +158,9 @@ async def daz_look_at_character(
       - target: target character label
       - mode: the mode used
       - targetPosition: {x, y, z} world coordinates of target's head
-      - rotatedBones: list of bone labels that were rotated
+      - rotatedBones: internal names of the bones that were turned
+      - rotations: [{bone, x, y}] pitch/yaw (degrees) each bone kept after
+        its joint limits
 
     Example:
         # Alice looks at Bob with head turn
@@ -130,11 +169,17 @@ async def daz_look_at_character(
         # Bob turns his whole body to face Alice
         daz_look_at_character("Bob", "Alice", mode="full")
     """
-    return await _execute_by_id("vangard-look-at-character", {
-        "sourceLabel": source_label,
-        "targetLabel": target_label,
-        "mode": mode,
-    })
+    _check_mode(mode)
+
+    def _run() -> dict[str, Any]:
+        scene = get_scene()
+        skel = scene.resolve_node(source_label)
+        point = _gaze_target(scene, target_label)
+        out = _look(skel, point, mode)
+        return {"success": True, "source": skel.describe().label, "target": target_label,
+                "mode": mode, "targetPosition": dict(zip("xyz", point)), **out}
+
+    return await run_tool(_run)
 
 
 @mcp.tool()
@@ -147,9 +192,8 @@ async def daz_reach_toward(
 ) -> dict[str, Any]:
     """Position character's arm to reach toward a world-space point.
 
-    Uses pseudo-IK approximation to calculate shoulder and elbow rotations
-    that position the hand near the target point. Automatically adjusts
-    elbow bend based on target distance.
+    Iteratively rotates the arm chain to bring the hand to the point
+    (dazpy ``DazSkeleton.hand_to_target``), within the joints' limits.
 
     Args:
         character_label: Display label or internal name of the character.
@@ -162,8 +206,10 @@ async def daz_reach_toward(
       - success: true on success
       - character: character label
       - side: which arm was posed
-      - targetDistance: distance in cm from shoulder to target
-      - bones: list of bone labels that were rotated
+      - converged: whether the hand reached the point (within tolerance)
+      - finalError: remaining hand-to-point distance in cm
+      - iterations: solver iterations used
+      - bones: the arm chain that was posed
 
     Example:
         # Reach right hand toward point in front at chest height
@@ -176,13 +222,21 @@ async def daz_reach_toward(
         This uses simplified IK approximation. For precise hand positioning
         or complex reaching, load an artist-created pose preset instead.
     """
-    return await _execute_by_id("vangard-reach-toward", {
-        "characterLabel": character_label,
-        "side": side,
-        "targetX": target_x,
-        "targetY": target_y,
-        "targetZ": target_z,
-    })
+    if side not in ("left", "right"):
+        raise ToolError(f"side must be 'left' or 'right'; got {side!r}")
+
+    def _run() -> dict[str, Any]:
+        skel = get_scene().resolve_node(character_label)
+        # 40 iterations: dazpy's default 12 leaves ordinary in-front reaches
+        # 6-30 cm short; 40 converges them to ~0.1 cm (live, G9).
+        r = skel.hand_to_target((target_x, target_y, target_z),
+                                source_anchor="r_hand" if side == "right" else "l_hand",
+                                max_iterations=40)
+        return {"success": True, "character": skel.describe().label, "side": side,
+                "converged": r.converged, "finalError": r.final_error,
+                "iterations": r.iterations, "bones": list(r.chain)}
+
+    return await run_tool(_run)
 
 
 @mcp.tool()
@@ -230,6 +284,9 @@ async def daz_interactive_pose(
         you may need to fine-tune positions and rotations using daz_set_property
         or load artist-created pose presets.
     """
+    # Still a registered script: dazpy's interaction recipes (hug, handshake,
+    # face-each-other) are the intended replacement, migrated together with
+    # the cinematic choreography tools (daz-mcp-server-ord).
     args: dict[str, Any] = {
         "char1Label": char1_label,
         "char2Label": char2_label,
@@ -273,10 +330,21 @@ async def daz_reset_pose(
         - Keyframes on bone properties are not removed; use daz_clear_animation
           if you also need to strip animation data.
     """
-    return await _execute_by_id(
-        "vangard-reset-pose",
-        {"nodeLabel": node_label, "zeroTransforms": zero_transforms},
-    )
+    def _run() -> dict[str, Any]:
+        skel = get_scene().resolve_node(node_label)
+        names = skel.bone_names() if hasattr(skel, "bone_names") else []
+        if names:
+            skel.set_bone_rotations({n: (0.0, 0.0, 0.0) for n in names})
+        else:
+            for axis in ("XRotate", "YRotate", "ZRotate"):
+                skel.set_numeric_property(axis, 0.0)
+        if zero_transforms:
+            skel.set_position(0.0, 0.0, 0.0)
+            skel.set_numeric_property("Scale", 1.0)
+        return {"node": skel.describe().label, "bones_reset": len(names),
+                "transforms_zeroed": zero_transforms}
+
+    return await run_tool(_run)
 
 
 @mcp.tool()
@@ -461,4 +529,5 @@ async def daz_erc_freeze(
     }
     if freeze_nodes:
         payload["freezeNodes"] = freeze_nodes
+    # Stays a registered script: dazpy has no ERC (DzERCLink) editing API.
     return await _execute_by_id("vangard-erc-freeze", payload)

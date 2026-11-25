@@ -58,7 +58,18 @@ Requires dazpy 2.17.0 or later, for the new primitives these tools use
   - `summary.environment_lighting` is replaced by `summary.lit`.
   - `daz_auto_improve_scene` now adds the missing light. It looked for an
     issue type validate never emitted.
-- 47 registered scripts are removed (107 to 60), and a unit test fails if any
+- `daz_look_at_point`, `daz_look_at_character`, `daz_reach_toward` and
+  `daz_reset_pose` use dazpy (`DazSkeleton.look_at`, `hand_to_target`,
+  `set_bone_rotations`).
+  - Look-at aims in each bone's own frame. It used to turn heads down when
+    the target was up, ignore the figure's facing, and push Genesis 8/9
+    eyes (oriented 180° about Z) the wrong way. Genesis 9's upper chest is
+    `spine4`, not `spine3`.
+  - Results add `rotations` (the angles each bone kept). `rotatedBones`
+    lists internal bone names.
+  - `daz_reach_toward` reports `converged`, `finalError` and `iterations`
+    instead of `targetDistance`.
+- 51 registered scripts are removed (107 to 56), and a unit test fails if any
   registered script is no longer called by a tool.
 
 ### Fixed
