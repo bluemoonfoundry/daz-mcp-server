@@ -2477,70 +2477,6 @@ _SET_RENDER_QUALITY_SCRIPT = """\
 # Phase 2 script constants
 # ---------------------------------------------------------------------------
 
-_SET_EMOTION_SCRIPT = """\
-(function(){
-    var args = getArguments()[0] || {};
-    var node = Scene.findNodeByLabel(args.nodeLabel);
-    if (!node) node = Scene.findNode(args.nodeLabel);
-    if (!node) throw new Error("Node not found: " + args.nodeLabel);
-
-    var intensity = args.intensity || 0.7;
-    var applied = [];
-    var notFound = [];
-
-    // Apply morph candidates — each entry: {names: [...], value: float}
-    var morphList = args.morphList || [];
-    for (var i = 0; i < morphList.length; i++) {
-        var entry = morphList[i];
-        var targetValue = entry.value * intensity;
-        var found = false;
-        for (var j = 0; j < entry.names.length; j++) {
-            var prop = node.findProperty(entry.names[j]);
-            if (prop && prop.inherits("DzNumericProperty")) {
-                prop.setValue(targetValue);
-                applied.push({morph: entry.names[j], value: prop.getValue()});
-                found = true;
-                break;
-            }
-        }
-        if (!found) notFound.push(entry.names[0] || "unknown");
-    }
-
-    // Apply body adjustments (bone rotations)
-    var bodyApplied = [];
-    var bodyAdjustments = args.bodyAdjustments || [];
-    for (var k = 0; k < bodyAdjustments.length; k++) {
-        var adj = bodyAdjustments[k];
-        // Try to find the bone as a child of the figure
-        var bone = null;
-        for (var b = 0; b < node.getNumNodeChildren(); b++) {
-            var child = node.getNodeChild(b);
-            if (child && (child.getLabel() === adj.bone || child.getName() === adj.bone)) {
-                bone = child;
-                break;
-            }
-        }
-        if (!bone) bone = Scene.findNodeByLabel(adj.bone);
-        if (bone) {
-            var boneProp = bone.findProperty(adj.property);
-            if (boneProp) {
-                boneProp.setValue(adj.value * intensity);
-                bodyApplied.push({bone: adj.bone, property: adj.property, value: boneProp.getValue()});
-            }
-        }
-    }
-
-    return {
-        character: node.getLabel(),
-        emotion: args.emotion,
-        intensity: intensity,
-        applied_morphs: applied,
-        body_adjustments: bodyApplied,
-        not_found: notFound
-    };
-})()
-"""
-
 _LIST_CATEGORIES_SCRIPT = """\
 (function(){
     var args = getArguments()[0] || {};
@@ -7233,10 +7169,6 @@ _REGISTRY: dict[str, tuple[str, str]] = {
         _SET_RENDER_QUALITY_SCRIPT,
     ),
     # Phase 2: Emotional direction
-    "vangard-set-emotion": (
-        "Apply emotion morphs and body language adjustments to a character",
-        _SET_EMOTION_SCRIPT,
-    ),
     # Phase 2: Content library
     "vangard-list-categories": (
         "List content library subdirectories under a parent path across all content directories",

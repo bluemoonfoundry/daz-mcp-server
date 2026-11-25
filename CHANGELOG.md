@@ -3,6 +3,39 @@
 All notable changes to daz-mcp-server are documented here.
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [Unreleased]
+
+Requires dazpy 2.17.0 or later (`DazNode.set_numeric_candidates`,
+`DazSkeleton.set_bone_axes`/`bone_names`, `DazScene.viewport_camera`).
+
+### Changed
+
+- `daz_set_emotion`, `daz_set_body_language` and `daz_direct_gaze` are built
+  on dazpy primitives and send no DazScript of their own. The registered
+  `vangard-set-emotion` script is removed.
+- `daz_set_emotion` uses the figure's stock full-face expression controller
+  (Genesis 9 `facs_ctrl_Happy`, Genesis 8 `eCTRLHappy_HD`, ...) when it has
+  one, otherwise the per-feature dials, and resets the other emotions' face
+  controllers first so expressions don't stack. `neutral` clears them. The
+  result adds `body_not_found`.
+- `daz_direct_gaze` with `direction="character"` aims at the target figure's
+  head instead of its root (feet). The result adds `requested`, and
+  `applied` now reports the rotation the head kept after its joint limits.
+
+### Fixed
+
+- `daz_set_emotion` did almost nothing on stock Genesis 8 and 9: its morph
+  names matched no dial on either figure, and its body adjustment never found
+  `chestUpper`, which only looked at the figure's direct children
+  (daz-mcp-server-3oq).
+- `daz_set_body_language` posture bones (`lShldr`, `chestUpper`, ...) are
+  matched per figure generation, so postures apply on Genesis 8 and 9
+  (daz-mcp-server-7w8).
+- `daz_direct_gaze` with `direction="camera"` always failed:
+  `Scene.getActiveCamera` doesn't exist. It now uses the active viewport
+  camera, including Studio's built-in Perspective View. The neck fallback
+  also finds Genesis 9's `neck2` (daz-mcp-server-w88).
+
 ## [0.10.0] - 2026-11-24
 
 Requires dazpy 2.16.0 or later.
