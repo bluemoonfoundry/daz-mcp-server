@@ -1,0 +1,95 @@
+"""Unit tests (no Studio) for daz_arrange_characters / daz_create_character_path
+on dazpy (daz-mcp-server-ord, staging slice)."""
+from __future__ import annotations
+
+import pytest
+from dazpy import BatchPropertyResult, NodeInfo, NumericCandidateMatch, ViewportCamera
+from dazpy.exceptions import NodeNotFoundError
+from fastmcp.exceptions import ToolError
+
+from daz_mcp_server import _cinematic_staging as st
+from daz_mcp_server.tools import cinematic
+
+
+class FakeNode:
+    def __init__(self, label, eid):
+        self.label, self.eid, self.keys = label, eid, {}
+
+    def describe(self):
+        return NodeInfo(self.label, self.label, "DzFigure", self.eid, None, 0)
+
+    def key_numeric_candidates(self, slots):
+        out = []
+        for names, keys in slots:
+            self.keys[names[0]] = list(keys)
+            out.append(NumericCandidateMatch(tuple(names), 0.0, names[0], "property", None))
+        return out
+
+
+class FakeScene:
+    def __init__(self):
+        self.nodes = {"A": FakeNode("A", 1), "B": FakeNode("B", 2), "C": FakeNode("C", 3)}
+        self.batches = []
+        self.camera = ViewportCamera("Perspective View", "PerspectiveView", False,
+                                     (0.0, 150.0, 500.0))
+
+    def resolve_node(self, ref):
+        if ref not in self.nodes:
+            raise NodeNotFoundError(f"Node not found: {ref!r}")
+        return self.nodes[ref]
+
+    def viewport_camera(self):
+        return self.camera
+
+    def set_numeric_properties(self, ops):
+        self.batches.append(list(ops))
+        return [BatchPropertyResult(True, n, p, v) for n, p, v in ops]
+
+
+@pytest.fixture()
+def scene(monkeypatch):
+    s = FakeScene()
+    monkeypatch.setattr(st, "get_scene", lambda: s)
+    return s
+
+
+def test_formations():
+    c = {"x": 0, "y": 0, "z": 0}
+    assert [p["x"] for p in st.formation("line", 3, 80, c)] == [-80, 0, 80]
+    tri = st.formation("triangle", 4, 100, c)
+    assert [(p["x"], p["z"]) for p in tri] == [(-50, -60), (50, -60), (-50, 30), (50, 30)]
+    circ = st.formation("conversation-circle", 4, 100, c)
+    assert circ[1]["x"] == pytest.approx(100) and circ[2]["z"] == pytest.approx(-100)
+
+
+async def test_arrange_facing_center_one_batch(scene):
+    r = await cinematic.daz_arrange_characters(["A", "B"], "line", 100, "center")
+    assert len(scene.batches) == 1 and len(scene.batches[0]) == 8
+    assert r["characters"][0] == {"label": "A", "position": {"x": -50.0, "y": 0.0, "z": 0.0},
+                                  "rotation": 90.0}
+    assert r["characters"][1]["rotation"] == -90.0
+
+
+async def test_arrange_facing_camera(scene):
+    r = await cinematic.daz_arrange_characters(["A"], "line", 100, "camera")
+    assert r["characters"][0]["rotation"] == 0.0
+    scene.camera = ViewportCamera("Cam", "Cam", True, (500.0, 150.0, 0.0))
+    r = await cinematic.daz_arrange_characters(["A"], "line", 100, "camera")
+    assert r["characters"][0]["rotation"] == 90.0
+
+
+async def test_character_path_keys_frames(scene):
+    r = await cinematic.daz_create_character_path("A", [
+        {"frame": 30, "position": {"x": 100, "y": 0, "z": 0}},
+        {"frame": 0, "position": {"x": 0, "y": 0, "z": 0}}])
+    keys = scene.nodes["A"].keys
+    assert keys["XTranslate"] == [(0, 0.0), (30, 100.0)]
+    assert keys["YRotate"] == [(0, 90.0)]
+    assert r["keyframesSet"] == 7 and r["totalDistance"] == 100.0
+
+
+async def test_path_missing_character(scene):
+    with pytest.raises(ToolError, match="Node not found"):
+        await cinematic.daz_create_character_path("Z", [
+            {"frame": 0, "position": {"x": 0, "y": 0, "z": 0}},
+            {"frame": 9, "position": {"x": 1, "y": 0, "z": 0}}])

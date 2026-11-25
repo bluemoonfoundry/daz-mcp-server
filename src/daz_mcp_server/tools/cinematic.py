@@ -19,6 +19,7 @@ from .._mcp import mcp, _execute_by_id
 from .._client import get_scene
 from .._errors import run_tool
 from .. import _cinematic_lighting as _lighting
+from .. import _cinematic_staging as _staging
 from .. import _shots
 from .._emotions import AXIS_BY_PROPERTY, _EMOTION_DEFINITIONS, resolve_bone
 
@@ -885,12 +886,11 @@ async def daz_create_character_path(
             f"Valid options: {', '.join(valid_styles)}"
         )
 
-    return await _execute_by_id("vangard-create-character-path", {
-        "characterLabel": character_label,
-        "waypoints": waypoints,
-        "pathType": path_type,
-        "walkingStyle": walking_style,
-    })
+    result = await run_tool(lambda: _staging.character_path(character_label, waypoints))
+    result.update({"pathType": path_type, "walkingStyle": walking_style,
+                   "note": "Character will move along path. Walking cycle animation not "
+                           "automatically applied."})
+    return result
 
 
 @mcp.tool()
@@ -1010,13 +1010,8 @@ async def daz_arrange_characters(
     if "x" not in center_pos or "y" not in center_pos or "z" not in center_pos:
         raise ToolError("center_position must have x, y, z fields")
 
-    return await _execute_by_id("vangard-arrange-characters", {
-        "characters": characters,
-        "arrangement": arrangement,
-        "spacing": spacing,
-        "facing": facing,
-        "centerPosition": center_pos,
-    })
+    return await run_tool(lambda: _staging.arrange(characters, arrangement, spacing, facing,
+                                                   center_pos))
 
 
 @mcp.tool()

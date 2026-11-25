@@ -136,7 +136,13 @@ Requires dazpy 2.17.0 or later, for the new primitives these tools use
   - The environment mode names are corrected: 0 Dome and Scene, 1 Dome
     Only, 2 Sun-Sky Only, 3 Scene Only.
   - Visual-style lights are aimed with `aimAt`.
-- 91 registered scripts are removed (107 to 16), and a unit test fails if any
+- `daz_arrange_characters` and `daz_create_character_path` use dazpy (new
+  module `_cinematic_staging.py`).
+  - Arranging places every character in one batched call.
+  - `facing="camera"` now turns characters toward the active viewport
+    camera; it used to just set rotation 0.
+  - Paths key real frames; they used DzTime ticks.
+- 93 registered scripts are removed (107 to 14), and a unit test fails if any
   registered script is no longer called by a tool.
 
 ### Fixed
