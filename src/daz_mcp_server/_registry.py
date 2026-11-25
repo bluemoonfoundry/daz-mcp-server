@@ -113,84 +113,10 @@ _SCENE_INFO_SCRIPT = """\
 
 # args: {nodeLabel} — label, internal name, elementID, or Parent/Label
 # Returns: {name, label, type, elementID, parent, properties:{label:value}}
-_GET_NODE_SCRIPT = "(function(){\n" + _RESOLVE_NODE_JS + """
-    var args = getArguments()[0] || {};
-    var n = resolveNode(args.nodeLabel);
-    var props = {};
-    var seen = {};
-    function addNumeric(pr) {
-        if (!pr || !pr.inherits("DzNumericProperty")) return;
-        var key = pr.getName();
-        if (seen[key]) return;
-        seen[key] = true;
-        props[pr.getLabel()] = pr.getValue();
-    }
-    var p;
-    for (p = 0; p < n.getNumProperties(); p++) addNumeric(n.getProperty(p));
-    var obj = (typeof n.getObject === "function") ? n.getObject() : null;
-    if (obj && typeof obj.getNumModifiers === "function") {
-        for (p = 0; p < obj.getNumModifiers(); p++) {
-            var m = obj.getModifier(p);
-            if (!m) continue;
-            if (typeof m.getValueChannel === "function") addNumeric(m.getValueChannel());
-            if (typeof m.getNumProperties === "function") {
-                for (var j = 0; j < m.getNumProperties(); j++) addNumeric(m.getProperty(j));
-            }
-        }
-    }
-    var parent = n.getNodeParent ? n.getNodeParent() : null;
-    return {
-        name: n.getName(),
-        label: n.getLabel(),
-        type: n.className(),
-        elementID: n.elementID,
-        parent: parent ? parent.getLabel() : null,
-        properties: props
-    };
-})()
-"""
 
 # args: {nodeLabel, propertyName, value}
 # Returns: {node, property, value}
 # Matches propertyName against both display label and internal name.
-_SET_PROPERTY_SCRIPT = "(function(){\n" + _RESOLVE_NODE_JS + """
-    var args = getArguments()[0] || {};
-    var n = resolveNode(args.nodeLabel);
-    function matchName(item, name) {
-        return item.getLabel() === name || item.getName() === name;
-    }
-    function findProp(node, name) {
-        var i, pr, obj, m, ch, j;
-        for (i = 0; i < node.getNumProperties(); i++) {
-            pr = node.getProperty(i);
-            if (matchName(pr, name)) return pr;
-        }
-        obj = (typeof node.getObject === "function") ? node.getObject() : null;
-        if (!obj || typeof obj.getNumModifiers !== "function") return null;
-        for (i = 0; i < obj.getNumModifiers(); i++) {
-            m = obj.getModifier(i);
-            if (!m) continue;
-            if (matchName(m, name) && typeof m.getValueChannel === "function") {
-                ch = m.getValueChannel();
-                if (ch) return ch;
-            }
-            if (typeof m.getNumProperties === "function") {
-                for (j = 0; j < m.getNumProperties(); j++) {
-                    pr = m.getProperty(j);
-                    if (matchName(pr, name)) return pr;
-                }
-            }
-        }
-        return null;
-    }
-    var prop = findProp(n, args.propertyName);
-    if (!prop) throw new Error("Property not found: " + args.propertyName + " on " + args.nodeLabel);
-    if (!prop.inherits("DzNumericProperty")) throw new Error("Property is not numeric: " + args.propertyName);
-    if (typeof prop.lock === "function" && prop.isLocked && prop.isLocked()) prop.lock(false);
-    prop.setValue(args.value);
-    return { node: n.getLabel(), elementID: n.elementID, property: prop.getLabel(), value: prop.getValue() };
-})()
-"""
 
 # args: {outputPath?}
 # Returns: {success}
@@ -311,28 +237,6 @@ _GET_NODE_HIERARCHY_SCRIPT = "(function(){\n" + _RESOLVE_NODE_JS + """
 # maintainWorldTransform: if true, adjust local transform to maintain world position
 # Returns: {success, node, newParent, previousParent}
 # Sets parent of a node
-_SET_PARENT_SCRIPT = "(function(){\n" + _RESOLVE_NODE_JS + """
-    var args = getArguments()[0] || {};
-    var node = resolveNode(args.nodeLabel);
-    var newParent = resolveNode(args.parentLabel);
-
-    var maintainWorldTransform = args.maintainWorldTransform !== undefined ? args.maintainWorldTransform : true;
-
-    var previousParent = node.getNodeParent();
-    var previousParentLabel = previousParent ? previousParent.getLabel() : null;
-
-    // addNodeChild detaches node from its current parent (or scene root) automatically.
-    // inPlace=true means maintain world position (child's local transform is adjusted).
-    newParent.addNodeChild(node, maintainWorldTransform);
-
-    return {
-        success: true,
-        node: node.getLabel(),
-        newParent: newParent.getLabel(),
-        previousParent: previousParentLabel
-    };
-})()
-"""
 
 # args: {characterLabel, targetX, targetY, targetZ, mode}
 # mode: "eyes", "head", "neck", "torso", "full"
@@ -4130,68 +4034,11 @@ _SET_MATERIAL_PROPERTY_SCRIPT = """\
 # Phase 5: Direct morph setting
 # ---------------------------------------------------------------------------
 
-_SET_MORPH_SCRIPT = "(function(){\n" + _RESOLVE_NODE_JS + """
-    var args = getArguments()[0] || {};
-    var node = resolveNode(args.nodeLabel);
-    var search = (args.morphName || "").toLowerCase();
-    var channels = [];
-    function addChannel(p) {
-        if (p && p.inherits("DzNumericProperty")) channels.push(p);
-    }
-    var i, p, obj, m, j;
-    for (i = 0; i < node.getNumProperties(); i++) addChannel(node.getProperty(i));
-    obj = (typeof node.getObject === "function") ? node.getObject() : null;
-    if (obj && typeof obj.getNumModifiers === "function") {
-        for (i = 0; i < obj.getNumModifiers(); i++) {
-            m = obj.getModifier(i);
-            if (!m) continue;
-            if (typeof m.getValueChannel === "function") addChannel(m.getValueChannel());
-            if (typeof m.getNumProperties === "function") {
-                for (j = 0; j < m.getNumProperties(); j++) addChannel(m.getProperty(j));
-            }
-        }
-    }
-    var prop = null;
-    for (i = 0; i < channels.length; i++) {
-        p = channels[i];
-        if (p.getLabel().toLowerCase() === search || p.getName().toLowerCase() === search) {
-            prop = p; break;
-        }
-    }
-    if (!prop) {
-        for (i = 0; i < channels.length; i++) {
-            p = channels[i];
-            if (p.getLabel().toLowerCase().indexOf(search) !== -1 ||
-                p.getName().toLowerCase().indexOf(search) !== -1) {
-                prop = p; break;
-            }
-        }
-    }
-    if (!prop) throw new Error("Morph not found: " + args.morphName);
-    if (typeof prop.lock === "function" && prop.isLocked && prop.isLocked()) prop.lock(false);
-    prop.setValue(args.value);
-    return {
-        node: node.getLabel(),
-        morph: prop.getLabel(),
-        internal_name: prop.getName(),
-        value: prop.getValue()
-    };
-})()
-"""
 
 # ---------------------------------------------------------------------------
 # Phase 5: Node lifecycle
 # ---------------------------------------------------------------------------
 
-_DELETE_NODE_SCRIPT = "(function(){\n" + _RESOLVE_NODE_JS + """
-    var args = getArguments()[0] || {};
-    var node = resolveNode(args.nodeLabel);
-    var label = node.getLabel();
-    var childCount = node.getNumNodeChildren();
-    Scene.removeNode(node);
-    return { deleted: label, child_count: childCount };
-})()
-"""
 
 # ---------------------------------------------------------------------------
 # Phase 5: Light management
@@ -5671,29 +5518,6 @@ _IMPORT_OBJ_SCRIPT = """\
 })()
 """
 
-_FIND_NODES_SCRIPT = """\
-(function(){
-    var args = getArguments()[0] || {};
-    var query = args.query === undefined || args.query === null ? "" : String(args.query);
-    if (!query) throw new Error("query is required");
-    var matches = [];
-    for (var i = 0; i < Scene.getNumNodes(); i++) {
-        var n = Scene.getNode(i);
-        if (!n) continue;
-        if (n.getLabel() === query || n.getName() === query) {
-            var p = n.getNodeParent ? n.getNodeParent() : null;
-            matches.push({
-                label: n.getLabel(),
-                name: n.getName(),
-                type: n.className(),
-                elementID: n.elementID,
-                parent: p ? p.getLabel() : null
-            });
-        }
-    }
-    return { query: query, count: matches.length, matches: matches };
-})()
-"""
 
 _FIND_ACTIONS_SCRIPT = """\
 (function(){
@@ -6189,14 +6013,6 @@ _REGISTRY: dict[str, tuple[str, str]] = {
         "Return a snapshot of the current DAZ Studio scene",
         _SCENE_INFO_SCRIPT,
     ),
-    "vangard-get-node": (
-        "Return all numeric properties of a scene node by label",
-        _GET_NODE_SCRIPT,
-    ),
-    "vangard-set-property": (
-        "Set a numeric property on a scene node",
-        _SET_PROPERTY_SCRIPT,
-    ),
     "vangard-render": (
         "Trigger a render using current DAZ Studio render settings",
         _RENDER_SCRIPT,
@@ -6208,10 +6024,6 @@ _REGISTRY: dict[str, tuple[str, str]] = {
     "vangard-get-node-hierarchy": (
         "Get complete hierarchy tree for a node with recursive children",
         _GET_NODE_HIERARCHY_SCRIPT,
-    ),
-    "vangard-set-parent": (
-        "Set parent of a node (parenting operation)",
-        _SET_PARENT_SCRIPT,
     ),
     "vangard-look-at-point": (
         "Make character look at world-space point with configurable body involvement",
@@ -6390,16 +6202,6 @@ _REGISTRY: dict[str, tuple[str, str]] = {
         "Set a numeric or color property on a named material zone",
         _SET_MATERIAL_PROPERTY_SCRIPT,
     ),
-    # Phase 5: Direct morph setting
-    "vangard-set-morph": (
-        "Set a morph value on a node by display label with fuzzy matching fallback",
-        _SET_MORPH_SCRIPT,
-    ),
-    # Phase 5: Node lifecycle
-    "vangard-delete-node": (
-        "Remove a node (and its children) from the scene",
-        _DELETE_NODE_SCRIPT,
-    ),
     # Phase 5: Light management
     "vangard-list-lights": (
         "List all lights in the scene with type, position, and flux",
@@ -6521,10 +6323,6 @@ _REGISTRY: dict[str, tuple[str, str]] = {
     "vangard-import-obj": (
         "Import a Wavefront OBJ with Scale=1 and RunSilent (no options dialog)",
         _IMPORT_OBJ_SCRIPT,
-    ),
-    "vangard-find-nodes": (
-        "List every scene node matching a label or internal name, with elementIDs",
-        _FIND_NODES_SCRIPT,
     ),
     "vangard-find-actions": (
         "Search DzActionMgr actions by className/simpleText/description (no menuBar, no trigger)",

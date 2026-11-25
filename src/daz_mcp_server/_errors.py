@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import os
+from typing import Callable, TypeVar
 
 from fastmcp.exceptions import ToolError
 
@@ -9,6 +10,8 @@ import dazpy.exceptions as daz_exc
 
 from ._client import DAZ_TIMEOUT, TOKEN_FILE
 from ._compat import incompatible_note
+
+_T = TypeVar("_T")
 
 
 def handle_dazpy_error(exc: Exception) -> None:
@@ -34,7 +37,8 @@ def handle_dazpy_error(exc: Exception) -> None:
         raise ToolError(
             f"Authentication failed. Verify the API token in: {source}"
         ) from exc
-    if isinstance(exc, daz_exc.NodeNotFoundError):
+    if isinstance(exc, (daz_exc.NodeNotFoundError, daz_exc.AmbiguousNodeError,
+                        daz_exc.PropertyNotFoundError)):
         raise ToolError(str(exc)) from exc
     if isinstance(exc, daz_exc.DazBusyError):
         raise ToolError(
@@ -46,3 +50,17 @@ def handle_dazpy_error(exc: Exception) -> None:
         note = incompatible_note() if exc.status_code == 404 else None
         raise ToolError(f"{exc}\n{note}" if note else str(exc)) from exc
     raise exc
+
+
+async def run_tool(fn: Callable[[], _T]) -> _T:
+    """Run a synchronous dazpy tool body off the event loop, mapping dazpy
+    exceptions to ToolError (a ToolError raised by *fn* passes through)."""
+    from ._client import run_dazpy  # pylint: disable=import-outside-toplevel
+
+    try:
+        return await run_dazpy(fn)
+    except ToolError:
+        raise
+    except Exception as e:  # pylint: disable=broad-exception-caught
+        handle_dazpy_error(e)
+        raise  # unreachable: handle_dazpy_error always raises

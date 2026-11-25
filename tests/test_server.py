@@ -26,7 +26,6 @@ from daz_mcp_server.tools.render import (
     daz_wait_for_request,
 )
 from daz_mcp_server.tools.scene import daz_scene_info, daz_load_file, daz_save_scene_copy
-from daz_mcp_server.tools.transform import daz_get_node, daz_set_property
 from daz_mcp_server.tools.utility import (
     daz_status,
     daz_execute,
@@ -269,76 +268,6 @@ async def test_execute_by_id_retries_on_404(mock_daz):
 
 
 # ---------------------------------------------------------------------------
-# daz_get_node
-# ---------------------------------------------------------------------------
-
-_NODE_RESULT = {
-    "name": "Genesis9",
-    "label": "Genesis 9",
-    "type": "DzFigure",
-    "properties": {
-        "Translation X": 0.0,
-        "Translation Y": 0.0,
-        "Translation Z": 0.0,
-        "Rotation X": 15.0,
-        "Head Size": 0.5,
-    },
-}
-
-
-async def test_daz_get_node_ok(mock_daz):
-    mock_daz.post("/scripts/vangard-get-node/execute").mock(return_value=_ok(_NODE_RESULT))
-    result = await daz_get_node("Genesis 9")
-    assert result["label"] == "Genesis 9"
-    assert result["properties"]["Rotation X"] == 15.0
-
-
-async def test_daz_get_node_not_found(mock_daz):
-    mock_daz.post("/scripts/vangard-get-node/execute").mock(
-        return_value=_fail("Node not found: Ghost")
-    )
-    with pytest.raises(ToolError, match="Node not found"):
-        await daz_get_node("Ghost")
-
-
-# ---------------------------------------------------------------------------
-# daz_set_property
-# ---------------------------------------------------------------------------
-
-async def test_daz_set_property_ok(mock_daz):
-    mock_daz.post("/scripts/vangard-set-property/execute").mock(
-        return_value=_ok({"node": "Genesis 9", "property": "Rotation X", "value": 45.0})
-    )
-    result = await daz_set_property("Genesis 9", "Rotation X", 45.0)
-    assert result["value"] == 45.0
-    assert result["property"] == "Rotation X"
-
-
-async def test_daz_set_property_node_not_found(mock_daz):
-    mock_daz.post("/scripts/vangard-set-property/execute").mock(
-        return_value=_fail("Node not found: Ghost")
-    )
-    with pytest.raises(ToolError, match="Node not found"):
-        await daz_set_property("Ghost", "Rotation X", 0.0)
-
-
-async def test_daz_set_property_prop_not_found(mock_daz):
-    mock_daz.post("/scripts/vangard-set-property/execute").mock(
-        return_value=_fail("Property not found: Foo on Genesis 9")
-    )
-    with pytest.raises(ToolError, match="Property not found"):
-        await daz_set_property("Genesis 9", "Foo", 1.0)
-
-
-async def test_daz_set_property_not_numeric(mock_daz):
-    mock_daz.post("/scripts/vangard-set-property/execute").mock(
-        return_value=_fail("Property is not numeric: Label")
-    )
-    with pytest.raises(ToolError, match="not numeric"):
-        await daz_set_property("Genesis 9", "Label", 1.0)
-
-
-# ---------------------------------------------------------------------------
 # daz_render
 # ---------------------------------------------------------------------------
 
@@ -352,7 +281,6 @@ async def test_daz_render_with_output_path(mock_daz):
     mock_daz.post("/scripts/vangard-render/execute").mock(return_value=_ok({"success": True}))
     result = await daz_render(output_path="C:/renders/out.png")
     assert result["success"] is True
-
 
 
 # ---------------------------------------------------------------------------

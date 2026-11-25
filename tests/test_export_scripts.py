@@ -28,12 +28,7 @@ def test_set_dforce_property_searches_object_modifier_stack():
 
 
 _RESOLVE_IDS = (
-    "vangard-get-node",
-    "vangard-set-property",
-    "vangard-set-morph",
     "vangard-get-node-hierarchy",
-    "vangard-set-parent",
-    "vangard-delete-node",
 )
 
 
@@ -44,17 +39,6 @@ def test_core_node_scripts_resolve_uniquely():
         assert "findNodeByElementID" in script, script_id
         assert "Ambiguous node" in script, script_id
         assert "Scene.findNodeByLabel(args.nodeLabel)" not in script, script_id
-
-
-def test_get_node_returns_element_id():
-    script = _REGISTRY["vangard-get-node"][1]
-    assert "elementID: n.elementID" in script
-
-
-def test_find_nodes_lists_collisions():
-    script = _REGISTRY["vangard-find-nodes"][1]
-    assert "elementID: n.elementID" in script
-    assert "matches.push" in script
 
 
 def test_apply_material_preset_preflights_missing_maps():

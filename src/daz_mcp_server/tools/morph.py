@@ -1,22 +1,21 @@
 """Morph, expression, and body-language tools for DAZ Studio figures."""
 from __future__ import annotations
 
-import json
 import math
 from typing import Any
 
-from dazpy.exceptions import NodeNotFoundError
+from dazpy.exceptions import NodeNotFoundError, PropertyNotFoundError
 from fastmcp.exceptions import ToolError
 
 from .._mcp import mcp, _execute_by_id
-from .._client import get_daz_client, get_scene, run_dazpy
+from .._client import get_scene
 from .._emotions import (
     AXIS_BY_PROPERTY,
     POSTURES,
     _EMOTION_DEFINITIONS,
     resolve_bone,
 )
-from .._errors import handle_dazpy_error
+from .._errors import run_tool as _run_tool
 
 
 # ---------------------------------------------------------------------------
@@ -62,47 +61,11 @@ async def daz_list_morphs(
         result = daz_list_morphs("Genesis 9", include_zero=True)
         # result["count"] might be 500+ morphs
     """
-    include_zero_js = "true" if include_zero else "false"
+    def _run() -> list[dict]:
+        node = get_scene().resolve_node(node_label)
+        return [m.__dict__.copy() for m in node.morph_info(include_zero=include_zero)]
 
-    def _run() -> list | None:
-        client = get_daz_client()
-        script = f"""(function() {{
-            var node = Scene.findNodeByLabel({json.dumps(node_label)});
-            if (!node) return null;
-            var obj = node.getObject();
-            if (!obj) return [];
-            var includeZero = {include_zero_js};
-            var result = [];
-            for (var i = 0; i < obj.getNumModifiers(); i++) {{
-                var m = obj.getModifier(i);
-                if (m.className() === "DzMorph") {{
-                    var ch = m.getValueChannel();
-                    var val = ch.getValue();
-                    if (includeZero || val !== 0) {{
-                        var path = "";
-                        try {{
-                            var pg = ch.getPropertyGroup();
-                            if (pg) path = pg.getPath();
-                        }} catch(e) {{}}
-                        result.push({{
-                            name: m.getName(),
-                            label: m.getLabel(),
-                            value: val,
-                            path: path
-                        }});
-                    }}
-                }}
-            }}
-            return result;
-        }})();"""
-        return client.execute(script).value
-
-    try:
-        morphs = await run_dazpy(_run)
-    except Exception as e:
-        handle_dazpy_error(e)
-    if morphs is None:
-        raise ToolError(f"Node not found: {node_label!r}")
+    morphs = await _run_tool(_run)
     return {"morphs": morphs, "count": len(morphs), "nodeLabel": node_label}
 
 
@@ -147,53 +110,12 @@ async def daz_search_morphs(
         # Find all facial expression morphs
         result = daz_search_morphs("Genesis 9", "express", include_zero=True)
     """
-    include_zero_js = "true" if include_zero else "false"
-    pat_lower = pattern.lower()
+    def _run() -> list[dict]:
+        node = get_scene().resolve_node(node_label)
+        return [m.__dict__.copy()
+                for m in node.morph_info(pattern=pattern, include_zero=include_zero)]
 
-    def _run() -> list | None:
-        client = get_daz_client()
-        script = f"""(function() {{
-            var node = Scene.findNodeByLabel({json.dumps(node_label)});
-            if (!node) return null;
-            var obj = node.getObject();
-            if (!obj) return [];
-            var includeZero = {include_zero_js};
-            var pat = {json.dumps(pat_lower)};
-            var result = [];
-            for (var i = 0; i < obj.getNumModifiers(); i++) {{
-                var m = obj.getModifier(i);
-                if (m.className() === "DzMorph") {{
-                    var name = m.getName();
-                    var label = m.getLabel();
-                    if (name.toLowerCase().indexOf(pat) === -1 &&
-                            label.toLowerCase().indexOf(pat) === -1) continue;
-                    var ch = m.getValueChannel();
-                    var val = ch.getValue();
-                    if (includeZero || val !== 0) {{
-                        var path = "";
-                        try {{
-                            var pg = ch.getPropertyGroup();
-                            if (pg) path = pg.getPath();
-                        }} catch(e) {{}}
-                        result.push({{
-                            name: name,
-                            label: label,
-                            value: val,
-                            path: path
-                        }});
-                    }}
-                }}
-            }}
-            return result;
-        }})();"""
-        return client.execute(script).value
-
-    try:
-        morphs = await run_dazpy(_run)
-    except Exception as e:
-        handle_dazpy_error(e)
-    if morphs is None:
-        raise ToolError(f"Node not found: {node_label!r}")
+    morphs = await _run_tool(_run)
     return {
         "morphs": morphs,
         "count": len(morphs),
@@ -237,10 +159,19 @@ async def daz_set_morph(
         - Use daz_search_morphs to browse available morph names before setting.
         - daz_set_property also works but requires the exact internal property name.
     """
-    return await _execute_by_id(
-        "vangard-set-morph",
-        {"nodeLabel": node_label, "morphName": morph_name, "value": value},
-    )
+    def _run() -> dict[str, Any]:
+        node = get_scene().resolve_node(node_label)
+        label = node.describe().label
+        try:
+            written = node.set_numeric_property(morph_name, value, substring_fallback=True)
+        except PropertyNotFoundError as e:
+            raise ToolError(f"Morph not found: {morph_name}") from e
+        except TypeError as e:
+            raise ToolError(str(e)) from e
+        return {"node": label, "morph": written.label,
+                "internal_name": written.name, "value": written.value}
+
+    return await _run_tool(_run)
 
 
 def _resolve_body(skel: Any, adjustments: list[dict], intensity: float) -> tuple[list, list]:
@@ -346,13 +277,7 @@ async def daz_set_emotion(
             "body_not_found": body_missing,
         }
 
-    try:
-        return await run_dazpy(_run)
-    except ToolError:
-        raise
-    except Exception as e:  # pylint: disable=broad-exception-caught
-        handle_dazpy_error(e)
-        raise  # unreachable: handle_dazpy_error always raises
+    return await _run_tool(_run)
 
 
 @mcp.tool()
@@ -402,13 +327,7 @@ async def daz_set_body_language(
             "not_found": not_found,
         }
 
-    try:
-        return await run_dazpy(_run)
-    except ToolError:
-        raise
-    except Exception as e:  # pylint: disable=broad-exception-caught
-        handle_dazpy_error(e)
-        raise  # unreachable: handle_dazpy_error always raises
+    return await _run_tool(_run)
 
 
 _GAZE_FIXED: dict[str, tuple[float, float]] = {
@@ -526,13 +445,7 @@ async def daz_direct_gaze(
             "not_found": [f"{head_bone}.XRotate", f"{head_bone}.YRotate"] if missing else [],
         }
 
-    try:
-        return await run_dazpy(_run)
-    except ToolError:
-        raise
-    except Exception as e:  # pylint: disable=broad-exception-caught
-        handle_dazpy_error(e)
-        raise  # unreachable: handle_dazpy_error always raises
+    return await _run_tool(_run)
 
 
 # ---------------------------------------------------------------------------
