@@ -108,7 +108,15 @@ Requires dazpy 2.17.0 or later, for the new primitives these tools use
     used to just select the node and simulate the whole scene.
   - Export errors (missing exporter, write failure) are now reported.
     `exported_nodes` is `["(whole scene)"]` when no nodes are named.
-- 76 registered scripts are removed (107 to 31), and a unit test fails if any
+- The dForce and Transfer Utility tools use dazpy:
+  `daz_add_dforce_dynamic_surface`, `daz_get/set_dforce_influence_weights`,
+  `daz_set_dforce_property`, `daz_get/set_dforce_surface_property(ies)`,
+  `daz_bake_simulation` and `daz_run_transfer_utility`.
+  - `daz_bake_simulation` now works: it freezes the node's dForce modifiers,
+    or every one in the scene. It always failed before, because it called
+    bake methods `DzSimulationMgr` doesn't have. The result reports
+    `method: "freeze"` and `modifiers_frozen`.
+- 84 registered scripts are removed (107 to 23), and a unit test fails if any
   registered script is no longer called by a tool.
 
 ### Fixed

@@ -6,7 +6,7 @@ from typing import Any
 from dazpy.exceptions import DazError, NodeNotFoundError, PropertyNotFoundError
 from fastmcp.exceptions import ToolError
 
-from .._mcp import mcp, _execute_by_id
+from .._mcp import mcp
 from .._client import get_scene
 from .._errors import run_tool
 
@@ -44,6 +44,18 @@ def _sex(text: str) -> str:
 def _subdivision_value(node: Any) -> Any:
     levels = node.subdivision() or {}
     return levels.get("view") or 0
+
+
+async def _dforce_tool(fn: Any) -> dict[str, Any]:
+    """run_tool, with dazpy's dForce/transfer DazError messages as ToolError."""
+    def _wrapped() -> dict[str, Any]:
+        try:
+            return fn()
+        except (NodeNotFoundError, PropertyNotFoundError):
+            raise
+        except DazError as e:
+            raise ToolError(str(e)) from e
+    return await run_tool(_wrapped)
 
 
 async def _export(kind: str, output_path: str, node_labels: list[str] | None,
@@ -248,21 +260,20 @@ async def daz_run_transfer_utility(
             "Genesis 8 Female", "Cape", transfer_binding=True, transfer_morphs=False
         )
     """
-    return await _execute_by_id(
-        "vangard-run-transfer-utility",
-        {
-            "sourceLabel": source_label,
-            "targetLabel": target_label,
-            "transferBinding": transfer_binding,
-            "transferMorphs": transfer_morphs,
-            "transferUVs": transfer_uvs,
-            "transferMaterialGroups": transfer_material_groups,
-            "transferFaceGroups": transfer_face_groups,
-            "fitToFigure": fit_to_figure,
-            "parentToFigure": parent_to_figure,
-            "mergeHierarchies": merge_hierarchies,
-        },
-    )
+    def _run() -> dict[str, Any]:
+        scene = get_scene()
+        source = scene.resolve_node(source_label)
+        target = scene.resolve_node(target_label)
+        scene.transfer_utility(
+            source, target, binding=transfer_binding, morphs=transfer_morphs,
+            uvs=transfer_uvs, material_groups=transfer_material_groups,
+            face_groups=transfer_face_groups, fit_to_figure=fit_to_figure,
+            parent_to_figure=parent_to_figure, merge_hierarchies=merge_hierarchies)
+        return {"success": True, "source": source.describe().label,
+                "target": target.describe().label}
+
+    return await _dforce_tool(_run)
+
 
 
 @mcp.tool()
@@ -301,9 +312,14 @@ async def daz_add_dforce_dynamic_surface(node_label: str) -> dict[str, Any]:
         daz_add_dforce_dynamic_surface("Tablecloth")
         daz_add_dforce_dynamic_surface("Custom Cape")
     """
-    return await _execute_by_id(
-        "vangard-add-dforce-dynamic-surface", {"nodeLabel": node_label}
-    )
+    def _run() -> dict[str, Any]:
+        node = get_scene().resolve_node(node_label)
+        added = node.add_dforce_dynamic_surface()
+        return {"success": True, "node": node.describe().label, "already_present": not added,
+                "modifier": "DzDForceModifier"}
+
+    return await _dforce_tool(_run)
+
 
 
 @mcp.tool()
@@ -349,10 +365,15 @@ async def daz_set_dforce_influence_weights(
         daz_set_dforce_influence_weights("Hair Strand", {0: 0.0, 1: 0.0})
         daz_set_dforce_influence_weights("Cape", default_weight=0.0)
     """
-    args: dict[str, Any] = {"nodeLabel": node_label, "defaultWeight": default_weight}
-    if vertex_weights:
-        args["vertexWeights"] = {str(k): v for k, v in vertex_weights.items()}
-    return await _execute_by_id("vangard-set-dforce-influence-weights", args)
+    def _run() -> dict[str, Any]:
+        node = get_scene().resolve_node(node_label)
+        count, overridden = node.set_dforce_influence_weights(
+            default_weight, {int(k): float(v) for k, v in (vertex_weights or {}).items()})
+        return {"success": True, "node": node.describe().label, "vertex_count": count,
+                "default_weight": default_weight, "overridden_count": overridden}
+
+    return await _dforce_tool(_run)
+
 
 
 @mcp.tool()
@@ -380,9 +401,18 @@ async def daz_get_dforce_influence_weights(node_label: str) -> dict[str, Any]:
     Examples:
         daz_get_dforce_influence_weights("Hair Strand")
     """
-    return await _execute_by_id(
-        "vangard-get-dforce-influence-weights", {"nodeLabel": node_label}
-    )
+    def _run() -> dict[str, Any]:
+        node = get_scene().resolve_node(node_label)
+        weights = node.dforce_influence_weights()
+        label = node.describe().label
+        if weights is None:
+            return {"success": True, "node": label, "has_influence_weights": False,
+                    "weights": []}
+        return {"success": True, "node": label, "has_influence_weights": True,
+                "vertex_count": len(weights), "weights": weights}
+
+    return await _dforce_tool(_run)
+
 
 
 @mcp.tool()
@@ -455,10 +485,20 @@ async def daz_bake_simulation(node_label: str | None = None) -> dict[str, Any]:
         daz_bake_simulation("Outfit")
         daz_bake_simulation()
     """
-    args: dict[str, Any] = {}
-    if node_label is not None:
-        args["nodeLabel"] = node_label
-    return await _execute_by_id("vangard-bake-simulation", args)
+    def _run() -> dict[str, Any]:
+        scene = get_scene()
+        if node_label is None:
+            return {"success": True, "node": "all", "method": "freeze",
+                    "modifiers_frozen": scene.freeze_dforce()}
+        node = scene.resolve_node(node_label)
+        frozen = node.freeze_dforce()
+        if not frozen:
+            raise ToolError(f"No dForce modifier on '{node_label}' to bake")
+        return {"success": True, "node": node.describe().label, "method": "freeze",
+                "modifiers_frozen": frozen}
+
+    return await _dforce_tool(_run)
+
 
 
 @mcp.tool()
@@ -502,10 +542,13 @@ async def daz_set_dforce_property(
         daz_set_dforce_property("Outfit", "Freeze Simulation", 1.0)
         daz_set_dforce_property("Hair", "Simulation Object Type", 0)
     """
-    return await _execute_by_id(
-        "vangard-set-dforce-property",
-        {"nodeLabel": node_label, "propertyName": property_name, "value": value},
-    )
+    def _run() -> dict[str, Any]:
+        node = get_scene().resolve_node(node_label)
+        r = node.set_dforce_property(property_name, value)
+        return {"success": True, "node": node.describe().label, **r}
+
+    return await _dforce_tool(_run)
+
 
 
 @mcp.tool()
@@ -540,10 +583,14 @@ async def daz_get_dforce_surface_properties(
         daz_get_dforce_surface_properties("Outfit", "Fabric")
         daz_get_dforce_surface_properties("Genesis 8 Female")
     """
-    args: dict[str, Any] = {"nodeLabel": node_label}
-    if material_name is not None:
-        args["materialName"] = material_name
-    return await _execute_by_id("vangard-get-dforce-surface-properties", args)
+    def _run() -> dict[str, Any]:
+        node = get_scene().resolve_node(node_label)
+        material, props = node.dforce_surface_properties(material_name)
+        return {"node": node.describe().label, "material": material,
+                "property_count": len(props), "properties": props}
+
+    return await _dforce_tool(_run)
+
 
 
 @mcp.tool()
@@ -584,10 +631,13 @@ async def daz_set_dforce_surface_property(
         daz_set_dforce_surface_property("Outfit", "Self Collide", 1, material_name="Fabric")
         daz_set_dforce_surface_property("Hair", "Dynamics Strength", 0.8)
     """
-    args: dict[str, Any] = {"nodeLabel": node_label, "propertyName": property_name, "value": value}
-    if material_name is not None:
-        args["materialName"] = material_name
-    return await _execute_by_id("vangard-set-dforce-surface-property", args)
+    def _run() -> dict[str, Any]:
+        node = get_scene().resolve_node(node_label)
+        r = node.set_dforce_surface_property(property_name, value, material_name)
+        return {"success": True, "node": node.describe().label, **r}
+
+    return await _dforce_tool(_run)
+
 
 
 @mcp.tool()

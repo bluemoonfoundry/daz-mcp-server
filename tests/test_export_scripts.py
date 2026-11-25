@@ -11,13 +11,6 @@ def test_import_obj_forces_unit_scale_and_run_silent():
     assert "getDefaultOptions" in script
 
 
-def test_set_dforce_property_searches_object_modifier_stack():
-    script = _REGISTRY["vangard-set-dforce-property"][1]
-    assert "getNumModifiers" in script
-    assert "searchMods(obj)" in script
-    assert "Freeze Simulation" in script
-
-
 def test_every_registered_script_is_called_by_a_tool():
     """A registered script no tool calls is dead weight re-registered on every
     connection (daz-mcp-server-b7q)."""
