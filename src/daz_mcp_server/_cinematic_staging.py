@@ -241,3 +241,125 @@ def interactive_pose(char1: str, char2: str, kind: str, distance: float | None) 
             "alignment": [{"anchor": a["anchor_name"], "converged": a["converged"],
                            "finalError": a["final_error"]}
                           for a in result["alignment_results"]]}
+
+
+# --- daz_create_scene templates -------------------------------------------------
+
+_SCENE_TYPES = (("dining", ("dinner", "dining", "meal", "eat")),
+                ("interview", ("interview", "meeting", "business")),
+                ("portrait", ("portrait", "headshot", "photo")),
+                ("conversation", ("conversation", "talking", "chat")))
+# scene type -> per-character {property: value} for the first two characters
+_SCENE_BLOCKING = {
+    "dining": [{"ZTranslate": -60, "YRotate": 0}, {"ZTranslate": 60, "YRotate": 180}],
+    "interview": [{"XTranslate": -80, "ZTranslate": 0, "YRotate": 90},
+                  {"XTranslate": 80, "ZTranslate": 0, "YRotate": -90}],
+    "conversation": [{"XTranslate": -50, "ZTranslate": 0, "YRotate": 90},
+                     {"XTranslate": 50, "ZTranslate": 0, "YRotate": -90}],
+}
+_SCENE_SUGGESTIONS = {
+    "dining": ["Add table prop for dining scene",
+               "Add plates, glasses, or food props for realism",
+               "Consider adding candles for romantic dinner mood"],
+    "interview": ["Add desk or table prop between characters", "Add chairs for seated interview",
+                  "Consider office props (laptop, papers) for context"],
+    "portrait": ["Adjust character facial expression for portrait mood",
+                 "Consider neutral background or backdrop prop",
+                 "Try different camera angles (high-angle, low-angle)"],
+    "conversation": ["Use shot-reverse-shot camera technique for conversation",
+                     "Apply emotions and look-at for animated dialogue",
+                     "Consider adding environment props for context"],
+    "generic": ["Provide more specific scene description for tailored setup",
+                "Keywords: dinner, interview, portrait, conversation",
+                "Add props and environment elements as needed"],
+}
+
+
+def _scene_type(description: str) -> str:
+    text = description.lower()
+    return next((t for t, words in _SCENE_TYPES if any(w in text for w in words)), "generic")
+
+
+def _scene_lights(kind: str, description: str, c: dict,
+                  eye: float) -> tuple[list[tuple[str, tuple, float]], str]:
+    """[(label, (x, y, z), flux)] and an action note for a template."""
+    three_point = [("Key Light", (c["x"] + 150, eye + 30, c["z"] + 120), 2000),
+                   ("Fill Light", (c["x"] - 120, eye + 15, c["z"] + 100), 800),
+                   ("Rim Light", (c["x"], eye + 50, c["z"] - 150), 1200)]
+    if kind == "dining" and "romantic" in description.lower():
+        return ([("Warm Key Light", (100, 180, 100), 1500),
+                 ("Warm Fill Light", (-80, 150, 80), 600)], "Applied warm romantic lighting")
+    return {
+        "dining": ([("Key Light", (120, 180, 120), 1800), ("Fill Light", (-100, 150, 100), 700)],
+                   "Applied dining scene lighting"),
+        "interview": ([("Key Light", (150, 200, 120), 2200), ("Fill Light", (-120, 180, 100), 1000),
+                       ("Back Light", (0, 220, -180), 1400)],
+                      "Applied professional three-point lighting"),
+        "conversation": ([("Key Light", (120, 180, 100), 1900),
+                          ("Fill Light", (-100, 160, 80), 850)],
+                         "Applied natural conversation lighting"),
+        "portrait": (three_point, "Applied classic three-point portrait lighting"),
+        "generic": (three_point, "Applied default three-point lighting"),
+    }[kind]
+
+
+def _found_nodes(scene: Any, labels: list[str]) -> dict[str, Any]:
+    """Resolve *labels*, skipping ones not in the scene (the caller reports them)."""
+    from dazpy.exceptions import NodeNotFoundError  # pylint: disable=import-outside-toplevel
+    out = {}
+    for label in labels:
+        try:
+            out[label] = scene.resolve_node(label)
+        except NodeNotFoundError:
+            continue
+    return out
+
+
+def _subject_frame(found: dict, characters: list[str]) -> tuple[dict, float, bool]:
+    """(bounding-box centre, eye height, have_subject) of the first character."""
+    center, eye = {"x": 0.0, "y": 100.0, "z": 0.0}, 160.0
+    if not characters or characters[0] not in found:
+        return center, eye, False
+    box = found[characters[0]].bounding_box()
+    if box:
+        center = {k: (box["min"][k] + box["max"][k]) / 2 for k in "xyz"}
+        eye = box["min"]["y"] + (box["max"]["y"] - box["min"]["y"]) * 0.85
+    return center, eye, True
+
+
+def _light_scene(scene: Any, kind: str, description: str, center: dict, eye: float) -> str:
+    """Create/reuse the template's spot lights aimed at eye height; hide the ground plane."""
+    from dazpy import DazRenderSettings  # pylint: disable=import-outside-toplevel
+    from ._cinematic_lighting import (  # pylint: disable=import-outside-toplevel
+        _get_or_create_light)
+    from ._client import get_daz_client  # pylint: disable=import-outside-toplevel
+    lights, note = _scene_lights(kind, description, center, eye)
+    for label, pos, flux in lights:
+        light, _ = _get_or_create_light(scene, label, "spot", True)
+        light.set_position(*pos)
+        light.aim_at(center["x"], eye, center["z"])
+        light.set_numeric_property("Flux", float(flux))
+    DazRenderSettings(get_daz_client()).draw_ground_plane = False
+    return note
+
+
+def scene_template(description: str, characters: list[str]) -> dict:
+    """Block characters, light the scene for its template and hide the ground plane."""
+    scene = get_scene()
+    kind = _scene_type(description)
+    actions = [f"Scene type: {kind}"]
+    found = _found_nodes(scene, characters[:2])
+    center, eye, has_subject = _subject_frame(found, characters)
+    if kind in _SCENE_BLOCKING and len(found) == 2:
+        ops = [(str(found[label].describe().element_id), prop, float(value))
+               for label, props in zip(characters[:2], _SCENE_BLOCKING[kind])
+               for prop, value in props.items()]
+        scene.set_numeric_properties(ops)
+        actions.append("Positioned the first two characters facing each other")
+    if has_subject or kind not in ("portrait", "generic"):
+        actions.append(_light_scene(scene, kind, description, center, eye))
+    suggestions = list(_SCENE_SUGGESTIONS[kind])
+    if not characters:
+        suggestions.append("Load characters into scene before generating setup")
+    return {"sceneType": kind, "description": description, "charactersUsed": len(characters),
+            "actions": actions, "suggestions": suggestions}

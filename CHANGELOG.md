@@ -156,7 +156,13 @@ Requires dazpy 2.17.0 or later, for the new primitives these tools use
   convergence).
 - `daz_choreograph_action` places the pair facing each other at the
   action's spacing through dazpy's batched staging.
-- 96 registered scripts are removed (107 to 11), and a unit test fails if any
+- `daz_create_scene` builds its blocking and lights with dazpy, so no
+  cinematic tool sends DazScript any more.
+  - Template lights are reused by label instead of duplicated each run.
+  - A missing character is skipped and reported; it used to stop the
+    template.
+  - The first `actions` entry is now `Scene type: <type>`.
+- 97 registered scripts are removed (107 to 10), and a unit test fails if any
   registered script is no longer called by a tool.
 
 ### Fixed

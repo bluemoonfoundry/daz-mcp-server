@@ -15,7 +15,7 @@ from dazpy.math3 import Vec3
 from dazpy.shots import (CameraKeyframe, Keyframed, Lens, Placement, Sequence, Shot, Storyboard,
                          apply_shot)
 
-from .._mcp import mcp, _execute_by_id
+from .._mcp import mcp
 from .._client import get_scene
 from .._errors import run_tool
 from .. import _cinematic_lighting as _lighting
@@ -440,11 +440,7 @@ async def daz_create_scene(
     if len(chars) > 10:
         raise ToolError("Too many characters (max 10)")
 
-    result = await _execute_by_id("vangard-create-scene", {
-        "description": description,
-        "characters": chars,
-    })
-    result = dict(result or {})
+    result = await run_tool(lambda: _staging.scene_template(description, chars))
     scene_type = result.get("sceneType", "generic")
 
     def _cameras() -> dict[str, Any]:

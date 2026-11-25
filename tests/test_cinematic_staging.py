@@ -169,3 +169,39 @@ async def test_interactive_pose_uses_recipe(scene, monkeypatch):
     assert seen["align"] is True and seen["recipe"].kind == "handshake"
     assert r["applied"] == ["spaced 60 cm apart", "handshake"]
     assert r["alignment"] == [{"anchor": "r_hand", "converged": True, "finalError": 0.1}]
+
+
+async def test_scene_template_blocks_and_lights(scene, monkeypatch):
+    from types import SimpleNamespace
+
+    from daz_mcp_server import _cinematic_lighting
+    lights = {}
+
+    def get_or_create(sc, label, kind, create):
+        lights[label] = SimpleNamespace(
+            calls=[], set_position=lambda *p, label=label: lights[label].calls.append(("pos", p)),
+            aim_at=lambda *p, label=label: lights[label].calls.append(("aim", p)),
+            set_numeric_property=lambda n, v, label=label: lights[label].calls.append((n, v)))
+        return lights[label], True
+    monkeypatch.setattr(_cinematic_lighting, "_get_or_create_light", get_or_create)
+    ground = {}
+    monkeypatch.setattr("daz_mcp_server._client.get_daz_client", lambda: None)
+
+    class RS:  # pylint: disable=too-few-public-methods
+        def __init__(self, client):
+            pass
+
+        def __setattr__(self, name, value):
+            ground[name] = value
+    monkeypatch.setattr("dazpy.DazRenderSettings", RS)
+    for n in scene.nodes.values():
+        n.bounding_box = lambda: {"min": {"x": -20, "y": 0, "z": -10},
+                                  "max": {"x": 20, "y": 170, "z": 10}}
+    r = st.scene_template("A business interview", ["A", "B", "Ghost"])
+    assert r["sceneType"] == "interview"
+    assert ("1", "XTranslate", -80.0) in scene.batches[0]
+    assert set(lights) == {"Key Light", "Fill Light", "Back Light"}
+    assert ("Flux", 2200.0) in lights["Key Light"].calls
+    assert ground == {"draw_ground_plane": False}
+    r = st.scene_template("portrait", ["Ghost"])
+    assert r["sceneType"] == "portrait" and "Applied" not in " ".join(r["actions"])
