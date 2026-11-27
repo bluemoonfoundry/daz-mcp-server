@@ -119,13 +119,7 @@ async def test_render_unknown_shot_returned_as_data(monkeypatch):
     assert out == {"ok": False, "error": "unknown shot id(s): z"}
 
 
-def test_schema_resource_returns_json():
-    data = json.loads(recipe.daz_recipe_schema_resource())
-    assert isinstance(data, dict) and data
-    assert data == json.loads(recipe.daz_recipe_schema_version_resource("2"))
-
-
-def test_schema_resource_v2():
+def test_schema_resource_serves_v1_and_v2():
     v1 = json.loads(recipe.daz_recipe_schema_version_resource("1"))
     v2 = json.loads(recipe.daz_recipe_schema_version_resource("2"))
     assert v2 != v1
@@ -162,10 +156,14 @@ async def test_validate_tool_accepts_v2_recipe(monkeypatch):
     assert seen == [(v2, "SCENE")]
 
 
-def test_tool_docs_describe_v2():
-    doc = recipe.daz_recipe_validate.fn.__doc__ if hasattr(
-        recipe.daz_recipe_validate, "fn") else recipe.daz_recipe_validate.__doc__
-    assert "recipe_version" in doc and "find" in doc
+@pytest.mark.parametrize(
+    "tool", [recipe.daz_recipe_validate, recipe.daz_recipe_plan, recipe.daz_recipe_apply]
+)
+def test_tool_docs_describe_v2(tool):
+    doc = tool.__doc__
+    for word in ("recipe_version", "find", "node", "presets", "wearing", "add",
+                 "replace", "with", "remove", "key", "if_missing", "ignore"):
+        assert word in doc, word
 
 
 def test_compact_profile_includes_recipe_tools():

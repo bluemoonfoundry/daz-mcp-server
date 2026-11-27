@@ -43,12 +43,22 @@ recipe names an asset, give a path string or an asset reference object:
 Precedence: ``path`` > ``sku`` > ``product`` > ``find``.  ``find`` searches the
 content browser when ``DAZ_BROWSER_URL`` is set and reachable, otherwise
 Studio's own search.  An ``asset_ref`` object from a content-browser tool can be
-pasted in as is.  Actors also accept ``node`` (take over the figure with that
-Scene-pane label instead of creating one), ``presets`` (references applied to
-the figure) and ``wearing`` (ordered ``add`` / ``replace`` / ``remove`` of fitted
-items, each add/replace with a ``key``).  Presets and fitted items are checked
-against the actor's figure; unresolved, ambiguous or incompatible references
-come back as errors before the scene changes.
+pasted in as is.  Actors also accept:
+- ``node``: take over the figure with that Scene-pane label if it exists,
+  otherwise create the figure from ``asset`` and label it ``node``.
+- ``presets``: ordered asset references applied to the figure.
+- ``wearing``: ordered fitted-item entries, each one of
+  ``{"add": <ref>, "key": K}``;
+  ``{"replace": <selector>, "with": <ref>, "key": K, "if_missing": "add"|"error"}``;
+  ``{"remove": <selector>, "if_missing": "ignore"|"error"}``.
+  ``key`` (1-64 letters, digits, ``_``, ``-``) is required on add and replace and
+  names the item the recipe owns.  A selector is an exact Scene-pane label string
+  or ``{"type": T}`` (every fitted item of that type: hair, top, bottom, dress,
+  outerwear, shoes, hat, accessory, wardrobe, or a raw Daz type prefix).
+  replace/remove act once, on content the recipe does not own.
+Presets and fitted items are checked against the actor's figure; unresolved,
+ambiguous or incompatible references come back as errors before the scene
+changes.
 """
 
 
