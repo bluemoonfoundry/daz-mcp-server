@@ -34,6 +34,28 @@ one entity) cannot be resolved by any policy: ask the user to delete the extra
 node.
 """
 
+_V2_HELP = """
+Recipe v2 (``recipe_version: 2``; v1 recipes keep working unchanged).  Anywhere a
+recipe names an asset, give a path string or an asset reference object:
+``path`` (content-relative or absolute), ``product``, ``sku``, ``find``
+(free-text search), plus optional ``file`` (pick a file within a product),
+``type`` (expected content type) and ``resolved`` (a pin written by tools).
+Precedence: ``path`` > ``sku`` > ``product`` > ``find``.  ``find`` searches the
+content browser when ``DAZ_BROWSER_URL`` is set and reachable, otherwise
+Studio's own search.  An ``asset_ref`` object from a content-browser tool can be
+pasted in as is.  Actors also accept ``node`` (take over the figure with that
+Scene-pane label instead of creating one), ``presets`` (references applied to
+the figure) and ``wearing`` (ordered ``add`` / ``replace`` / ``remove`` of fitted
+items, each add/replace with a ``key``).  Presets and fitted items are checked
+against the actor's figure; unresolved, ambiguous or incompatible references
+come back as errors before the scene changes.
+"""
+
+
+def _with_v2_help(fn):
+    fn.__doc__ = (fn.__doc__ or "") + _V2_HELP
+    return fn
+
 
 def _invalid(error: RecipeValidationError) -> dict[str, Any]:
     report = error.report.to_dict()
@@ -61,11 +83,12 @@ async def _call(fn) -> dict[str, Any]:
 
 
 @mcp.tool(tags=_DEFAULT_TAG)
+@_with_v2_help
 async def daz_recipe_validate(recipe: dict[str, Any]) -> dict[str, Any]:
     """Validate a scene recipe and check that the files it references exist.
 
     Start of the loop: validate -> plan -> apply -> render.  Read the
-    ``daz://recipe/schema`` resource for the recipe format.  Returns
+    ``daz://recipe/schema`` resource (``/1`` for v1) for the recipe format.  Returns
     ``{ok, errors, warnings}``; each error has ``path``, ``code``, ``message``
     and often a ``suggestion``.  Fix errors and validate again before planning.
     """
@@ -77,6 +100,7 @@ async def daz_recipe_validate(recipe: dict[str, Any]) -> dict[str, Any]:
 
 @mcp.tool(tags=_DEFAULT_TAG)
 @_with_conflict_help
+@_with_v2_help
 async def daz_recipe_plan(
     recipe: dict[str, Any],
     on_conflict: str = "ask",
@@ -97,6 +121,7 @@ async def daz_recipe_plan(
 
 @mcp.tool(tags=_DEFAULT_TAG)
 @_with_conflict_help
+@_with_v2_help
 async def daz_recipe_apply(
     recipe: dict[str, Any],
     on_conflict: str = "ask",
@@ -155,11 +180,11 @@ async def daz_recipe_render(
 
 @mcp.resource("daz://recipe/schema")
 def daz_recipe_schema_resource() -> str:
-    """JSON Schema for scene recipes (current version)."""
-    return json.dumps(dz_recipe.recipe_schema())
+    """JSON Schema for scene recipes (current version, 2; v1 at ``/1``)."""
+    return json.dumps(dz_recipe.recipe_schema(2))
 
 
 @mcp.resource("daz://recipe/schema/{version}")
 def daz_recipe_schema_version_resource(version: str) -> str:
-    """JSON Schema for scene recipes of a given version."""
+    """JSON Schema for scene recipes of a given version (1 or 2)."""
     return json.dumps(dz_recipe.recipe_schema(int(version)))

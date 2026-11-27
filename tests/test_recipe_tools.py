@@ -122,7 +122,50 @@ async def test_render_unknown_shot_returned_as_data(monkeypatch):
 def test_schema_resource_returns_json():
     data = json.loads(recipe.daz_recipe_schema_resource())
     assert isinstance(data, dict) and data
-    assert json.loads(recipe.daz_recipe_schema_version_resource("1")) == data
+    assert data == json.loads(recipe.daz_recipe_schema_version_resource("2"))
+
+
+def test_schema_resource_v2():
+    v1 = json.loads(recipe.daz_recipe_schema_version_resource("1"))
+    v2 = json.loads(recipe.daz_recipe_schema_version_resource("2"))
+    assert v2 != v1
+    assert v2["properties"]["recipe_version"] == {"const": 2}
+    # the unversioned resource serves the current (latest) version
+    assert json.loads(recipe.daz_recipe_schema_resource()) == v2
+
+
+def test_schema_resource_unsupported_version_is_clear():
+    with pytest.raises(ValueError, match="unsupported recipe schema version"):
+        recipe.daz_recipe_schema_version_resource("3")
+
+
+async def test_validate_tool_accepts_v2_recipe(monkeypatch):
+    v2 = {
+        "recipe_version": 2,
+        "id": "x",
+        "actors": {
+            "abby": {
+                "node": "Abby",
+                "presets": [{"find": "Young Shape"}],
+                "wearing": [{"add": {"sku": "12345"}, "key": "outfit"}],
+            }
+        },
+    }
+    seen = []
+
+    def fake_validate(rec, scene=None):
+        seen.append((rec, scene))
+        return _Result({"ok": True})
+
+    monkeypatch.setattr(recipe.dz_recipe, "validate", fake_validate)
+    assert await recipe.daz_recipe_validate(v2) == {"ok": True}
+    assert seen == [(v2, "SCENE")]
+
+
+def test_tool_docs_describe_v2():
+    doc = recipe.daz_recipe_validate.fn.__doc__ if hasattr(
+        recipe.daz_recipe_validate, "fn") else recipe.daz_recipe_validate.__doc__
+    assert "recipe_version" in doc and "find" in doc
 
 
 def test_compact_profile_includes_recipe_tools():

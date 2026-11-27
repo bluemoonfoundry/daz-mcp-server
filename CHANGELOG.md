@@ -3,6 +3,18 @@
 All notable changes to daz-mcp-server are documented here.
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [Unreleased]
+
+Requires dazpy 2.17.0 or later.
+
+### Added
+
+- Scene recipe v2 in the recipe tools: asset references (`path`, `product`,
+  `sku`, `find`, `file`, `type`, `resolved`), actor `node` take-over,
+  `presets` and `wearing`. `daz://recipe/schema` now serves the v2 schema
+  (`daz://recipe/schema/1` still serves v1). `find` uses the content browser
+  when `DAZ_BROWSER_URL` is set and reachable, otherwise Studio's search.
+
 ## [0.10.0] - 2026-11-24
 
 Requires dazpy 2.16.0 or later.
