@@ -80,12 +80,6 @@ async def test_scene_info_keeps_camel_case_shape(scene):
                  "lights": [], "totalNodes": 140}
 
 
-async def test_suggest_next_action_reads_scene_info(scene):
-    r = await utility.daz_suggest_next_action()
-    actions = [s["action"] for s in r["suggestions"]]
-    assert "daz_create_light" in actions and "daz_load_file" not in actions
-
-
 async def test_load_file_replace(scene):
     r = await scene_tools.daz_load_file("C:/scenes/a.duf", merge=False)
     assert scene.loads == [("C:/scenes/a.duf", True)]

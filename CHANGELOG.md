@@ -204,8 +204,23 @@ Requires dazpy 2.17.0 or later, for the new primitives these tools use
 - 102 registered scripts are removed (107 to 5), and a unit test fails if any
   registered script is no longer called by a tool.
 
+### Removed
+
+- The macro tools `daz_start_recording`, `daz_stop_recording`,
+  `daz_list_macros` and `daz_replay_macro`. They never recorded anything:
+  every macro was empty, and replay returned `success: true` without doing
+  anything. Also `daz_suggest_next_action`, which only checked for a figure,
+  a light and a camera; `daz_validate_scene` checks more. `expert` now lists
+  162 tools.
+
 ### Fixed
 
+- `daz_get_performance_stats` always returned `{}`, because nothing counted
+  calls. A middleware now records every tool call, and the tool returns
+  per-tool `calls`, `errors`, `total_ms`, `avg_ms` and `max_ms`.
+- `daz_explain_last_error` returned the same fixed list every time. It now
+  returns the session's most recent tool error (`tool`, `error_type`,
+  `message`, `arguments`, `at`) and the fixes for that kind of error.
 - **`daz_execute`'s `args` did not exist in the script.** The tool documented
   its `args` as an `args` variable, but the plugin passes arguments only through
   `getArguments()[0]`, so any script reading `args` failed with

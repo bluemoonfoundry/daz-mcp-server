@@ -134,7 +134,7 @@ Configure the server via environment variables:
 | `DAZ_TIMEOUT` | `30.0` | Request timeout in seconds (increase for long renders) |
 | `DAZ_API_TOKEN` | *(from file)* | API token for authentication |
 | `DAZ_CONTENT_BROWSER_URL` | `http://localhost:8080` | Content browser API URL (if using a separate content service) |
-| `DAZ_MCP_PROFILE` | `compact` | Model-facing surface: `compact` (10 workflow tools), `desktop` (compact plus 13 direct scripting and read-only tools, for Claude Desktop) or `expert` (all 167 registered tools) |
+| `DAZ_MCP_PROFILE` | `compact` | Model-facing surface: `compact` (10 workflow tools), `desktop` (compact plus 13 direct scripting and read-only tools, for Claude Desktop) or `expert` (all 162 registered tools) |
 
 ### Tool profiles
 
@@ -2855,105 +2855,6 @@ daz_create_scene("professional portrait", ["Genesis 9"])
 
 ---
 
-#### `daz_start_recording`
-Start recording a macro to capture sequence of operations.
-
-**Arguments:**
-- `macro_name` (string): Unique macro name (1-64 chars, letters/digits/hyphens/underscores)
-- `description` (string, optional): Macro description
-
-**Returns:**
-```json
-{
-  "success": true,
-  "macro_name": "portrait_setup",
-  "description": "Standard portrait lighting and framing",
-  "started_at": "2026-04-10T15:30:00",
-  "message": "Recording macro 'portrait_setup'. Call daz_stop_recording() when done."
-}
-```
-
-**Example:**
-```python
-# Start recording
-daz_start_recording("portrait_setup", "Standard portrait workflow")
-
-# Perform operations (these will be recorded)
-daz_apply_lighting_preset("three-point", "Genesis 9")
-daz_frame_shot("Camera 1", "Genesis 9", "medium-close-up")
-
-# Stop and save
-daz_stop_recording()
-```
-
----
-
-#### `daz_stop_recording`
-Stop recording current macro and save to library.
-
-**Returns:**
-```json
-{
-  "success": true,
-  "macro_name": "portrait_setup",
-  "operation_count": 2,
-  "saved_at": "2026-04-10T15:31:00",
-  "message": "Macro 'portrait_setup' saved with 2 operations."
-}
-```
-
----
-
-#### `daz_replay_macro`
-Replay a saved macro with optional parameter substitution.
-
-**Arguments:**
-- `macro_name` (string): Name of macro to replay
-- `parameters` (dict, optional): Parameter values for substitution
-
-**Returns:**
-```json
-{
-  "success": true,
-  "macro_name": "portrait_setup",
-  "results": [],
-  "successful_count": 2,
-  "failed_count": 0
-}
-```
-
-**Example:**
-```python
-# Replay for different character
-daz_replay_macro("portrait_setup", parameters={"subject": "Alice"})
-```
-
-**Note:** Parameter substitution not yet implemented in Phase 1 - placeholder for future.
-
----
-
-#### `daz_list_macros`
-List all saved macros in the library.
-
-**Returns:**
-```json
-{
-  "macros": [
-    {
-      "name": "portrait_setup",
-      "description": "Standard portrait workflow",
-      "operation_count": 2,
-      "saved_at": "2026-04-10T15:31:00"
-    }
-  ],
-  "count": 1
-}
-```
-
-**Note:** Macros are session-only (lost when MCP server restarts).
-
----
-
 ### 🎨 Material Tools
 
 #### `daz_list_materials`
@@ -3164,20 +3065,17 @@ Automatically detect and fix common scene quality issues (lighting gaps, camera 
 
 ---
 
-#### `daz_suggest_next_action`
-Suggest the next logical action based on current scene state.
-
-**Returns:** `{"suggestions": [{"action": "...", "reason": "...", "tool": "..."}]}`
-
----
-
 #### `daz_get_performance_stats`
-Get MCP server performance metrics (request counts, latencies, tool call frequencies).
+Tool call statistics for this MCP server session, recorded by a middleware on every call.
+
+**Returns:** `{"tools": {"<tool>": {"calls", "errors", "total_ms", "avg_ms", "max_ms"}}, "total_calls": N, "total_errors": N}`
 
 ---
 
 #### `daz_explain_last_error`
-Get a human-readable explanation of the last error with suggested fixes.
+The most recent tool error in this session (tool, error type, message, arguments, time) with fixes for that kind of error. Before any error, `last_error` is null and `hints` lists the common errors.
+
+**Returns:** `{"last_error": {...} | null, "hints": ["..."]}`
 
 ---
 
@@ -3796,7 +3694,7 @@ daz-mcp-server/
 │       ├── render.py          # Sync/async render, batch, animation export (17 tools)
 │       ├── animation.py       # Keyframes, timeline, frame range (7 tools)
 │       ├── material.py        # Materials: list, get, set, presets, copy (6 tools)
-│       ├── utility.py         # Status, execute, docs, validate, macros (20 tools)
+│       ├── utility.py         # Status, execute, docs, validate, session stats (15 tools)
 │       ├── content.py         # Content browser, search, compatibility (8 tools)
 │       ├── cinematic.py       # Shot sequences, camera paths, storyboard (23 tools)
 │       ├── hair.py            # Strand-based hair (2 tools)
@@ -3811,7 +3709,7 @@ daz-mcp-server/
 
 ### Architecture
 
-- **FastMCP 3.x server** with stdio transport (167 tools registered; 10 visible in the default `compact` profile, 23 in `desktop`)
+- **FastMCP 3.x server** with stdio transport (162 tools registered; 10 visible in the default `compact` profile, 23 in `desktop`)
 - **Profiled model boundary**: the compact facade is selected by default; `DAZ_MCP_PROFILE=desktop` adds direct scripting for clients without access to the DAZ machine's files; `DAZ_MCP_PROFILE=expert` reveals every detailed tool without changing their implementation
 - **Modular tool package**: focused modules under `tools/`; decorators fire at import time via the shared `mcp` instance from `_mcp.py`, avoiding circular imports with `server.py`
 - **One DazScriptServer protocol client**: `dazpy.aio.AsyncDazClient` owns endpoint URLs, wire payloads, timeout policy, request lifecycle, SSE streams, and typed errors
