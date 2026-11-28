@@ -519,7 +519,7 @@ async def daz_apply_camera_angle(
 # Light listing / creation (dazpy-migrated + registered script)
 # ---------------------------------------------------------------------------
 
-@mcp.tool()
+@mcp.tool(tags={"desktop"})
 async def daz_list_lights() -> dict[str, Any]:
     """List all lights currently in the scene.
 
@@ -604,7 +604,7 @@ async def daz_create_light(
 # Camera listing / creation
 # ---------------------------------------------------------------------------
 
-@mcp.tool()
+@mcp.tool(tags={"desktop"})
 async def daz_list_cameras() -> dict[str, Any]:
     """List all cameras currently in the scene.
 

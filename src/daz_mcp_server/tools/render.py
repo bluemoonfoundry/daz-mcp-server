@@ -87,7 +87,7 @@ async def daz_render_with_camera(
     return await _execute_by_id("vangard-render-with-camera", args)
 
 
-@mcp.tool()
+@mcp.tool(tags={"desktop"})
 async def daz_get_render_settings() -> dict[str, Any]:
     """Get current render settings and configuration.
 

@@ -8,7 +8,7 @@ from .._client import get_scene, run_dazpy
 from .._errors import handle_dazpy_error
 
 
-@mcp.tool()
+@mcp.tool(tags={"desktop"})
 async def daz_get_node(node_label: str) -> dict[str, Any]:
     """Return all numeric properties of a scene node.
 
@@ -32,7 +32,7 @@ async def daz_get_node(node_label: str) -> dict[str, Any]:
     return await _execute_by_id("vangard-get-node", {"nodeLabel": node_label})
 
 
-@mcp.tool()
+@mcp.tool(tags={"desktop"})
 async def daz_find_nodes(query: str) -> dict[str, Any]:
     """List every scene node whose label or internal name equals ``query``.
 

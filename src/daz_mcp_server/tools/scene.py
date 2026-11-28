@@ -333,7 +333,7 @@ async def daz_get_parent(node_label: str) -> dict[str, Any]:
 # Viewport selection
 # ---------------------------------------------------------------------------
 
-@mcp.tool()
+@mcp.tool(tags={"desktop"})
 async def daz_get_selected_nodes() -> dict[str, Any]:
     """Return the nodes currently selected in the DAZ Studio viewport.
 
