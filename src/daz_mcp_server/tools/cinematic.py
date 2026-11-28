@@ -15,10 +15,13 @@ from dazpy.math3 import Vec3
 from dazpy.shots import (CameraKeyframe, Keyframed, Lens, Placement, Sequence, Shot, Storyboard,
                          apply_shot)
 
-from .._mcp import mcp, _execute_by_id
+from .._mcp import mcp
 from .._client import get_scene
+from .._errors import run_tool
+from .. import _cinematic_lighting as _lighting
+from .. import _cinematic_staging as _staging
 from .. import _shots
-from .._emotions import _EMOTION_DEFINITIONS
+from .._emotions import AXIS_BY_PROPERTY, _EMOTION_DEFINITIONS, resolve_bone
 
 _VALID_SHOT_TYPES = frozenset({
     "extreme-close-up", "close-up", "medium-close-up", "medium-shot",
@@ -295,11 +298,7 @@ async def daz_animate_conversation(
                     f"Valid: {', '.join(valid_emotions)}"
                 )
 
-    return await _execute_by_id("vangard-animate-conversation", {
-        "char1Label": char1_label,
-        "char2Label": char2_label,
-        "dialogueBeats": beats,
-    })
+    return await run_tool(lambda: _staging.conversation(char1_label, char2_label, beats))
 
 
 @mcp.tool()
@@ -441,11 +440,7 @@ async def daz_create_scene(
     if len(chars) > 10:
         raise ToolError("Too many characters (max 10)")
 
-    result = await _execute_by_id("vangard-create-scene", {
-        "description": description,
-        "characters": chars,
-    })
-    result = dict(result or {})
+    result = await run_tool(lambda: _staging.scene_template(description, chars))
     scene_type = result.get("sceneType", "generic")
 
     def _cameras() -> dict[str, Any]:
@@ -883,12 +878,11 @@ async def daz_create_character_path(
             f"Valid options: {', '.join(valid_styles)}"
         )
 
-    return await _execute_by_id("vangard-create-character-path", {
-        "characterLabel": character_label,
-        "waypoints": waypoints,
-        "pathType": path_type,
-        "walkingStyle": walking_style,
-    })
+    result = await run_tool(lambda: _staging.character_path(character_label, waypoints))
+    result.update({"pathType": path_type, "walkingStyle": walking_style,
+                   "note": "Character will move along path. Walking cycle animation not "
+                           "automatically applied."})
+    return result
 
 
 @mcp.tool()
@@ -1008,13 +1002,8 @@ async def daz_arrange_characters(
     if "x" not in center_pos or "y" not in center_pos or "z" not in center_pos:
         raise ToolError("center_position must have x, y, z fields")
 
-    return await _execute_by_id("vangard-arrange-characters", {
-        "characters": characters,
-        "arrangement": arrangement,
-        "spacing": spacing,
-        "facing": facing,
-        "centerPosition": center_pos,
-    })
+    return await run_tool(lambda: _staging.arrange(characters, arrangement, spacing, facing,
+                                                   center_pos))
 
 
 @mcp.tool()
@@ -1130,12 +1119,10 @@ async def daz_choreograph_action(
     if duration < 10 or duration > 1000:
         raise ToolError("duration must be between 10 and 1000 frames")
 
-    return await _execute_by_id("vangard-choreograph-action", {
-        "actionType": action_type,
-        "characters": characters,
-        "startFrame": start_frame,
-        "duration": duration,
-    })
+    positions = await run_tool(lambda: _staging.choreograph(action_type, characters))
+    return {"actionType": action_type, "characters": characters[:2], "positions": positions,
+            "frameRange": {"start": start_frame, "end": start_frame + duration},
+            "suggestions": list(_staging.ACTION_SUGGESTIONS[action_type])}
 
 
 # ---------------------------------------------------------------------------
@@ -1607,16 +1594,15 @@ async def daz_animate_light(
     if pulse_count < 1:
         raise ToolError("pulse_count must be at least 1")
 
-    return await _execute_by_id("vangard-animate-light", {
-        "lightLabel": light_label,
-        "movementType": movement_type,
-        "startFrame": start_frame,
-        "endFrame": end_frame,
-        "intensity": intensity,
-        "flickerAmount": flicker_amount,
-        "strobeInterval": strobe_interval,
-        "pulseCount": pulse_count,
-    })
+    result = await run_tool(lambda: _lighting.animate_light(
+        light_label, movement_type, start_frame, end_frame, intensity, flicker_amount,
+        strobe_interval, pulse_count))
+    result["suggestions"] = [
+        "Use daz_render_animation to render the lighting animation",
+        "Combine with daz_animate_camera_movement for cinematic effect",
+        "Layer multiple lights with offset timing for rich atmosphere",
+    ]
+    return result
 
 
 @mcp.tool()
@@ -1702,13 +1688,14 @@ async def daz_create_light_sequence(
     if start_frame < 0 or end_frame <= start_frame:
         raise ToolError("start_frame must be >= 0 and end_frame must be > start_frame")
 
-    return await _execute_by_id("vangard-create-light-sequence", {
-        "sequenceType": sequence_type,
-        "subjectLabel": subject_label,
-        "startFrame": start_frame,
-        "endFrame": end_frame,
-        "createLights": create_lights,
-    })
+    result = await run_tool(lambda: _lighting.light_sequence(
+        sequence_type, start_frame, end_frame, create_lights))
+    result["suggestions"] = [
+        "Position lights in scene before rendering",
+        "Use daz_render_animation to render the full sequence",
+        "Adjust Flux values with daz_set_keyframe to fine-tune timing",
+    ]
+    return result
 
 
 # ---------------------------------------------------------------------------
@@ -2381,10 +2368,10 @@ async def daz_set_scene_atmosphere(
 
     Args:
         environment_mode: Sets the overall lighting environment:
-            - 0 = Sun-Sky Only  (outdoor sky, no HDRI dome)
-            - 1 = Dome Only     (HDRI dome image, no sun-sky)
-            - 2 = Sun-Sky + Dome (combined)
-            - 3 = Scene Only    (use only scene lights — disables dome/sun entirely)
+            - 0 = Dome and Scene (HDRI dome plus scene lights; Studio's default)
+            - 1 = Dome Only      (HDRI dome image, scene lights ignored)
+            - 2 = Sun-Sky Only   (procedural sun and sky)
+            - 3 = Scene Only     (use only scene lights — disables dome/sun entirely)
             Mode 3 is required when using lighting presets or the daz_apply_visual_style
             tool so that scene lights are not washed out by ambient dome light.
         environment_intensity: Brightness of the HDRI dome/sun-sky (0.0–10.0).
@@ -2435,7 +2422,7 @@ async def daz_set_scene_atmosphere(
     if environment_mode is not None and environment_mode not in _VALID_ENV_MODES:
         raise ToolError(
             f"Invalid environment_mode {environment_mode}. "
-            "Valid: 0 (Sun-Sky Only), 1 (Dome Only), 2 (Sun-Sky+Dome), 3 (Scene Only)"
+            "Valid: 0 (Dome and Scene), 1 (Dome Only), 2 (Sun-Sky Only), 3 (Scene Only)"
         )
     if environment_intensity is not None and not 0.0 <= environment_intensity <= 10.0:
         raise ToolError("environment_intensity must be between 0.0 and 10.0")
@@ -2446,14 +2433,16 @@ async def daz_set_scene_atmosphere(
     if sun_light_intensity is not None and not 0.0 <= sun_light_intensity <= 10.0:
         raise ToolError("sun_light_intensity must be between 0.0 and 10.0")
 
-    return await _execute_by_id("vangard-set-scene-atmosphere", {
-        "environmentMode": environment_mode,
-        "environmentIntensity": environment_intensity,
-        "drawDome": draw_dome,
-        "domeScale": dome_scale,
-        "domeRotation": dome_rotation,
-        "sunLightIntensity": sun_light_intensity,
-    })
+    result = await run_tool(lambda: _lighting.scene_atmosphere(
+        environment_mode, environment_intensity, draw_dome, dome_scale, dome_rotation,
+        sun_light_intensity))
+    result["suggestions"] = [
+        "Mode 3 (Scene Only) works best with daz_apply_lighting_preset presets",
+        "Mode 1 (Dome Only) requires loading an HDRI map first",
+        "Rotate dome to match light direction with key lights",
+        "Lower environmentIntensity (0.1-0.5) to blend HDRI with scene lights",
+    ]
+    return result
 
 
 @mcp.tool()
@@ -2519,11 +2508,14 @@ async def daz_apply_visual_style(
     if not 0.1 <= intensity <= 5.0:
         raise ToolError("intensity must be between 0.1 and 5.0")
 
-    return await _execute_by_id("vangard-apply-visual-style", {
-        "styleName": style_name,
-        "subjectLabel": subject_label,
-        "intensity": intensity,
-    })
+    result = await run_tool(lambda: _lighting.visual_style(style_name, subject_label, intensity))
+    result["suggestions"] = [
+        "Adjust intensity (0.5–2.0) to scale the whole look brighter or darker",
+        "Fine-tune individual lights with daz_set_property on Style_Key/Fill/Rim",
+        "Combine with daz_set_scene_atmosphere to control the environment dome",
+        "Use daz_animate_light on Style_Key for dynamic lighting within the style",
+    ]
+    return result
 
 
 # ---------------------------------------------------------------------------
@@ -2608,10 +2600,7 @@ async def daz_export_node_config(
             )
 
     # Read from DAZ Studio
-    result = await _execute_by_id("vangard-read-node-config", {
-        "nodeLabels": node_labels or [],
-        "includeTypes": include_types,
-    })
+    result = await run_tool(lambda: _read_node_config(node_labels or [], include_types))
 
     # Write to disk (Python side handles file I/O)
     config_data = result.get("config", {})
@@ -2738,11 +2727,7 @@ async def daz_import_node_config(
         raise ToolError("No nodes to import (config is empty after filtering)")
 
     # Apply to DAZ Studio
-    result = await _execute_by_id("vangard-write-node-config", {
-        "config": config,
-        "skipMissing": skip_missing,
-        "scaleTransforms": scale_transforms,
-    })
+    result = await run_tool(lambda: _write_node_config(config, skip_missing, scale_transforms))
 
     return {
         "inputPath": str(input_file),
@@ -2863,18 +2848,10 @@ async def daz_time_expression(
             f"baseline_frame ({baseline_frame}) must be before ease_in_start ({ease_in_start})"
         )
 
-    definition = _EMOTION_DEFINITIONS[emotion]
-    return await _execute_by_id("vangard-time-expression", {
-        "nodeLabel":        character_label,
-        "morphList":        definition["morphs"],
-        "bodyAdjustments":  definition["body"],
-        "intensity":        intensity,
-        "easeInStart":      ease_in_start,
-        "holdStart":        hold_start,
-        "holdEnd":          hold_end,
-        "easeOutEnd":       ease_out_end if ease_out_frames > 0 else hold_end,
-        "baselineFrame":    baseline_frame,
-    })
+    frames = (ease_in_start, hold_start, hold_end,
+              ease_out_end if ease_out_frames > 0 else hold_end)
+    return await run_tool(lambda: _time_expression(
+        character_label, emotion, intensity, frames, baseline_frame))
 
 
 @mcp.tool()
@@ -3017,19 +2994,13 @@ async def daz_sync_character_beats(
         hold_end      = peak_frame + char_hold
         ease_out_end  = hold_end + char_ease_out
 
-        definition = _EMOTION_DEFINITIONS[emotion]
+        frames = (ease_in_start, hold_start, hold_end,
+                  ease_out_end if char_ease_out > 0 else hold_end)
         try:
-            char_result = await _execute_by_id("vangard-time-expression", {
-                "nodeLabel":       label,
-                "morphList":       definition["morphs"],
-                "bodyAdjustments": definition["body"],
-                "intensity":       char_intensity,
-                "easeInStart":     ease_in_start,
-                "holdStart":       hold_start,
-                "holdEnd":         hold_end,
-                "easeOutEnd":      ease_out_end if char_ease_out > 0 else hold_end,
-                "baselineFrame":   None,
-            })
+            char_result = await run_tool(lambda label=label, emotion=emotion,  # noqa: E731
+                                         intensity=char_intensity, frames=frames:
+                                         _time_expression(label, emotion, intensity, frames,
+                                                          None))
             total_keyframes += char_result.get("keyframesSet", 0)
             results.append({"character": label, "status": "ok", "detail": char_result})
         except Exception as e:
@@ -3058,3 +3029,182 @@ async def daz_sync_character_beats(
             "Call daz_set_frame_range to extend timeline to cover all beat frames",
         ],
     }
+
+
+# --- node config (export/import) on dazpy ----------------------------------
+
+_CFG_TRANSFORMS = ("XTranslate", "YTranslate", "ZTranslate", "XRotate", "YRotate", "ZRotate",
+                   "XScale", "YScale", "ZScale", "Scale")
+_CFG_LIGHT = ("Flux", "Shadow Softness", "Spread Angle", "Photometric Mode")
+_CFG_CAMERA = ("FocalLength", "Focal Distance", "Focus Distance", "F/Stop", "Depth of Field",
+               "DOF Active")
+
+
+def _skeleton_nodes(scene: Any) -> list:
+    return scene.skeletons()
+
+
+def _read_node_config(node_labels: list[str], include_types: list[str]) -> dict:
+    """Capture name-keyed numeric properties per node (one call per node)."""
+    scene = get_scene()
+    if node_labels:
+        nodes = []
+        for label in node_labels:
+            try:
+                nodes.append(scene.resolve_node(label))
+            except NodeNotFoundError:
+                continue
+    else:
+        nodes = list(_skeleton_nodes(scene))
+        nodes += [scene.resolve_node(str(c.element_id)) for c in scene.camera_info()]
+        nodes += [scene.resolve_node(str(li.element_id)) for li in scene.light_info()]
+    wanted = set()
+    if "transforms" in include_types:
+        wanted |= set(_CFG_TRANSFORMS)
+    if "lights" in include_types:
+        wanted |= set(_CFG_LIGHT)
+    if "cameras" in include_types:
+        wanted |= set(_CFG_CAMERA)
+    config: dict[str, dict] = {}
+    summary = {"nodes": 0, "properties": 0, "morphs": 0}
+    for node in nodes:
+        info = node.describe()
+        data: dict[str, Any] = {"_type": info.type}
+        others = {}
+        for d in node.property_details("numeric"):
+            if d.name in wanted:
+                data[d.name] = d.value
+            elif d.name not in _CFG_TRANSFORMS + _CFG_LIGHT + _CFG_CAMERA and d.value:
+                others[d.name] = d.value
+        if "morphs" in include_types:
+            data.update(others)
+            summary["morphs"] += len(others)
+        config[info.label] = data
+        summary["nodes"] += 1
+        summary["properties"] += len(data) - 1
+    return {"config": config, "summary": summary}
+
+
+def _write_node_config(config: dict, skip_missing: bool, scale: float) -> dict:
+    """Apply a node config in one dazpy batch; per-node ok/partial/skipped/error."""
+    ops, owners = [], []
+    for label, data in config.items():
+        for name, value in data.items():
+            if name == "_type":
+                continue
+            if scale != 1.0 and name in ("XTranslate", "YTranslate", "ZTranslate"):
+                value = value * scale
+            ops.append((label, name, value))
+            owners.append(label)
+    results = get_scene().set_numeric_properties(ops) if ops else []
+    per_node: dict[str, dict] = {label: {"node": label, "applied": [], "failed": [],
+                                         "missing": False} for label in config}
+    for (label, name, _value), r in zip(ops, results):
+        entry = per_node[label]
+        if r.ok:
+            entry["applied"].append(name)
+        elif (r.error or "").startswith("Node not found"):
+            entry["missing"] = True
+        else:
+            entry["failed"].append({"property": name, "error": r.error})
+    return _summarize_node_writes(per_node, skip_missing)
+
+
+def _summarize_node_writes(per_node: dict[str, dict], skip_missing: bool) -> dict:
+    out, counts = [], {"ok": 0, "bad": 0, "skipped": 0}
+    for label, e in per_node.items():
+        if e["missing"]:
+            key = "skipped" if skip_missing else "bad"
+            counts[key] += 1
+            out.append({"node": label, "status": "skipped" if skip_missing else "error",
+                        "reason": "not found in scene"})
+            continue
+        status = "ok" if not e["failed"] else ("partial" if e["applied"] else "error")
+        counts["bad" if status == "error" else "ok"] += 1
+        out.append({"node": label, "status": status, "applied": e["applied"],
+                    "failed": e["failed"]})
+    return {"results": out, "successCount": counts["ok"], "failureCount": counts["bad"],
+            "skippedCount": counts["skipped"], "totalNodes": len(per_node)}
+
+
+# --- timed expressions on dazpy frame-based keys -----------------------------
+
+def _expression_keys(peak: float, frames: tuple[int, int, int, int],
+                     baseline: int | None) -> list[tuple[int, float]]:
+    """0 -> peak -> hold -> 0 keys; a later key at the same frame wins."""
+    ease_in, hold_start, hold_end, ease_out = frames
+    keys: dict[int, float] = {}
+    if baseline is not None and baseline < ease_in:
+        keys[baseline] = 0.0
+    keys[ease_in] = 0.0
+    keys[max(ease_in, hold_start)] = peak
+    if hold_end > hold_start:
+        keys[hold_end] = peak
+    if ease_out > hold_end:
+        keys[ease_out] = 0.0
+    return sorted(keys.items())
+
+
+def _key_expression_face(skel: Any, definition: dict, intensity: float,
+                         frames: tuple[int, int, int, int],
+                         baseline: int | None) -> tuple[list, list, int]:
+    """Key the full-face controller, else the feature dials. Returns
+    (applied, not_found, keys written)."""
+    face = definition.get("face", [])
+    if face:
+        keys = _expression_keys(intensity, frames, baseline)
+        r = skel.key_numeric_candidates([(face, keys)])[0]
+        if r.found:
+            return [{"morph": r.matched, "peakValue": intensity}], [], len(keys)
+    applied, not_found, keyed = [], [], 0
+    slots = [(m["names"], m["value"] * intensity) for m in definition["morphs"]]
+    if not slots:
+        return applied, not_found, keyed
+    keyed_slots = [(names, _expression_keys(peak, frames, baseline)) for names, peak in slots]
+    for (names, peak), r in zip(slots, skel.key_numeric_candidates(keyed_slots)):
+        if r.found:
+            applied.append({"morph": r.matched, "peakValue": peak})
+            keyed += len(_expression_keys(peak, frames, baseline))
+        else:
+            not_found.append(names[0] if names else "unknown")
+    return applied, not_found, keyed
+
+
+def _key_expression_body(skel: Any, adjustments: list[dict], intensity: float,
+                         frames: tuple[int, int, int, int],
+                         baseline: int | None) -> tuple[list, list, int]:
+    """Key body bones (roles resolved per generation). Returns
+    (applied, missing roles, keys written)."""
+    bones = set(skel.bone_names())
+    body, missing, data = [], [], {}
+    for adj in adjustments:
+        bone = resolve_bone(adj["bone"], bones)
+        if bone is None:
+            missing.append(adj["bone"])
+            continue
+        peak = adj["value"] * intensity
+        data.setdefault(bone, {})[AXIS_BY_PROPERTY[adj["property"]]] = _expression_keys(
+            peak, frames, baseline)
+        body.append({"bone": bone, "property": adj["property"], "peakValue": peak})
+    if data:
+        skel.key_bone_axes(data)
+    return body, missing, sum(len(k) for axes in data.values() for k in axes.values())
+
+
+def _time_expression(label: str, emotion: str, intensity: float,
+                     frames: tuple[int, int, int, int], baseline: int | None) -> dict:
+    """Key *emotion* on *label*: the stock full-face controller when the figure
+    has one (else the feature dials), plus body bones resolved per generation.
+    Frames are timeline frames (the old script used them as DzTime ticks)."""
+    skel = get_scene().resolve_node(label)
+    definition = _EMOTION_DEFINITIONS[emotion]
+    applied, not_found, face_keys = _key_expression_face(skel, definition, intensity, frames,
+                                                         baseline)
+    body, body_missing, body_keys = _key_expression_body(skel, definition["body"], intensity,
+                                                         frames, baseline)
+    return {"character": skel.describe().label, "easeInStart": frames[0],
+            "holdStart": frames[1], "holdEnd": frames[2], "easeOutEnd": frames[3],
+            "intensity": intensity, "appliedMorphs": applied, "bodyAdjustments": body,
+            "notFound": not_found, "bodyNotFound": body_missing,
+            "keyframesSet": face_keys + body_keys,
+            "durationFrames": frames[3] - frames[0], "holdFrames": frames[2] - frames[1]}

@@ -8,17 +8,18 @@ from __future__ import annotations
 import datetime as _dt
 from typing import Any
 
+from dazpy import DazSceneState
 from fastmcp.exceptions import ToolError
 
 from .._mcp import mcp, _execute_by_id
 from .._client import get_scene, run_dazpy
-from .._errors import handle_dazpy_error
+from .._errors import handle_dazpy_error, run_tool
 
 # ---------------------------------------------------------------------------
 # In-memory checkpoint store (cleared on server restart)
 # ---------------------------------------------------------------------------
 
-_CHECKPOINTS: dict[str, dict] = {}
+_CHECKPOINTS: dict[str, dict[str, Any]] = {}
 
 
 # ---------------------------------------------------------------------------
@@ -41,7 +42,18 @@ async def daz_scene_info() -> dict[str, Any]:
       - lights: list of {name, label, type} for all lights
       - totalNodes: total node count in the scene
     """
-    return await _execute_by_id("vangard-scene-info")
+    def _run() -> dict[str, Any]:
+        o = get_scene().overview()
+        return {
+            "sceneFile": o.get("scene_file", ""),
+            "selectedNode": o.get("selected_node"),
+            "figures": o.get("figures", []),
+            "cameras": o.get("cameras", []),
+            "lights": o.get("lights", []),
+            "totalNodes": o.get("total_nodes", 0),
+        }
+
+    return await run_tool(_run)
 
 
 @mcp.tool()
@@ -77,20 +89,19 @@ async def daz_load_file(
             "script."
         )
     if file_path.lower().endswith(".obj"):
+        # Stays a registered script: it drives DzObjImporter with RunSilent and
+        # unit scale (no import-options dialog); dazpy has no OBJ importer.
         return await _execute_by_id(
             "vangard-import-obj",
             {"filePath": file_path, "scaleFactor": 1.0},
         )
     if merge:
-        try:
-            await run_dazpy(lambda: get_scene().load(file_path))
-            return {"success": True, "file": file_path}
-        except ToolError:
-            raise
-        except Exception as e:
-            handle_dazpy_error(e)
-    # merge=False: replace mode — fall back to the registered DazScript
-    return await _execute_by_id("vangard-load-file", {"filePath": file_path, "merge": False})
+        await run_tool(lambda: get_scene().load(file_path))
+    else:
+        # Clear-then-merge: never DzScene.OpenNew, whose "save changes?"
+        # prompt would block the script server.
+        await run_tool(lambda: get_scene().load(file_path, replace=True))
+    return {"success": True, "file": file_path}
 
 
 @mcp.tool()
@@ -215,12 +226,23 @@ async def daz_get_node_hierarchy(
         # Get prop hierarchy
         result = daz_get_node_hierarchy("Sword", max_depth=5)
     """
-    args: dict[str, Any] = {}
-    if node_label is not None:
-        args["nodeLabel"] = node_label
-    if max_depth is not None:
-        args["maxDepth"] = max_depth
-    return await _execute_by_id("vangard-get-node-hierarchy", args or None)
+    if not node_label:
+        raise ToolError("node_label is required")
+    depth = 10 if max_depth is None else max_depth
+
+    def _camel(entry: dict) -> dict:
+        out = {k: entry[k] for k in ("label", "name", "type")}
+        out["elementID"] = entry.get("element_id")
+        if entry.get("children"):
+            out["children"] = [_camel(c) for c in entry["children"]]
+        return out
+
+    def _run() -> dict[str, Any]:
+        r = get_scene().resolve_node(node_label).hierarchy(max_depth=depth)
+        return {"node": r["node"], "hierarchy": _camel(r["hierarchy"]),
+                "totalDescendants": r["total_descendants"]}
+
+    return await run_tool(_run)
 
 
 @mcp.tool()
@@ -375,9 +397,11 @@ async def daz_get_selected_nodes() -> dict[str, Any]:
 async def daz_save_scene_state(checkpoint_name: str) -> dict[str, Any]:
     """Save current scene state as a named in-memory checkpoint.
 
-    Captures transforms (position, rotation, scale), active morphs, and light
-    properties for all skeletons, cameras, and lights in the scene. Use this
-    before experimental changes so you can restore with daz_restore_scene_state.
+    Captures every figure's pose (bone rotations, morphs and node properties,
+    as raw pre-ERC values) and fit-to target, plus camera and light transforms
+    and light Flux / Shadow Softness / Spread Angle (dazpy DazSceneState).
+    Use this before experimental changes so you can restore with
+    daz_restore_scene_state.
 
     Args:
         checkpoint_name: Unique name for this checkpoint (e.g. "before_lighting_test").
@@ -390,22 +414,12 @@ async def daz_save_scene_state(checkpoint_name: str) -> dict[str, Any]:
         Checkpoints are stored in the MCP server process memory and are lost if
         the server is restarted. They do not save materials, geometry, or HDR domes.
     """
-    result = await _execute_by_id("vangard-save-scene-state", {
-        "checkpointName": checkpoint_name,
-    })
-
-    now = _dt.datetime.utcnow().isoformat() + "Z"
-    _CHECKPOINTS[checkpoint_name] = {
-        "nodes": result.get("nodes", []),
-        "saved_at": now,
-        "node_count": result.get("node_count", 0),
-    }
-
-    return {
-        "checkpoint_name": checkpoint_name,
-        "node_count": result.get("node_count", 0),
-        "saved_at": now,
-    }
+    state = await run_tool(lambda: DazSceneState.capture(get_scene()))
+    node_count = (len(state.skeleton_poses) + len(state.camera_transforms)
+                  + len(state.light_transforms))
+    now = _dt.datetime.now(_dt.timezone.utc).isoformat().replace("+00:00", "Z")
+    _CHECKPOINTS[checkpoint_name] = {"state": state, "saved_at": now, "node_count": node_count}
+    return {"checkpoint_name": checkpoint_name, "node_count": node_count, "saved_at": now}
 
 
 @mcp.tool()
@@ -420,7 +434,9 @@ async def daz_restore_scene_state(checkpoint_name: str) -> dict[str, Any]:
         checkpoint_name: Name of the checkpoint to restore.
 
     Returns:
-        Dict with checkpoint_name, restored (list of node labels), and errors.
+        Dict with checkpoint_name, restored (internal node names, figures
+        verified by read-back), skipped (nodes gone since the checkpoint),
+        errors, and complete (True only if nothing was skipped or failed).
 
     Raises:
         ToolError: If no checkpoint with the given name exists.
@@ -434,11 +450,15 @@ async def daz_restore_scene_state(checkpoint_name: str) -> dict[str, Any]:
             f"Checkpoint '{checkpoint_name}' not found. Available: {avail_str}"
         )
 
-    cp = _CHECKPOINTS[checkpoint_name]
-    return await _execute_by_id("vangard-restore-scene-state", {
-        "checkpointName": checkpoint_name,
-        "nodes": cp["nodes"],
-    })
+    state = _CHECKPOINTS[checkpoint_name]["state"]
+    report = await run_tool(lambda: state.apply(get_scene()))
+    return {
+        "checkpoint_name": checkpoint_name,
+        "restored": report.get("restored", []),
+        "skipped": report.get("skipped", []),
+        "errors": report.get("errors", []),
+        "complete": report.get("complete", not report.get("errors")),
+    }
 
 
 @mcp.tool()

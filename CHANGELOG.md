@@ -5,7 +5,8 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
-Requires dazpy 2.17.0 or later.
+Requires dazpy 2.17.0 or later, for the new primitives these tools use
+(node references, property search, material, keyframe and pose helpers).
 
 ### Added
 
@@ -26,8 +27,206 @@ Requires dazpy 2.17.0 or later.
   (`daz://recipe/schema/1` still serves v1). `find` uses the content browser
   when `DAZ_BROWSER_URL` is set and reachable, otherwise Studio's search.
 
+### Changed
+
+- `daz_set_emotion`, `daz_set_body_language` and `daz_direct_gaze` are built
+  on dazpy primitives and send no DazScript of their own. The registered
+  `vangard-set-emotion` script is removed.
+- `daz_set_emotion` uses the figure's stock full-face expression controller
+  (Genesis 9 `facs_ctrl_Happy`, Genesis 8 `eCTRLHappy_HD`, ...) when it has
+  one, otherwise the per-feature dials, and resets the other emotions' face
+  controllers first so expressions don't stack. `neutral` clears them. The
+  result adds `body_not_found`.
+- `daz_direct_gaze` with `direction="character"` aims at the target figure's
+  head instead of its root (feet). The result adds `requested`, and
+  `applied` now reports the rotation the head kept after its joint limits.
+- Node tools use dazpy and accept an elementID or `Parent/Label` path
+  anywhere a node label is taken. An ambiguous label is an error that lists
+  the candidates' elementIDs. Covered: `daz_get_node`, `daz_find_nodes`,
+  `daz_set_property`, `daz_delete_node`, `daz_set_parent`, `daz_set_morph`,
+  `daz_list_morphs`, `daz_search_morphs`, `daz_get_node_hierarchy` and the
+  material and keyframe tools.
+  - `daz_get_node` also returns modifier-stack properties (morph dials). The
+    old script meant to, but its dedupe kept only one, because every morph
+    channel is named `Value`.
+  - Property and morph names match case-insensitively.
+  - `daz_set_parent(node, "Scene")` un-parents the node. It used to fail with
+    "Node not found: Scene".
+- `daz_scene_info`, `daz_load_file(merge=False)` and the checkpoint tools use
+  dazpy.
+  - Replace-mode load clears the scene and then merges, so Studio's "save
+    changes?" prompt can't block the server.
+  - `daz_save_scene_state`/`daz_restore_scene_state` use `DazSceneState`.
+    They now restore bone rotations and fit-to targets too, check each
+    figure after restoring, and report `skipped` and `complete`. `restored`
+    lists internal node names.
+- The material tools use dazpy. A missing-zone error lists the available
+  zones, and `daz_set_material_property` reports the value Studio kept.
+- `daz_batch_set_properties`, `daz_inspect_properties`,
+  `daz_get_property_metadata`, `daz_validate_scene` and
+  `daz_auto_improve_scene` use dazpy. Batch set is still one Studio call.
+  `is_animatable` is now right (it was always `false`: the old scripts
+  called a non-existent `isAnimatable()`).
+- `daz_validate_scene` takes lighting and framing from dazpy's
+  `DazScene.check`. Changes:
+  - It no longer reports collisions between a figure and its own eyelashes,
+    tear or mouth (it now checks top-level figures only).
+  - It no longer misreads the environment from `Scene.getNode(1)`.
+  - Issue types for lighting/framing are dazpy check codes (`no_light`,
+    `subject_out_of_frame`, ...) and the raw findings are in `findings`.
+  - `summary.environment_lighting` is replaced by `summary.lit`.
+  - `daz_auto_improve_scene` now adds the missing light. It looked for an
+    issue type validate never emitted.
+- `daz_look_at_point`, `daz_look_at_character`, `daz_reach_toward` and
+  `daz_reset_pose` use dazpy (`DazSkeleton.look_at`, `hand_to_target`,
+  `set_bone_rotations`).
+  - Look-at aims in each bone's own frame. It used to turn heads down when
+    the target was up, ignore the figure's facing, and push Genesis 8/9
+    eyes (oriented 180° about Z) the wrong way. Genesis 9's upper chest is
+    `spine4`, not `spine3`.
+  - Results add `rotations` (the angles each bone kept). `rotatedBones`
+    lists internal bone names.
+  - `daz_reach_toward` reports `converged`, `finalError` and `iterations`
+    instead of `targetDistance`.
+- The camera and light tools use dazpy: set active camera, orbit, frame,
+  camera presets, list/create lights and cameras, lighting presets, mood
+  and time of day.
+  - `daz_set_active_camera` also accepts Studio's built-in view cameras
+    ("Perspective View", ...).
+  - `daz_set_mood_lighting` and `daz_apply_time_of_day` now set the light
+    color. They wrote to a "Diffuse Color" property that Studio lights
+    don't have.
+  - `daz_apply_lighting_preset` sets Scene Only on the real environment
+    node (on Studio 4 and 6) instead of on whatever node was second in the
+    scene. When no environment node exists yet, it says so.
+- The sync render tools (`daz_render`, `daz_render_with_camera`,
+  `daz_batch_render_cameras`, `daz_render_animation`) submit through
+  dazpy's `/render` and `/render/animation` endpoints, wait for the
+  request, and return `request_id` and `result`. A camera render switches
+  the viewport back to its previous camera afterwards.
+  `daz_render_animation_async` moves to `/render/animation` too. Settings
+  tools use `DazRenderSettings`.
+  - `daz_set_render_quality` applies dazpy's quality presets (for example,
+    "good" is 1500 samples, not 2000). It also sets Max Time and the
+    Rendering Quality toggle. The old script wrote a "Render Quality"
+    property that doesn't exist.
+  - `daz_get_render_settings` returns `engineState` (dazpy's verified
+    engine readback) and drops `aspectRatio`/`aspectWidth`/`aspectHeight`/
+    `renderType`.
+- The animation render tools default to the scene's animation range in
+  frames. The old script read DzTime ticks as frame numbers, so a default
+  range meant thousands of renders.
+- Wardrobe tools on dazpy: `daz_list_fitted_items`, `daz_fit_clothing`,
+  `daz_unfit_item`, `daz_get_figure_info`, `daz_set_subdivision`,
+  `daz_run_dforce_simulation`, `daz_export_fbx` and `daz_export_obj`.
+  - `daz_set_subdivision` sets the mesh's View SubD Level. It always failed
+    on Genesis 8/9: it searched the figure for a "SubDivision Level"
+    property, but the level lives on the mesh shape. The result adds
+    `render_level`.
+  - `daz_run_dforce_simulation(node_label)` simulates only that node. It
+    used to just select the node and simulate the whole scene.
+  - Export errors (missing exporter, write failure) are now reported.
+    `exported_nodes` is `["(whole scene)"]` when no nodes are named.
+- The dForce and Transfer Utility tools use dazpy:
+  `daz_add_dforce_dynamic_surface`, `daz_get/set_dforce_influence_weights`,
+  `daz_set_dforce_property`, `daz_get/set_dforce_surface_property(ies)`,
+  `daz_bake_simulation` and `daz_run_transfer_utility`.
+  - `daz_bake_simulation` now works: it freezes the node's dForce modifiers,
+    or every one in the scene. It always failed before, because it called
+    bake methods `DzSimulationMgr` doesn't have. The result reports
+    `method: "freeze"` and `modifiers_frozen`.
+- `daz_export_node_config` / `daz_import_node_config` use dazpy. Import
+  applies the whole file in one Studio call.
+- `daz_time_expression` and `daz_sync_character_beats` key the stock
+  full-face controller (or the feature dials) and the body bones on dazpy.
+  This fixes three bugs: frames were used as DzTime ticks, body bones were
+  never found (they were looked up only among the figure's direct
+  children; daz-mcp-server-onf), and expression names missed stock
+  Genesis 8/9 controls. Results add `bodyNotFound`.
+- `daz_animate_light`, `daz_create_light_sequence`,
+  `daz_set_scene_atmosphere` and `daz_apply_visual_style` use dazpy (new
+  module `_cinematic_lighting.py`). Fixes:
+  - Light keys land on real frames; they used DzTime ticks.
+  - `color-cycle` now animates the light's Color. It keyed "Color/Red"
+    etc., which don't exist, and silently fell back to flux.
+  - Atmosphere and visual style set the real environment node instead of
+    `Scene.getNode(1)`. Without an environment node they say so instead
+    of failing silently.
+  - The environment mode names are corrected: 0 Dome and Scene, 1 Dome
+    Only, 2 Sun-Sky Only, 3 Scene Only.
+  - Visual-style lights are aimed with `aimAt`.
+- `daz_arrange_characters` and `daz_create_character_path` use dazpy (new
+  module `_cinematic_staging.py`).
+  - Arranging places every character in one batched call.
+  - `facing="camera"` now turns characters toward the active viewport
+    camera; it used to just set rotation 0.
+  - Paths key real frames; they used DzTime ticks.
+- `daz_animate_conversation` uses dazpy.
+  - The speaker's emotion uses the shared emotion definitions, so stock
+    Genesis 8/9 face controllers resolve.
+  - The listener's neck and head turn toward the speaker's head through
+    `DazSkeleton.look_at`, keyed at the beat's start and end frames. The
+    old script keyed DzTime ticks and aimed with world angles.
+- `daz_interactive_pose` stages pairs with dazpy interaction recipes:
+  face-each-other, hug, handshake, and shoulder-arm (a touch recipe). The
+  hand/foot targets are solved per figure generation. The old script
+  hard-coded Genesis 8 arm bones (`rShldrBend`, ...), so its arm poses did
+  nothing on Genesis 9. The result adds `alignment` (each limb target's
+  convergence).
+- `daz_choreograph_action` places the pair facing each other at the
+  action's spacing through dazpy's batched staging.
+- `daz_create_scene` builds its blocking and lights with dazpy, so no
+  cinematic tool sends DazScript any more.
+  - Template lights are reused by label instead of duplicated each run.
+  - A missing character is skipped and reported; it used to stop the
+    template.
+  - The first `actions` entry is now `Scene type: <type>`.
+- `daz_list_categories`, `daz_browse_category`, `daz_save_prop_asset`,
+  `daz_load_morph_pro` and `daz_list_strand_hair_nodes` use dazpy.
+- `daz_create_strand_hair(auto_confirm=True)` clicks Studio's "Create New
+  Strand-Based Hair" dialog through Windows UI Automation, waits, and
+  returns the finished result. It needs `pywinauto` on the DAZ Studio
+  machine. The default (`auto_confirm=False`) still returns a `request_id`
+  for a human to confirm. The dialog driver is ported from the blackbyte
+  fork, commit 2ba9a37.
+- Five tools stay on registered scripts on purpose, with a code comment
+  saying why:
+  - `daz_save_wearable_preset` and `daz_create_strand_hair` open Studio
+    dialogs.
+  - `daz_erc_freeze` needs an ERC editing API dazpy doesn't have.
+  - `daz_find_actions` searches DzActionMgr, which dazpy doesn't cover.
+  - `daz_load_file` for OBJ uses the silent unit-scale importer.
+  `daz_execute`, `daz_execute_file(_async)` and `daz_validate_script` run
+  your own script by design.
+- `daz_get_animation_info` and the spatial tools (`daz_get_scene_layout`,
+  `daz_find_nearby`) no longer send inline DazScript; they use dazpy's
+  `time_step()` and typed `all_node_transforms()`.
+- 102 registered scripts are removed (107 to 5), and a unit test fails if any
+  registered script is no longer called by a tool.
+
+### Removed
+
+- The macro tools `daz_start_recording`, `daz_stop_recording`,
+  `daz_list_macros` and `daz_replay_macro`. They never recorded anything:
+  every macro was empty, and replay returned `success: true` without doing
+  anything. Also `daz_suggest_next_action`, which only checked for a figure,
+  a light and a camera; `daz_validate_scene` checks more. `expert` now lists
+  162 tools.
+
 ### Fixed
 
+- Live integration tests are opt-in. They ran whenever DAZ Studio answered
+  on port 18811, so a plain `pytest tests/` changed or cleared the open scene.
+  They now run only with `DAZ_LIVE_TESTS=1`, connect to `DAZ_HOST:DAZ_PORT`
+  instead of a hard-coded `localhost:18811`, and `integration_test.py`
+  requires the same opt-in. `test_compat.py` no longer fails when `DAZ_PORT`
+  is set.
+- `daz_get_performance_stats` always returned `{}`, because nothing counted
+  calls. A middleware now records every tool call, and the tool returns
+  per-tool `calls`, `errors`, `total_ms`, `avg_ms` and `max_ms`.
+- `daz_explain_last_error` returned the same fixed list every time. It now
+  returns the session's most recent tool error (`tool`, `error_type`,
+  `message`, `arguments`, `at`) and the fixes for that kind of error.
 - **`daz_execute`'s `args` did not exist in the script.** The tool documented
   its `args` as an `args` variable, but the plugin passes arguments only through
   `getArguments()[0]`, so any script reading `args` failed with
@@ -36,6 +235,23 @@ Requires dazpy 2.17.0 or later.
   line numbers are unchanged. The descriptions also say that a top-level
   `return` is a syntax error (wrap the script in an IIFE or end with an
   expression), and `daz_execute_file` says a file reads `getArguments()[0]`.
+
+- `daz_set_emotion` did almost nothing on stock Genesis 8 and 9: its morph
+  names matched no dial on either figure, and its body adjustment never found
+  `chestUpper`, which only looked at the figure's direct children
+  (daz-mcp-server-3oq).
+- `daz_set_body_language` posture bones (`lShldr`, `chestUpper`, ...) are
+  matched per figure generation, so postures apply on Genesis 8 and 9
+  (daz-mcp-server-7w8).
+- `daz_direct_gaze` with `direction="camera"` always failed:
+  `Scene.getActiveCamera` doesn't exist. It now uses the active viewport
+  camera, including Studio's built-in Perspective View. The neck fallback
+  also finds Genesis 9's `neck2` (daz-mcp-server-w88).
+- The keyframe tools (`daz_set_keyframe`, `daz_get_keyframes`,
+  `daz_remove_keyframe`, `daz_clear_animation`) used the frame number as a
+  DzTime tick count, so "frame 30" was keyed at frame 0.19 (Studio runs at
+  160 ticks per frame). Frames are now converted, and `daz_get_keyframes`
+  reports real frames.
 
 ## [0.10.0] - 2026-11-24
 

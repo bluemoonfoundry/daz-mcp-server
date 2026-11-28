@@ -1,4 +1,4 @@
-"""Integration tests — scene state, checkpoints, macros, and validation.
+"""Integration tests — scene state, checkpoints, and validation.
 
 Tools covered
 -------------
@@ -6,10 +6,6 @@ Tools covered
 - daz_save_scene_state         (in-memory checkpoint)
 - daz_restore_scene_state      (restore checkpoint)
 - daz_list_checkpoints         (list saved checkpoints)
-- daz_start_recording          (begin macro capture)
-- daz_stop_recording           (end macro capture)
-- daz_list_macros              (list recorded macros)
-- daz_replay_macro             (replay a macro)
 """
 
 from __future__ import annotations
@@ -23,13 +19,7 @@ from daz_mcp_server.tools.scene import (
     daz_save_scene_state,
 )
 from daz_mcp_server.tools.transform import daz_set_property
-from daz_mcp_server.tools.utility import (
-    daz_list_macros,
-    daz_replay_macro,
-    daz_start_recording,
-    daz_stop_recording,
-    daz_validate_scene,
-)
+from daz_mcp_server.tools.utility import daz_validate_scene
 
 
 # ---------------------------------------------------------------------------
@@ -89,50 +79,3 @@ class TestSceneCheckpoints:
     async def test_restore_missing_checkpoint_raises(self, live_client):
         with pytest.raises((ToolError, KeyError, Exception)):
             await daz_restore_scene_state("checkpoint_that_does_not_exist_xyz_999")
-
-
-# ---------------------------------------------------------------------------
-# daz_start_recording / daz_stop_recording / daz_list_macros / daz_replay_macro
-# ---------------------------------------------------------------------------
-
-class TestMacroSystem:
-    MACRO_NAME = "test_macro_integration"
-
-    async def test_start_recording(self, live_client):
-        result = await daz_start_recording(self.MACRO_NAME, description="Integration test macro")
-        assert isinstance(result, dict)
-        # Clean up: stop recording immediately
-        await daz_stop_recording()
-
-    async def test_stop_recording(self, live_client):
-        await daz_start_recording(self.MACRO_NAME)
-        result = await daz_stop_recording()
-        assert isinstance(result, dict)
-
-    async def test_recorded_macro_in_list(self, live_client):
-        await daz_start_recording(self.MACRO_NAME)
-        await daz_stop_recording()
-        result = await daz_list_macros()
-        assert isinstance(result, dict)
-        macros = result.get("macros", result.get("names", []))
-        assert isinstance(macros, list)
-        names = [
-            (m if isinstance(m, str) else m.get("name", ""))
-            for m in macros
-        ]
-        assert self.MACRO_NAME in names
-
-    async def test_list_macros_returns_dict(self, live_client):
-        result = await daz_list_macros()
-        assert isinstance(result, dict)
-
-    async def test_replay_empty_macro(self, live_client):
-        """Record an empty macro (no operations) and replay it — should not error."""
-        await daz_start_recording(self.MACRO_NAME + "_empty")
-        await daz_stop_recording()
-        result = await daz_replay_macro(self.MACRO_NAME + "_empty")
-        assert isinstance(result, dict)
-
-    async def test_replay_missing_macro_raises(self, live_client):
-        with pytest.raises((ToolError, KeyError, Exception)):
-            await daz_replay_macro("macro_that_does_not_exist_xyz_999")

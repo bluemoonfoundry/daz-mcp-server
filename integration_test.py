@@ -5,14 +5,18 @@ Live integration tests for the daz-mcp-server server.
 Verifies DazScriptServer is reachable, initialises the MCP server module
 (HTTP client + script registration), then calls every tool and reports pass/fail.
 
+It changes the open scene, so it runs only with DAZ_LIVE_TESTS=1 (the same
+opt-in as the live pytest suite). Host and port default to DAZ_HOST/DAZ_PORT.
+
 Usage:
-    uv run python integration_test.py
-    uv run python integration_test.py --verbose
-    uv run python integration_test.py --host 192.168.1.10 --port 18811
+    DAZ_LIVE_TESTS=1 uv run python integration_test.py
+    DAZ_LIVE_TESTS=1 uv run python integration_test.py --verbose
+    DAZ_LIVE_TESTS=1 uv run python integration_test.py --host 192.168.1.10 --port 18811
 """
 
 import argparse
 import asyncio
+import os
 import sys
 import textwrap
 import time
@@ -23,6 +27,9 @@ from typing import Any
 import dazpy.exceptions as daz_exc
 from dazpy.aio import AsyncDazClient
 from fastmcp.exceptions import ToolError
+
+# A script, not a pytest module: its test_* coroutines need main()'s setup.
+__test__ = False
 
 from daz_mcp_server.tools.animation import (
     daz_get_animation_info,
@@ -643,15 +650,23 @@ async def main(host: str, port: int, verbose: bool) -> int:
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="daz-mcp-server live integration tests")
     parser.add_argument(
-        "--host", default="localhost", help="DazScriptServer host (default: localhost)"
+        "--host", default=os.environ.get("DAZ_HOST", "localhost"),
+        help="DazScriptServer host (default: DAZ_HOST or localhost)",
     )
     parser.add_argument(
-        "--port", type=int, default=18811, help="DazScriptServer port (default: 18811)"
+        "--port", type=int, default=int(os.environ.get("DAZ_PORT", "18811")),
+        help="DazScriptServer port (default: DAZ_PORT or 18811)",
     )
     parser.add_argument(
         "--verbose", "-v", action="store_true", help="Show response detail and skip reasons"
     )
     args = parser.parse_args()
+
+    if os.environ.get("DAZ_LIVE_TESTS", "").strip() != "1":
+        sys.exit(
+            "integration_test.py changes the open DAZ Studio scene. "
+            "Set DAZ_LIVE_TESTS=1 to run it."
+        )
 
     exit_code = asyncio.run(main(args.host, args.port, args.verbose))
     sys.exit(exit_code)

@@ -212,3 +212,25 @@ def drive_wearable_preset_save(output_path: str, dialog_timeout: float = 30.0) -
             f"found: {out}"
         )
     return {"success": True, "outputPath": str(out)}
+
+
+# "Create New <Thing>" confirmation dialogs (Geometry Shell, Strand-Based Hair)
+# share the Qt dialog class App.CreateNewItemDlg; only the window title differs.
+# Ported from the blackbyte fork, commit 2ba9a37 (confirmed live there,
+# 2026-09-19): its Accept button responds to UIA Invoke().
+_CREATE_NEW_ITEM_ACCEPT_BTN = "App.CreateNewItemDlg.BasicDlgButtonGrpBox.BasicDlgAcceptDialogBtn"
+_STRAND_HAIR_DLG_TITLE = "Create New Strand-Based Hair"
+
+
+def _drive_create_new_item_dialog(dialog_title: str, dialog_timeout: float) -> None:
+    """Wait for a "Create New <Thing>" dialog and click Accept (worker thread only)."""
+    _require_pywinauto()
+    pid = find_daz_studio_pid()
+    hwnd = _find_window(pid, lambda title, _cls: title == dialog_title, dialog_timeout)
+    _invoke_qt_button(hwnd, _CREATE_NEW_ITEM_ACCEPT_BTN)
+    _wait_until_closed(hwnd, dialog_timeout)
+
+
+def drive_strand_hair_create(dialog_timeout: float = 30.0) -> None:
+    """Confirm Studio's "Create New Strand-Based Hair" dialog."""
+    _drive_create_new_item_dialog(_STRAND_HAIR_DLG_TITLE, dialog_timeout)

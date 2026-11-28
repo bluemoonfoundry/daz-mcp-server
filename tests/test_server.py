@@ -25,9 +25,9 @@ from daz_mcp_server.tools.render import (
     daz_set_render_quality,
     daz_wait_for_request,
 )
-from daz_mcp_server.tools.scene import daz_scene_info, daz_load_file, daz_save_scene_copy
-from daz_mcp_server.tools.transform import daz_get_node, daz_set_property
+from daz_mcp_server.tools.scene import daz_load_file, daz_save_scene_copy
 from daz_mcp_server.tools.utility import (
+    daz_find_actions,
     daz_status,
     daz_execute,
     daz_execute_file,
@@ -67,6 +67,33 @@ def mock_scene():
     set_scene(scene)
     yield scene
     set_scene(None)
+
+
+class FakeRenderSettings:
+    """Stand-in for dazpy.DazRenderSettings so render tools never reach a live Studio."""
+
+    instances: list["FakeRenderSettings"] = []
+
+    def __init__(self, client=None):
+        self.output_path = "C:/renders/stored.png"
+        self.presets: list[str] = []
+        self.max_samples, self.max_time_secs, self.quality = 5000, 7200, 1.0
+        FakeRenderSettings.instances.append(self)
+
+    def set_quality_preset(self, preset):
+        self.presets.append(preset)
+        self.max_samples = {"draft": 100, "preview": 500, "good": 1500, "final": 5000}[preset]
+
+
+@pytest.fixture(autouse=True)
+def fake_render_settings(monkeypatch):
+    """Like mock_scene: DazRenderSettings(get_daz_client()) would otherwise talk to
+    a real, possibly shared, DAZ Studio instance."""
+    from daz_mcp_server.tools import render as render_tools
+    FakeRenderSettings.instances = []
+    monkeypatch.setattr(render_tools, "DazRenderSettings", FakeRenderSettings)
+    monkeypatch.setattr(render_tools, "get_daz_client", lambda: None)
+    return FakeRenderSettings
 
 
 @pytest.fixture
@@ -225,146 +252,62 @@ async def test_daz_execute_file_async_http_failure(mock_daz):
         await daz_execute_file_async(script_file="C:/scripts/missing.dsa")
 
 
-# ---------------------------------------------------------------------------
-# daz_scene_info
-# ---------------------------------------------------------------------------
-
-_SCENE_RESULT = {
-    "sceneFile": "C:/scenes/test.duf",
-    "nodeCount": 2,
-    "selectedNode": "Genesis 9",
-    "nodes": [
-        {"name": "Genesis9", "label": "Genesis 9", "type": "DzFigure"},
-        {"name": "Camera", "label": "Camera", "type": "DzCamera"},
-    ],
-}
-
-
-async def test_daz_scene_info_ok(mock_daz):
-    mock_daz.post("/scripts/vangard-scene-info/execute").mock(return_value=_ok(_SCENE_RESULT))
-    result = await daz_scene_info()
-    assert result["nodeCount"] == 2
-    assert result["selectedNode"] == "Genesis 9"
-    assert len(result["nodes"]) == 2
-
-
-async def test_daz_scene_info_unsaved(mock_daz):
-    payload = {**_SCENE_RESULT, "sceneFile": "", "selectedNode": None}
-    mock_daz.post("/scripts/vangard-scene-info/execute").mock(return_value=_ok(payload))
-    result = await daz_scene_info()
-    assert result["sceneFile"] == ""
-    assert result["selectedNode"] is None
-
-
 async def test_execute_by_id_retries_on_404(mock_daz):
     """On 404, scripts are re-registered with DazScriptServer and the call retried."""
     call_count = 0
 
-    def scene_info_side_effect(request):
+    def actions_side_effect(request):
         nonlocal call_count
         call_count += 1
         if call_count == 1:
             return httpx.Response(
                 404,
-                json={"success": False, "error": "Script not found: 'vangard-scene-info'"},
+                json={"success": False, "error": "Script not found: 'vangard-find-actions'"},
             )
-        return _ok(_SCENE_RESULT)
+        return _ok({"query": "x", "count": 0, "matches": []})
 
-    mock_daz.post("/scripts/vangard-scene-info/execute").mock(side_effect=scene_info_side_effect)
+    mock_daz.post("/scripts/vangard-find-actions/execute").mock(side_effect=actions_side_effect)
     mock_daz.post("/scripts/register").mock(
         return_value=httpx.Response(200, json={"success": True, "id": "x", "updated": False})
     )
 
-    result = await daz_scene_info()
-    assert result["nodeCount"] == 2
+    result = await daz_find_actions("x")
+    assert result["count"] == 0
     assert call_count == 2
 
 
 # ---------------------------------------------------------------------------
-# daz_get_node
+# daz_render — POST /render, then wait on the request
 # ---------------------------------------------------------------------------
 
-_NODE_RESULT = {
-    "name": "Genesis9",
-    "label": "Genesis 9",
-    "type": "DzFigure",
-    "properties": {
-        "Translation X": 0.0,
-        "Translation Y": 0.0,
-        "Translation Z": 0.0,
-        "Rotation X": 15.0,
-        "Head Size": 0.5,
-    },
-}
-
-
-async def test_daz_get_node_ok(mock_daz):
-    mock_daz.post("/scripts/vangard-get-node/execute").mock(return_value=_ok(_NODE_RESULT))
-    result = await daz_get_node("Genesis 9")
-    assert result["label"] == "Genesis 9"
-    assert result["properties"]["Rotation X"] == 15.0
-
-
-async def test_daz_get_node_not_found(mock_daz):
-    mock_daz.post("/scripts/vangard-get-node/execute").mock(
-        return_value=_fail("Node not found: Ghost")
-    )
-    with pytest.raises(ToolError, match="Node not found"):
-        await daz_get_node("Ghost")
-
-
-# ---------------------------------------------------------------------------
-# daz_set_property
-# ---------------------------------------------------------------------------
-
-async def test_daz_set_property_ok(mock_daz):
-    mock_daz.post("/scripts/vangard-set-property/execute").mock(
-        return_value=_ok({"node": "Genesis 9", "property": "Rotation X", "value": 45.0})
-    )
-    result = await daz_set_property("Genesis 9", "Rotation X", 45.0)
-    assert result["value"] == 45.0
-    assert result["property"] == "Rotation X"
-
-
-async def test_daz_set_property_node_not_found(mock_daz):
-    mock_daz.post("/scripts/vangard-set-property/execute").mock(
-        return_value=_fail("Node not found: Ghost")
-    )
-    with pytest.raises(ToolError, match="Node not found"):
-        await daz_set_property("Ghost", "Rotation X", 0.0)
-
-
-async def test_daz_set_property_prop_not_found(mock_daz):
-    mock_daz.post("/scripts/vangard-set-property/execute").mock(
-        return_value=_fail("Property not found: Foo on Genesis 9")
-    )
-    with pytest.raises(ToolError, match="Property not found"):
-        await daz_set_property("Genesis 9", "Foo", 1.0)
-
-
-async def test_daz_set_property_not_numeric(mock_daz):
-    mock_daz.post("/scripts/vangard-set-property/execute").mock(
-        return_value=_fail("Property is not numeric: Label")
-    )
-    with pytest.raises(ToolError, match="not numeric"):
-        await daz_set_property("Genesis 9", "Label", 1.0)
-
-
-# ---------------------------------------------------------------------------
-# daz_render
-# ---------------------------------------------------------------------------
-
-async def test_daz_render_default(mock_daz):
-    mock_daz.post("/scripts/vangard-render/execute").mock(return_value=_ok({"success": True}))
-    result = await daz_render()
-    assert result["success"] is True
+def _mock_render_done(mock_daz, request_id="rnd-1"):
+    route = mock_daz.post("/render").mock(return_value=_async_submitted(request_id))
+    mock_daz.get(f"/requests/{request_id}/status").mock(
+        return_value=_status_response(request_id, "completed", progress=1.0))
+    mock_daz.get(f"/requests/{request_id}/result").mock(
+        return_value=_result_response(request_id, result={"success": True}))
+    return route
 
 
 async def test_daz_render_with_output_path(mock_daz):
-    mock_daz.post("/scripts/vangard-render/execute").mock(return_value=_ok({"success": True}))
+    route = _mock_render_done(mock_daz)
     result = await daz_render(output_path="C:/renders/out.png")
-    assert result["success"] is True
+    assert result["success"] is True and result["outputPath"] == "C:/renders/out.png"
+    assert result["request_id"] == "rnd-1"
+    assert b"C:/renders/out.png" in route.calls.last.request.content
 
+
+async def test_daz_render_default_uses_stored_output_path(mock_daz):
+    _mock_render_done(mock_daz)
+    result = await daz_render()
+    assert result["outputPath"] == "C:/renders/stored.png"
+
+
+async def test_daz_render_without_any_output_path_refuses(mock_daz, monkeypatch):
+    monkeypatch.setattr(FakeRenderSettings, "__init__",
+                        lambda self, client=None: setattr(self, "output_path", ""))
+    with pytest.raises(ToolError, match="output path is not set"):
+        await daz_render()
 
 
 # ---------------------------------------------------------------------------
@@ -377,14 +320,6 @@ async def test_daz_load_file_merge(mock_scene):
     mock_scene.load.assert_called_once_with("C:/scenes/char.duf")
     assert result["success"] is True
     assert result["file"] == "C:/scenes/char.duf"
-
-
-async def test_daz_load_file_replace(mock_daz):
-    mock_daz.post("/scripts/vangard-load-file/execute").mock(
-        return_value=_ok({"success": True, "file": "C:/scenes/scene.duf"})
-    )
-    result = await daz_load_file("C:/scenes/scene.duf", merge=False)
-    assert result["success"] is True
 
 
 async def test_daz_load_file_not_found(mock_scene):
@@ -597,21 +532,21 @@ async def test_daz_render_batch_with_base(mock_daz):
 # daz_render_animation_async
 # ---------------------------------------------------------------------------
 
-async def test_daz_render_animation_async_ok(mock_daz):
-    mock_daz.post("/scripts/vangard-render-animation/async").mock(
-        return_value=_async_submitted("anim-xyz")
-    )
+async def test_daz_render_animation_async_ok(mock_daz, mock_scene):
+    mock_scene.anim_range.return_value = {"start": 0, "end": 3}
+    mock_daz.post("/render/animation").mock(return_value=_async_submitted("anim-xyz"))
     result = await daz_render_animation_async("/renders/anim")
+    assert result["frames"] == {"start": 0, "end": 3}
     assert result["request_id"] == "anim-xyz"
 
 
 async def test_daz_render_animation_async_with_range(mock_daz):
-    mock_daz.post("/scripts/vangard-render-animation/async").mock(
-        return_value=_async_submitted("anim-range")
-    )
+    route = mock_daz.post("/render/animation").mock(return_value=_async_submitted("anim-range"))
     result = await daz_render_animation_async(
         "/renders/anim", start_frame=10, end_frame=50, camera="Camera 1"
     )
+    body = route.calls.last.request.content
+    assert b"Camera 1" in body and b"{frame}" in body
     assert result["request_id"] == "anim-range"
 
 
@@ -827,48 +762,22 @@ async def test_daz_list_requests_empty(mock_daz):
 # daz_set_render_quality
 # ---------------------------------------------------------------------------
 
-async def test_daz_set_render_quality_draft(mock_daz):
-    mock_daz.post("/scripts/vangard-set-render-quality/execute").mock(
-        return_value=_ok({
-            "preset": "draft",
-            "propertiesSet": [
-                {"property": "Max Samples", "value": 100},
-                {"property": "Render Quality", "value": 0.5},
-            ],
-        })
-    )
+async def test_daz_set_render_quality_applies_dazpy_preset(fake_render_settings):
     result = await daz_set_render_quality("draft")
+    assert fake_render_settings.instances[0].presets == ["draft"]
     assert result["preset"] == "draft"
-    assert len(result["propertiesSet"]) == 2
+    assert result["propertiesSet"][0] == {"property": "Max Samples", "value": 100}
 
 
-async def test_daz_set_render_quality_final(mock_daz):
-    mock_daz.post("/scripts/vangard-set-render-quality/execute").mock(
-        return_value=_ok({
-            "preset": "final",
-            "propertiesSet": [
-                {"property": "Max Samples", "value": 5000},
-                {"property": "Render Quality", "value": 1.0},
-            ],
-        })
-    )
-    result = await daz_set_render_quality("final")
-    assert result["preset"] == "final"
+async def test_daz_set_render_quality_all_presets(fake_render_settings):
+    for preset in ("draft", "preview", "good", "final"):
+        result = await daz_set_render_quality(preset)
+        assert result["preset"] == preset
 
 
 async def test_daz_set_render_quality_invalid_preset():
     with pytest.raises(ToolError, match="Unknown render quality preset"):
         await daz_set_render_quality("ultra")
-
-
-async def test_daz_set_render_quality_all_presets(mock_daz):
-    """All four presets should reach the execute endpoint without error."""
-    for preset in ("draft", "preview", "good", "final"):
-        mock_daz.post("/scripts/vangard-set-render-quality/execute").mock(
-            return_value=_ok({"preset": preset, "propertiesSet": []})
-        )
-        result = await daz_set_render_quality(preset)
-        assert result["preset"] == preset
 
 
 # ---------------------------------------------------------------------------

@@ -3,15 +3,31 @@ from __future__ import annotations
 
 from typing import Any
 
+from dazpy.exceptions import PropertyNotFoundError
 from fastmcp.exceptions import ToolError
 
-from .._mcp import mcp, _execute_by_id
-from .._client import get_scene, get_daz_client, run_dazpy
-from .._errors import handle_dazpy_error
+from .._mcp import mcp
+from .._client import get_scene, run_dazpy
+from .._errors import handle_dazpy_error, run_tool
+
+
+def _keyed_property(node_label: str, property_name: str) -> tuple[str, Any]:
+    """Resolve (node label, DazProperty) for a keyframe tool."""
+    node = get_scene().resolve_node(node_label)
+    try:
+        prop = node.find_numeric_property(property_name)
+    except PropertyNotFoundError as e:
+        raise ToolError(f"Property not found: {property_name} on {node_label}") from e
+    return node.describe().label, prop
+
+
+def _frame_out(frame: float) -> float | int:
+    return int(frame) if float(frame).is_integer() else frame
 
 
 # ---------------------------------------------------------------------------
-# Tools — keyframe management (delegate to registered DazScript)
+# Tools — keyframe management. Frames are timeline frames, converted to
+# DzTime ticks by dazpy (the old scripts used the frame number as ticks).
 # ---------------------------------------------------------------------------
 
 
@@ -59,15 +75,13 @@ async def daz_set_keyframe(
         - Frames are typically 0-based integers
         - Use daz_set_frame_range() to define the animation length first
     """
-    return await _execute_by_id(
-        "vangard-set-keyframe",
-        {
-            "nodeLabel": node_label,
-            "propertyName": property_name,
-            "frame": frame,
-            "value": value,
-        },
-    )
+    def _run() -> dict[str, Any]:
+        label, prop = _keyed_property(node_label, property_name)
+        kept = prop.set_key_at_frame(frame, value)
+        return {"success": True, "node": label, "property": prop.label, "frame": frame,
+                "value": value if kept is None else kept}
+
+    return await run_tool(_run)
 
 
 @mcp.tool()
@@ -108,12 +122,15 @@ async def daz_get_keyframes(
     Note:
         - Returns empty array if property has no keyframes
         - Keyframes are returned in frame order
-        - Frame numbers are integers, values are floats
+        - Frame numbers are integers (fractional if a key sits between
+          frames), values are floats
     """
-    return await _execute_by_id(
-        "vangard-get-keyframes",
-        {"nodeLabel": node_label, "propertyName": property_name},
-    )
+    def _run() -> dict[str, Any]:
+        _label, prop = _keyed_property(node_label, property_name)
+        keys = [{"frame": _frame_out(f), "value": v} for f, v in prop.keys_by_frame()]
+        return {"keyframes": keys, "count": len(keys)}
+
+    return await run_tool(_run)
 
 
 @mcp.tool()
@@ -153,10 +170,13 @@ async def daz_remove_keyframe(
         - Other keyframes remain unchanged
         - Use daz_clear_animation() to remove all keyframes at once
     """
-    return await _execute_by_id(
-        "vangard-remove-keyframe",
-        {"nodeLabel": node_label, "propertyName": property_name, "frame": frame},
-    )
+    def _run() -> dict[str, Any]:
+        label, prop = _keyed_property(node_label, property_name)
+        removed = prop.remove_key_at_frame(frame)
+        return {"success": True, "node": label, "property": prop.label, "frame": frame,
+                "removed": removed}
+
+    return await run_tool(_run)
 
 
 @mcp.tool()
@@ -196,10 +216,12 @@ async def daz_clear_animation(
         - Property retains its current value after clearing
         - Returns count of keyframes that were removed
     """
-    return await _execute_by_id(
-        "vangard-clear-animation",
-        {"nodeLabel": node_label, "propertyName": property_name},
-    )
+    def _run() -> dict[str, Any]:
+        label, prop = _keyed_property(node_label, property_name)
+        return {"success": True, "node": label, "property": prop.label,
+                "removed": prop.clear_keys()}
+
+    return await run_tool(_run)
 
 
 # ---------------------------------------------------------------------------
@@ -356,21 +378,11 @@ async def daz_get_animation_info() -> dict[str, Any]:
     """
     def _run() -> dict:
         scene = get_scene()
-        client = get_daz_client()
         current = scene.frame()
         anim = scene.anim_range()
         # DAZ Studio uses 4800 ticks/second; time_step = ticks per frame
-        # getTimeStep() returns a DzTime object, which serialises to a dict;
-        # .valueOf() yields the tick count (Number(ts) would return 0).
-        ts_result = client.execute(
-            "(function(){ return Scene.getTimeStep().valueOf(); })();"
-        )
-        raw_step = ts_result.value
-        step = (
-            raw_step
-            if isinstance(raw_step, (int, float)) and not isinstance(raw_step, bool) and raw_step > 0
-            else 160  # 160 ticks @ 30 fps
-        )
+        # (dazpy falls back to 160, i.e. 30 fps, on a non-numeric reply).
+        step = scene.time_step()
         fps = round(4800 / step)
         start = anim["start"]
         end = anim["end"]

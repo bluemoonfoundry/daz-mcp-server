@@ -1,15 +1,21 @@
 """Morph, expression, and body-language tools for DAZ Studio figures."""
 from __future__ import annotations
 
-import json
+import math
 from typing import Any
 
+from dazpy.exceptions import DazError, NodeNotFoundError, PropertyNotFoundError
 from fastmcp.exceptions import ToolError
 
-from .._mcp import mcp, _execute_by_id, _execute
-from .._client import get_daz_client, run_dazpy
-from .._emotions import _EMOTION_DEFINITIONS
-from .._errors import handle_dazpy_error
+from .._mcp import mcp
+from .._client import get_scene
+from .._emotions import (
+    AXIS_BY_PROPERTY,
+    POSTURES,
+    _EMOTION_DEFINITIONS,
+    resolve_bone,
+)
+from .._errors import run_tool as _run_tool
 
 
 # ---------------------------------------------------------------------------
@@ -55,47 +61,11 @@ async def daz_list_morphs(
         result = daz_list_morphs("Genesis 9", include_zero=True)
         # result["count"] might be 500+ morphs
     """
-    include_zero_js = "true" if include_zero else "false"
+    def _run() -> list[dict]:
+        node = get_scene().resolve_node(node_label)
+        return [m.__dict__.copy() for m in node.morph_info(include_zero=include_zero)]
 
-    def _run() -> list | None:
-        client = get_daz_client()
-        script = f"""(function() {{
-            var node = Scene.findNodeByLabel({json.dumps(node_label)});
-            if (!node) return null;
-            var obj = node.getObject();
-            if (!obj) return [];
-            var includeZero = {include_zero_js};
-            var result = [];
-            for (var i = 0; i < obj.getNumModifiers(); i++) {{
-                var m = obj.getModifier(i);
-                if (m.className() === "DzMorph") {{
-                    var ch = m.getValueChannel();
-                    var val = ch.getValue();
-                    if (includeZero || val !== 0) {{
-                        var path = "";
-                        try {{
-                            var pg = ch.getPropertyGroup();
-                            if (pg) path = pg.getPath();
-                        }} catch(e) {{}}
-                        result.push({{
-                            name: m.getName(),
-                            label: m.getLabel(),
-                            value: val,
-                            path: path
-                        }});
-                    }}
-                }}
-            }}
-            return result;
-        }})();"""
-        return client.execute(script).value
-
-    try:
-        morphs = await run_dazpy(_run)
-    except Exception as e:
-        handle_dazpy_error(e)
-    if morphs is None:
-        raise ToolError(f"Node not found: {node_label!r}")
+    morphs = await _run_tool(_run)
     return {"morphs": morphs, "count": len(morphs), "nodeLabel": node_label}
 
 
@@ -140,53 +110,12 @@ async def daz_search_morphs(
         # Find all facial expression morphs
         result = daz_search_morphs("Genesis 9", "express", include_zero=True)
     """
-    include_zero_js = "true" if include_zero else "false"
-    pat_lower = pattern.lower()
+    def _run() -> list[dict]:
+        node = get_scene().resolve_node(node_label)
+        return [m.__dict__.copy()
+                for m in node.morph_info(pattern=pattern, include_zero=include_zero)]
 
-    def _run() -> list | None:
-        client = get_daz_client()
-        script = f"""(function() {{
-            var node = Scene.findNodeByLabel({json.dumps(node_label)});
-            if (!node) return null;
-            var obj = node.getObject();
-            if (!obj) return [];
-            var includeZero = {include_zero_js};
-            var pat = {json.dumps(pat_lower)};
-            var result = [];
-            for (var i = 0; i < obj.getNumModifiers(); i++) {{
-                var m = obj.getModifier(i);
-                if (m.className() === "DzMorph") {{
-                    var name = m.getName();
-                    var label = m.getLabel();
-                    if (name.toLowerCase().indexOf(pat) === -1 &&
-                            label.toLowerCase().indexOf(pat) === -1) continue;
-                    var ch = m.getValueChannel();
-                    var val = ch.getValue();
-                    if (includeZero || val !== 0) {{
-                        var path = "";
-                        try {{
-                            var pg = ch.getPropertyGroup();
-                            if (pg) path = pg.getPath();
-                        }} catch(e) {{}}
-                        result.push({{
-                            name: name,
-                            label: label,
-                            value: val,
-                            path: path
-                        }});
-                    }}
-                }}
-            }}
-            return result;
-        }})();"""
-        return client.execute(script).value
-
-    try:
-        morphs = await run_dazpy(_run)
-    except Exception as e:
-        handle_dazpy_error(e)
-    if morphs is None:
-        raise ToolError(f"Node not found: {node_label!r}")
+    morphs = await _run_tool(_run)
     return {
         "morphs": morphs,
         "count": len(morphs),
@@ -230,10 +159,46 @@ async def daz_set_morph(
         - Use daz_search_morphs to browse available morph names before setting.
         - daz_set_property also works but requires the exact internal property name.
     """
-    return await _execute_by_id(
-        "vangard-set-morph",
-        {"nodeLabel": node_label, "morphName": morph_name, "value": value},
-    )
+    def _run() -> dict[str, Any]:
+        node = get_scene().resolve_node(node_label)
+        label = node.describe().label
+        try:
+            written = node.set_numeric_property(morph_name, value, substring_fallback=True)
+        except PropertyNotFoundError as e:
+            raise ToolError(f"Morph not found: {morph_name}") from e
+        except TypeError as e:
+            raise ToolError(str(e)) from e
+        return {"node": label, "morph": written.label,
+                "internal_name": written.name, "value": written.value}
+
+    return await _run_tool(_run)
+
+
+def _resolve_body(skel: Any, adjustments: list[dict], intensity: float) -> tuple[list, list]:
+    """Write *adjustments* (Genesis 8 bone roles) onto *skel*, one axis each.
+
+    Returns ``(applied, not_found)``: applied entries name the bone actually
+    written; not_found lists roles with no matching bone on this figure.
+    """
+    if not adjustments:
+        return [], []
+    bone_names = set(skel.bone_names())
+    data: dict[str, dict[str, float]] = {}
+    applied: list[dict] = []
+    not_found: list[str] = []
+    for adj in adjustments:
+        bone = resolve_bone(adj["bone"], bone_names)
+        if bone is None:
+            not_found.append(adj["bone"])
+            continue
+        value = adj["value"] * intensity
+        data.setdefault(bone, {})[AXIS_BY_PROPERTY[adj["property"]]] = value
+        applied.append({"bone": bone, "property": adj["property"], "value": value})
+    missing = set(skel.set_bone_axes(data)) if data else set()
+    if missing:  # bone vanished between the two calls
+        not_found += sorted(missing)
+        applied = [a for a in applied if a["bone"] not in missing]
+    return applied, not_found
 
 
 @mcp.tool()
@@ -242,7 +207,13 @@ async def daz_set_emotion(
     emotion: str,
     intensity: float = 0.7,
 ) -> dict[str, Any]:
-    """Apply an emotional expression to a character using morph candidates + body adjustment.
+    """Apply an emotional expression to a character: face controls + body adjustment.
+
+    Uses the figure's stock full-face expression controller when it has one
+    (Genesis 9 ``facs_ctrl_Happy``, Genesis 8 ``eCTRLHappy_HD``, ...) and
+    otherwise falls back to individual feature dials (smile, brows, eyes).
+    Other emotions' full-face controllers are reset to 0 first, so switching
+    emotion doesn't stack expressions; ``neutral`` just clears them.
 
     Args:
         character_label: Node label of the character to affect.
@@ -251,11 +222,14 @@ async def daz_set_emotion(
         intensity: Scale factor 0.0–1.0 applied to all morph and body values (default 0.7).
 
     Returns:
-        Dict with applied_morphs, body_adjustments, and not_found lists.
+        Dict with character, emotion, intensity, applied_morphs ({morph, value}
+        read back), body_adjustments ({bone, property, value}), not_found
+        (feature slots with no matching dial) and body_not_found (bone roles
+        missing on this figure).
 
     Notes:
-        Morph candidates are tried in order; first match per slot wins. Not-found morphs
-        are reported but do not raise errors — figures vary in available morphs.
+        Not-found dials and bones are reported but do not raise errors —
+        figures vary in available morphs.
     """
     valid = sorted(_EMOTION_DEFINITIONS.keys())
     if emotion not in _EMOTION_DEFINITIONS:
@@ -266,13 +240,44 @@ async def daz_set_emotion(
         raise ToolError(f"intensity must be between 0.0 and 1.0, got {intensity}")
 
     definition = _EMOTION_DEFINITIONS[emotion]
-    return await _execute_by_id("vangard-set-emotion", {
-        "nodeLabel": character_label,
-        "emotion": emotion,
-        "intensity": intensity,
-        "morphList": definition["morphs"],
-        "bodyAdjustments": definition["body"],
-    })
+
+    def _run() -> dict[str, Any]:
+        skel = get_scene().find_skeleton_by_label(character_label)
+        face = definition.get("face", [])
+        # Slot 0 is this emotion's face controller (if any); the rest zero
+        # every other emotion's face controller.
+        slots: list[tuple[list[str], float]] = [(face, intensity)] if face else []
+        slots += [
+            (d["face"], 0.0)
+            for name, d in _EMOTION_DEFINITIONS.items()
+            if name != emotion and d.get("face")
+        ]
+        results = skel.set_numeric_candidates(slots) if slots else []
+        applied: list[dict] = []
+        not_found: list[str] = []
+        if face and results[0].found:
+            applied.append({"morph": results[0].matched, "value": results[0].value})
+        elif definition["morphs"]:
+            features = skel.set_numeric_candidates(
+                [(m["names"], m["value"] * intensity) for m in definition["morphs"]]
+            )
+            for r in features:
+                if r.found:
+                    applied.append({"morph": r.matched, "value": r.value})
+                else:
+                    not_found.append(r.candidates[0] if r.candidates else "unknown")
+        body_applied, body_missing = _resolve_body(skel, definition["body"], intensity)
+        return {
+            "character": character_label,
+            "emotion": emotion,
+            "intensity": intensity,
+            "applied_morphs": applied,
+            "body_adjustments": body_applied,
+            "not_found": not_found,
+            "body_not_found": body_missing,
+        }
+
+    return await _run_tool(_run)
 
 
 @mcp.tool()
@@ -284,8 +289,9 @@ async def daz_set_body_language(
     """Apply a body-language posture to a figure via bone rotation adjustments.
 
     Adjusts key skeleton bones (chest, shoulders, neck) to convey a physical
-    attitude. Works on Genesis figures and other rigged characters with standard
-    bone names.
+    attitude. Bones are matched per figure generation (Genesis 8
+    ``chestUpper``/``lShldrBend``, Genesis 9 ``spine4``/``l_upperarm``, ...),
+    and only the one axis each adjustment names is written.
 
     Args:
         figure_label: Display label of the skeleton/figure (e.g., "Genesis 9").
@@ -294,15 +300,14 @@ async def daz_set_body_language(
 
     Returns:
         Dict with success, figure, posture, intensity, applied (list of bone
-        adjustments that were set), and not_found (bones/properties not present
-        on this figure).
+        adjustments that were set, naming the figure's own bone), and not_found
+        (bone roles not present on this figure).
 
     Notes:
-        - Bone names follow Genesis 8/9 conventions; some bones may not exist on
-          non-Genesis figures and will be silently skipped (reported in not_found).
+        - Bones missing on non-Genesis figures are skipped and reported in not_found.
         - Combine with daz_set_emotion for full expressive character poses.
     """
-    valid_postures = ("confident", "defensive", "relaxed", "tense")
+    valid_postures = tuple(POSTURES)
     if posture not in valid_postures:
         raise ToolError(
             f"Unknown posture: '{posture}'. Valid postures: {', '.join(valid_postures)}"
@@ -310,68 +315,55 @@ async def daz_set_body_language(
     if not 0.0 <= intensity <= 1.0:
         raise ToolError(f"intensity must be between 0.0 and 1.0, got {intensity}")
 
-    script = """
-(function() {
-    var skel = Scene.findSkeletonByLabel(args.figureLabel);
-    if (!skel) return {success: false, error: "Figure not found: " + args.figureLabel};
+    def _run() -> dict[str, Any]:
+        skel = get_scene().find_skeleton_by_label(figure_label)
+        applied, not_found = _resolve_body(skel, POSTURES[posture], intensity)
+        return {
+            "success": True,
+            "figure": figure_label,
+            "posture": posture,
+            "intensity": intensity,
+            "applied": applied,
+            "not_found": not_found,
+        }
 
-    var postures = {
-        confident: [
-            {bone: "chestUpper", prop: "XRotate", value: 5.0},
-            {bone: "lShldr",     prop: "ZRotate", value: -5.0},
-            {bone: "rShldr",     prop: "ZRotate", value: 5.0}
-        ],
-        defensive: [
-            {bone: "chestUpper",  prop: "XRotate", value: -8.0},
-            {bone: "abdomenLower", prop: "XRotate", value: -3.0},
-            {bone: "lShldr",      prop: "ZRotate", value: 10.0},
-            {bone: "rShldr",      prop: "ZRotate", value: -10.0}
-        ],
-        relaxed: [
-            {bone: "chestUpper", prop: "XRotate", value: -3.0},
-            {bone: "lShldr",     prop: "ZRotate", value: 4.0},
-            {bone: "rShldr",     prop: "ZRotate", value: -4.0},
-            {bone: "neckLower",  prop: "XRotate", value: 2.0}
-        ],
-        tense: [
-            {bone: "chestUpper", prop: "XRotate", value: 4.0},
-            {bone: "lShldr",     prop: "ZRotate", value: -12.0},
-            {bone: "rShldr",     prop: "ZRotate", value: 12.0},
-            {bone: "neckLower",  prop: "XRotate", value: -3.0}
-        ]
-    };
+    return await _run_tool(_run)
 
-    var intensity   = args.intensity;
-    var adjustments = postures[args.posture];
-    var applied     = [];
-    var notFound    = [];
 
-    for (var i = 0; i < adjustments.length; i++) {
-        var adj  = adjustments[i];
-        var bone = skel.findBone(adj.bone);
-        if (!bone) { notFound.push(adj.bone); continue; }
-        var prop = bone.findProperty(adj.prop);
-        if (!prop) { notFound.push(adj.bone + "." + adj.prop); continue; }
-        prop.setValue(adj.value * intensity);
-        applied.push({bone: adj.bone, property: adj.prop, value: adj.value * intensity});
-    }
+_GAZE_FIXED: dict[str, tuple[float, float]] = {
+    "up": (-25.0, 0.0),
+    "down": (20.0, 0.0),
+    "left": (0.0, -35.0),
+    "right": (0.0, 35.0),
+    "away": (0.0, 180.0),
+}
 
-    return {
-        success:   true,
-        figure:    args.figureLabel,
-        posture:   args.posture,
-        intensity: intensity,
-        applied:   applied,
-        not_found: notFound
-    };
-})();
-"""
-    result = await _execute(script, {
-        "figureLabel": figure_label,
-        "posture": posture,
-        "intensity": intensity,
-    })
-    return result
+
+def _aim_angles(head: dict, target: tuple[float, float, float]) -> tuple[float, float]:
+    """Rough (pitch, yaw) degrees to turn a head at *head* toward *target*.
+
+    World-space and approximate, as before: yaw ignores the figure's own
+    facing and pitch is halved so the head doesn't over-tilt.
+    """
+    dx, dy, dz = target[0] - head["x"], target[1] - head["y"], target[2] - head["z"]
+    yaw = math.degrees(math.atan2(dx, dz))
+    pitch = -math.degrees(math.atan2(dy, math.hypot(dx, dz))) * 0.5
+    return pitch, yaw
+
+
+def _gaze_target(scene: Any, label: str) -> tuple[float, float, float]:
+    """World point to look at for *label*: a figure's head, else the node's origin."""
+    try:
+        figure = scene.find_skeleton_by_label(label)
+    except NodeNotFoundError:
+        figure = None
+    if figure is not None:
+        head = resolve_bone("head", figure.bone_names())
+        if head is not None:
+            pos = figure.find_bone(head).position
+            return (pos["x"], pos["y"], pos["z"])
+    pos = scene.find_node_by_label(label).position
+    return (pos["x"], pos["y"], pos["z"])
 
 
 @mcp.tool()
@@ -383,8 +375,9 @@ async def daz_direct_gaze(
     """Point a figure's head/gaze toward a direction or scene object.
 
     Rotates the head bone to face a named direction or a target node.  For the
-    "camera" direction the active viewport camera is used; for "character" a
-    ``target_label`` must be supplied.
+    "camera" direction the active viewport camera is used (including Studio's
+    built-in Perspective View); for "character" a ``target_label`` must be
+    supplied.
 
     Args:
         figure_label: Display label of the skeleton/figure (e.g., "Genesis 9").
@@ -398,8 +391,11 @@ async def daz_direct_gaze(
 
     Notes:
         - "camera" computes a rough angle toward the active viewport camera.
-        - "character" computes a rough angle toward the target node's position.
-        - Head bone search falls back to "neckUpper" if "head" is not found.
+        - "character" aims at the target figure's head bone, or at the target
+          node's origin when it is not a figure.
+        - ``requested`` holds the computed angles; ``applied`` holds what the
+          head kept after its joint limits.
+        - Head bone search falls back to the upper neck bone if "head" is not found.
         - Angle computation is approximate (good for typical scene proportions).
     """
     valid_directions = ("camera", "away", "up", "down", "left", "right", "character")
@@ -411,84 +407,45 @@ async def daz_direct_gaze(
     if direction == "character" and not target_label:
         raise ToolError("target_label is required when direction is 'character'")
 
-    script = """
-(function() {
-    var skel = Scene.findSkeletonByLabel(args.figureLabel);
-    if (!skel) return {success: false, error: "Figure not found: " + args.figureLabel};
+    def _run() -> dict[str, Any]:
+        scene = get_scene()
+        skel = scene.find_skeleton_by_label(figure_label)
+        names = set(skel.bone_names())
+        head_bone = resolve_bone("head", names) or resolve_bone("neckUpper", names)
+        if head_bone is None:
+            raise ToolError(f"Head/upper neck bone not found on {figure_label!r}")
 
-    // Prefer "head" bone; fall back to "neckUpper"
-    var headBone = skel.findBone("head") || skel.findBone("neckUpper");
-    if (!headBone) return {success: false, error: "Head/neckUpper bone not found"};
+        if direction in _GAZE_FIXED:
+            rot_x, rot_y = _GAZE_FIXED[direction]
+        else:
+            if direction == "camera":
+                cam = scene.viewport_camera()
+                if cam is None:
+                    raise ToolError("No active viewport camera to look at")
+                target = cam.position
+            else:
+                target = _gaze_target(scene, target_label)
+            rot_x, rot_y = _aim_angles(skel.find_bone(head_bone).position, target)
 
-    var rotX = 0;
-    var rotY = 0;
-    var direction = args.direction;
+        missing = skel.set_bone_axes({head_bone: {"x": rot_x, "y": rot_y}})
+        applied: list[dict] = []
+        if not missing:
+            # Report what Studio kept: the head's joint limits can clamp it.
+            euler = skel.find_bone(head_bone).local_euler or (rot_x, rot_y, 0.0)
+            applied = [
+                {"bone": head_bone, "property": "XRotate", "value": euler[0]},
+                {"bone": head_bone, "property": "YRotate", "value": euler[1]},
+            ]
+        return {
+            "success": True,
+            "figure": figure_label,
+            "direction": direction,
+            "requested": {"x": rot_x, "y": rot_y},
+            "applied": applied,
+            "not_found": [f"{head_bone}.XRotate", f"{head_bone}.YRotate"] if missing else [],
+        }
 
-    if (direction === "up")    { rotX = -25; rotY = 0;   }
-    else if (direction === "down")  { rotX = 20;  rotY = 0;   }
-    else if (direction === "left")  { rotX = 0;   rotY = -35; }
-    else if (direction === "right") { rotX = 0;   rotY = 35;  }
-    else if (direction === "away")  { rotX = 0;   rotY = 180; }
-    else if (direction === "camera") {
-        var cam = Scene.getActiveCamera();
-        if (!cam) return {success: false, error: "No active camera in scene"};
-        var camPos  = cam.getWSPos();
-        var headPos = headBone.getWSPos();
-        var dx = camPos.x - headPos.x;
-        var dy = camPos.y - headPos.y;
-        var dz = camPos.z - headPos.z;
-        var horizDist = Math.sqrt(dx * dx + dz * dz);
-        rotY = Math.atan2(dx, dz) * (180 / Math.PI);
-        rotX = -Math.atan2(dy, horizDist) * (180 / Math.PI) * 0.5;
-    } else if (direction === "character") {
-        var tLabel  = args.targetLabel;
-        var target  = Scene.findNodeByLabel(tLabel);
-        if (!target) target = Scene.findSkeletonByLabel(tLabel);
-        if (!target) return {success: false, error: "Target not found: " + tLabel};
-        var tPos    = target.getWSPos();
-        var hPos    = headBone.getWSPos();
-        var dx2     = tPos.x - hPos.x;
-        var dy2     = tPos.y - hPos.y;
-        var dz2     = tPos.z - hPos.z;
-        var horizDist2 = Math.sqrt(dx2 * dx2 + dz2 * dz2);
-        rotY = Math.atan2(dx2, dz2) * (180 / Math.PI);
-        rotX = -Math.atan2(dy2, horizDist2) * (180 / Math.PI) * 0.5;
-    }
-
-    var applied  = [];
-    var notFound = [];
-
-    var xProp = headBone.findProperty("XRotate");
-    var yProp = headBone.findProperty("YRotate");
-
-    if (xProp) {
-        xProp.setValue(rotX);
-        applied.push({bone: headBone.getName(), property: "XRotate", value: rotX});
-    } else {
-        notFound.push(headBone.getName() + ".XRotate");
-    }
-    if (yProp) {
-        yProp.setValue(rotY);
-        applied.push({bone: headBone.getName(), property: "YRotate", value: rotY});
-    } else {
-        notFound.push(headBone.getName() + ".YRotate");
-    }
-
-    return {
-        success:   true,
-        figure:    args.figureLabel,
-        direction: direction,
-        applied:   applied,
-        not_found: notFound
-    };
-})();
-"""
-    result = await _execute(script, {
-        "figureLabel": figure_label,
-        "direction": direction,
-        "targetLabel": target_label or "",
-    })
-    return result
+    return await _run_tool(_run)
 
 
 # ---------------------------------------------------------------------------
@@ -639,63 +596,47 @@ async def daz_load_morph_pro(
           blocking interactive rename dialog instead, even with
           ``MakeUnique`` (confirmed live).
     """
-    payload: dict[str, Any] = {
-        "nodeLabel": node_label,
-        "objPath": obj_path,
-        "loadMode": load_mode,
-        "overwriteMode": overwrite_mode,
-        "mirroring": mirroring,
-        "scale": scale,
-        "reverseDeformations": reverse_deformations,
-        "createControlProperty": create_control_property,
-        "onlyErrorsOrWarnings": only_errors_or_warnings,
-    }
-    if morph_name is not None:
-        payload["morphName"] = morph_name
-    if preserve_existing_deltas is not None:
-        payload["preserveExistingDeltas"] = preserve_existing_deltas
-    if clean_up_orphans is not None:
-        payload["cleanUpOrphans"] = clean_up_orphans
-    if delta_tolerance is not None:
-        payload["deltaTolerance"] = delta_tolerance
-    if reverse_deformations_pose_path is not None:
-        payload["reverseDeformationsPosePath"] = reverse_deformations_pose_path
-    if subdivision is not None:
-        payload["subdivision"] = subdivision
-    if subdivision_mapping is not None:
-        payload["subdivisionMapping"] = subdivision_mapping
-    if subdivision_min_resolution is not None:
-        payload["subdivisionMinResolution"] = subdivision_min_resolution
-    if subdivision_max_resolution is not None:
-        payload["subdivisionMaxResolution"] = subdivision_max_resolution
-    if subdivision_built_resolution is not None:
-        payload["subdivisionBuiltResolution"] = subdivision_built_resolution
-    if subdivision_smooth_cage is not None:
-        payload["subdivisionSmoothCage"] = subdivision_smooth_cage
-    if attenuate_strength is not None:
-        payload["attenuateStrength"] = attenuate_strength
-    if attenuate_edge_strength is not None:
-        payload["attenuateEdgeStrength"] = attenuate_edge_strength
-    if attenuate_map_path is not None:
-        payload["attenuateMapPath"] = attenuate_map_path
-    if property_group_path is not None:
-        payload["propertyGroupPath"] = property_group_path
-    if hide_secondary_properties is not None:
-        payload["hideSecondaryProperties"] = hide_secondary_properties
-    if control_node_label is not None:
-        payload["controlNodeLabel"] = control_node_label
-    if control_property_name is not None:
-        payload["controlPropertyName"] = control_property_name
-    if control_property_custom_label is not None:
-        payload["controlPropertyCustomLabel"] = control_property_custom_label
-    if control_property_erc_type is not None:
-        payload["controlPropertyErcType"] = control_property_erc_type
-    if control_property_erc_custom_value is not None:
-        payload["controlPropertyErcCustomValue"] = control_property_erc_custom_value
-
     if create_control_property and not control_property_name:
         raise ToolError(
             "control_property_name is required when create_control_property=True"
         )
+    options = {k: v for k, v in {
+        "morph_name": morph_name, "load_mode": load_mode, "overwrite_mode": overwrite_mode,
+        "mirroring": mirroring, "scale": scale, "only_errors_or_warnings": only_errors_or_warnings,
+        "preserve_existing_deltas": preserve_existing_deltas,
+        "clean_up_orphans": clean_up_orphans, "delta_tolerance": delta_tolerance,
+        "reverse_deformations": reverse_deformations,
+        "reverse_deformations_pose_path": reverse_deformations_pose_path,
+        "subdivision": subdivision, "subdivision_mapping": subdivision_mapping,
+        "subdivision_min_resolution": subdivision_min_resolution,
+        "subdivision_max_resolution": subdivision_max_resolution,
+        "subdivision_built_resolution": subdivision_built_resolution,
+        "subdivision_smooth_cage": subdivision_smooth_cage,
+        "attenuate_strength": attenuate_strength,
+        "attenuate_edge_strength": attenuate_edge_strength,
+        "attenuate_map_path": attenuate_map_path, "property_group_path": property_group_path,
+        "hide_secondary_properties": hide_secondary_properties,
+    }.items() if v is not None}
+    if create_control_property:
+        options.update({k: v for k, v in {
+            "control_property_name": control_property_name,
+            "control_property_custom_label": control_property_custom_label,
+            "control_property_erc_type": control_property_erc_type,
+            "control_property_erc_custom_value": control_property_erc_custom_value,
+        }.items() if v is not None})
 
-    return await _execute_by_id("vangard-load-morph-pro", payload)
+    def _run() -> dict[str, Any]:
+        scene = get_scene()
+        node = scene.resolve_node(node_label)
+        control = (scene.resolve_node(control_node_label)
+                   if create_control_property and control_node_label else None)
+        try:
+            r = node.load_morph(obj_path, control_node=control, **options)
+        except DazError as e:
+            raise ToolError(str(e)) from e
+        return {"success": True, "node": node.describe().label, "file": obj_path,
+                "morphName": r.morph_name, "loadMode": load_mode,
+                "overwriteMode": overwrite_mode, "mirroring": mirroring,
+                "controlProperty": r.control_property, "log": r.log}
+
+    return await _run_tool(_run)

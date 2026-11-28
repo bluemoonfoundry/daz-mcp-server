@@ -20,7 +20,7 @@ The content browser (`DAZ_CONTENT_BROWSER_URL`) is a separate service, reached w
 - `_shots.py` — scene lookups and result helpers for the cinematic tools (shots themselves come from `dazpy.shot_library`)
 - `_emotions.py`, `genesis_bones.json` — emotion definitions and per-generation bone names
 - `_ui_automation.py` — Windows UI Automation for `daz_save_wearable_preset`
-- `tools/__init__.py` — imports all 16 tool modules (167 tools total)
+- `tools/__init__.py` — imports all 16 tool modules (162 tools total)
 - `tools/<module>.py` — each module imports `mcp` from `_mcp` and registers `@mcp.tool()` functions
 
 ## Adding a New Tool
@@ -46,13 +46,13 @@ The content browser (`DAZ_CONTENT_BROWSER_URL`) is a separate service, reached w
 - Tests call tool functions directly (e.g., `await daz_status()`), imported from their
   module (e.g., `from daz_mcp_server.tools.utility import daz_status`).
 - Run the unit suite the way CI does: `uv run pytest tests/ -m "not integration and not slow" -q`.
-  `addopts` only excludes `slow`, so a bare `pytest tests/` **also runs the integration
-  tests** whenever DAZ Studio is reachable. A `pytest_collection_modifyitems` hook in
-  `tests/conftest.py` auto-tags any test using a live-DAZ fixture (`live_client`,
-  `figure_label`, etc.) with `integration`, so `-m "not integration"` reliably excludes it
-  (Bug-Katalog #19). Run `-m slow` / `-m integration` explicitly and only against a scene
-  you can afford to have modified.
+  Live tests are opt-in: a `pytest_collection_modifyitems` hook in `tests/conftest.py`
+  auto-tags any test using a live-DAZ fixture (`live_client`, `figure_label`, etc.) with
+  `integration` (Bug-Katalog #19) and skips every `integration` test unless
+  `DAZ_LIVE_TESTS=1` is set, whether or not DAZ Studio is reachable. With it set, live
+  fixtures connect to `DAZ_HOST:DAZ_PORT` (see `tests/_live.py`; new live fixtures must call
+  `require_live()`). Run live tests only against a scene you can afford to have modified.
 
-## Macros & Checkpoints
-- `daz_start_recording` / `daz_stop_recording`: Session-based macro storage.
+## Checkpoints & Session Stats
+- `daz_get_performance_stats` / `daz_explain_last_error`: per-tool call stats and the last tool error, recorded by `SessionStatsMiddleware` (`_session_stats.py`).
 - `daz_save_scene_state`: Checkpoint transforms/morphs/lights in server memory.

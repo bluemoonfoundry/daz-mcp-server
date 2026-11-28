@@ -25,6 +25,7 @@ from ._client import (
     set_content_browser_client,
 )
 from . import _compat
+from ._session_stats import SessionStatsMiddleware
 from ._errors import handle_dazpy_error
 from ._registry import _register_scripts
 
@@ -164,3 +165,4 @@ async def _lifespan(server: FastMCP):  # pylint: disable=unused-argument
 # version: what MCP clients see in serverInfo (without it FastMCP reports its own version).
 mcp = FastMCP("daz-mcp-server", version=_package_version("daz-mcp-server"), lifespan=_lifespan)
 mcp.add_middleware(_compat.CompatibilityMiddleware())
+mcp.add_middleware(SessionStatsMiddleware())

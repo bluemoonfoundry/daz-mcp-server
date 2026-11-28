@@ -401,10 +401,9 @@ async def test_camera_path_keys_waypoints_and_tracks_target(scene):
     ("interview", ["MST_Alice-Bob", "MS_Alice"]),
 ])
 async def test_create_scene_builds_cameras_with_dazpy(scene, monkeypatch, scene_type, ids):
-    async def fake_exec(script_id, args):
-        assert script_id == "vangard-create-scene"
+    def fake_template(description, characters):
         return {"sceneType": scene_type, "actions": [], "suggestions": []}
-    monkeypatch.setattr(cinematic, "_execute_by_id", fake_exec)
+    monkeypatch.setattr("daz_mcp_server._cinematic_staging.scene_template", fake_template)
     out = await cinematic.daz_create_scene("a scene", ["Alice", "Bob", "Ghost"])
     assert [c["label"] for c in out["cameras"]] == ids
     assert out["continuity"] == []

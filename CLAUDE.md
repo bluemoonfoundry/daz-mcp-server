@@ -5,8 +5,9 @@ Bug-Katalog: `C:\Users\Black-Byte\Development\pinkcharakter\docs\daz-mcp-bridge-
 
 ## Primary Commands
 - `uv sync` - Install dependencies
-- `uv run pytest tests/ -m "not integration and not slow"` - Unit tests only (safe while DAZ Studio is running)
-- `uv run pytest tests/ -v` - All tests. **Integration tests run against DAZ Studio whenever it is reachable on 18811** (they render and add nodes), so close Studio or use the line above unless you mean it.
+- `uv run pytest tests/ -m "not integration and not slow"` - Unit tests only (what CI runs)
+- `uv run pytest tests/` - Unit tests; live integration tests are skipped unless `DAZ_LIVE_TESTS=1` is set, even while DAZ Studio is running
+- `DAZ_LIVE_TESTS=1 uv run pytest tests/test_<area>_integration.py` - Live tests against DAZ Studio at `DAZ_HOST:DAZ_PORT` (default `localhost:18811`). They render, add and delete nodes and change the open scene, so scope them with `-k` and use a scene you can lose. The root `integration_test.py` script uses the same opt-in.
 - `uv run daz-mcp-server` - Run the MCP server (stdio); released builds run with `uvx daz-mcp-server`
 - Release: bump `pyproject.toml`, README badge/compatibility row, `CLAUDE.md` version and `CHANGELOG.md`; merge; push tag `vX.Y.Z` → `.github/workflows/release.yml` publishes to PyPI (Trusted Publishing, environment `pypi`) and creates the GitHub release
 
@@ -20,7 +21,7 @@ Bug-Katalog: `C:\Users\Black-Byte\Development\pinkcharakter\docs\daz-mcp-bridge-
 ## Architecture Summary
 - **Version:** 0.10.0 (source of truth: `pyproject.toml`; `tests/test_version_consistency.py` checks the docs and the server match it)
 - **Bridge:** Connects to DazScriptServer (port 18811)
-- **Registry:** 167 tools registered across 16 tool modules.
+- **Registry:** 162 tools registered across 16 tool modules.
 - **Structure:** Modular — `_mcp.py` holds shared FastMCP instance; `tools/__init__.py` imports all 16 modules so `@mcp.tool()` decorators fire at import time.
 - **Scene recipes:** `tools/recipe.py` — `daz_recipe_validate/plan/apply/observe/render` + `daz://recipe/schema` resources, compact profile, thin wrappers over `dazpy.recipe` (see src/daz_mcp_server/guides/recipe.md)
 - **Phase 4.8:** Lighting Animation — `daz_animate_light`, `daz_create_light_sequence`

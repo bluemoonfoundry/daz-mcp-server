@@ -3,9 +3,19 @@ from __future__ import annotations
 
 from typing import Any
 
-from .._mcp import mcp, _execute_by_id
-from .._client import get_scene, run_dazpy
-from .._errors import handle_dazpy_error
+from dazpy import NodeInfo
+from dazpy.exceptions import NodeNotFoundError, PropertyNotFoundError
+from fastmcp.exceptions import ToolError
+
+from .._mcp import mcp
+from .._client import get_scene
+from .._errors import run_tool as _run_tool
+
+
+def _node_info(info: NodeInfo) -> dict[str, Any]:
+    return {"label": info.label, "name": info.name, "type": info.type,
+            "elementID": info.element_id, "parent": info.parent}
+
 
 
 @mcp.tool(tags={"desktop"})
@@ -29,7 +39,19 @@ async def daz_get_node(node_label: str) -> dict[str, Any]:
       - parent: parent node label, or null
       - properties: mapping of property label → current numeric value
     """
-    return await _execute_by_id("vangard-get-node", {"nodeLabel": node_label})
+    def _run() -> dict[str, Any]:
+        node = get_scene().resolve_node(node_label)
+        info = node.describe()
+        return {
+            "name": info.name,
+            "label": info.label,
+            "type": info.type,
+            "elementID": info.element_id,
+            "parent": info.parent,
+            "properties": node.numeric_properties(include_modifiers=True),
+        }
+
+    return await _run_tool(_run)
 
 
 @mcp.tool(tags={"desktop"})
@@ -46,7 +68,14 @@ async def daz_find_nodes(query: str) -> dict[str, Any]:
     Returns:
         Dict with query, count, and matches[{label, name, type, elementID, parent}].
     """
-    return await _execute_by_id("vangard-find-nodes", {"query": query})
+    if not query:
+        raise ToolError("query is required")
+
+    def _run() -> dict[str, Any]:
+        matches = [_node_info(i) for i in get_scene().find_nodes(query)]
+        return {"query": query, "count": len(matches), "matches": matches}
+
+    return await _run_tool(_run)
 
 
 @mcp.tool()
@@ -74,10 +103,19 @@ async def daz_set_property(
       - property: property label as confirmed by DAZ Studio
       - value: the value read back after setting
     """
-    return await _execute_by_id(
-        "vangard-set-property",
-        {"nodeLabel": node_label, "propertyName": property_name, "value": value},
-    )
+    def _run() -> dict[str, Any]:
+        node = get_scene().resolve_node(node_label)
+        info = node.describe()
+        try:
+            written = node.set_numeric_property(property_name, value)
+        except PropertyNotFoundError as e:
+            raise ToolError(f"Property not found: {property_name} on {node_label}") from e
+        except TypeError as e:
+            raise ToolError(str(e)) from e
+        return {"node": info.label, "elementID": info.element_id,
+                "property": written.label, "value": written.value}
+
+    return await _run_tool(_run)
 
 
 @mcp.tool()
@@ -105,7 +143,13 @@ async def daz_delete_node(node_label: str) -> dict[str, Any]:
           confirm the exact label before deleting.
         - Save the scene first with daz_save_scene if you want a recovery point.
     """
-    return await _execute_by_id("vangard-delete-node", {"nodeLabel": node_label})
+    def _run() -> dict[str, Any]:
+        node = get_scene().resolve_node(node_label)
+        info = node.describe()
+        node.delete()
+        return {"deleted": info.label, "child_count": info.num_children}
+
+    return await _run_tool(_run)
 
 
 @mcp.tool()
@@ -150,11 +194,27 @@ async def daz_set_parent(
         but its local transform values (X/Y/Z Translate, Rotate) will change to
         account for the new parent's transform.
     """
-    return await _execute_by_id("vangard-set-parent", {
-        "nodeLabel": node_label,
-        "parentLabel": parent_label,
-        "maintainWorldTransform": maintain_world_transform,
-    })
+    def _run() -> dict[str, Any]:
+        scene = get_scene()
+        node = scene.resolve_node(node_label)
+        info = node.describe()
+        if parent_label == "Scene":
+            try:
+                new_parent = scene.resolve_node(parent_label)
+            except NodeNotFoundError:
+                new_parent = None  # "Scene" means the scene root
+        else:
+            new_parent = scene.resolve_node(parent_label)
+        if new_parent is None:
+            node.unparent(preserve_world_transform=maintain_world_transform)
+            new_label = None
+        else:
+            node.reparent(new_parent, preserve_world_transform=maintain_world_transform)
+            new_label = new_parent.describe().label
+        return {"success": True, "node": info.label, "newParent": new_label,
+                "previousParent": info.parent}
+
+    return await _run_tool(_run)
 
 
 # ---------------------------------------------------------------------------
@@ -277,10 +337,7 @@ async def daz_batch_transform(
             "total": len(results),
         }
 
-    try:
-        return await run_dazpy(_run)
-    except Exception as e:
-        handle_dazpy_error(e)
+    return await _run_tool(_run)
 
 
 @mcp.tool()
@@ -341,10 +398,7 @@ async def daz_batch_visibility(
             "total": len(results),
         }
 
-    try:
-        return await run_dazpy(_run)
-    except Exception as e:
-        handle_dazpy_error(e)
+    return await _run_tool(_run)
 
 
 @mcp.tool()
@@ -397,7 +451,4 @@ async def daz_batch_select(
             "total": len(node_labels),
         }
 
-    try:
-        return await run_dazpy(_run)
-    except Exception as e:
-        handle_dazpy_error(e)
+    return await _run_tool(_run)

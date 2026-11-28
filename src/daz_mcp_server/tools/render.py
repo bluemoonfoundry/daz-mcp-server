@@ -3,15 +3,69 @@ from __future__ import annotations
 
 import asyncio
 import os
+import re
 import time
 from typing import Any
 
 import dazpy.exceptions as daz_exc
 from fastmcp.exceptions import ToolError
 
-from .._mcp import mcp, _execute_by_id, _execute_by_id_async, _execute_render, _execute_render_batch
-from .._client import get_async_daz_client
-from .._errors import handle_dazpy_error
+from dazpy import DazRenderSettings
+
+from .._mcp import mcp, _execute_render, _execute_render_batch
+from .._client import get_async_daz_client, get_daz_client, get_scene
+from .._errors import handle_dazpy_error, run_tool
+
+
+def _stored_output_path() -> str:
+    """Render Settings' output path, or a ToolError (Studio would open a filename dialog)."""
+    path = DazRenderSettings(get_daz_client()).output_path
+    if not path:
+        raise ToolError("Render output path is not set. Pass output_path or call "
+                        "daz_set_render_output first; otherwise Studio opens a filename dialog.")
+    return path
+
+
+async def _submit_animation(output_dir: str, start_frame: int | None, end_frame: int | None,
+                            filename_pattern: str, camera: str | None) -> dict[str, Any]:
+    """Submit an animation render (POST /render/animation) for frames start..end.
+
+    Missing frames default to the scene's animation range, in frames (the
+    old script read Scene.getAnimRange() DzTime ticks as frame numbers).
+    Returns the submission plus ``pattern`` and ``frames``.
+    """
+    if start_frame is None or end_frame is None:
+        rng = await run_tool(lambda: get_scene().anim_range())
+        start_frame = rng["start"] if start_frame is None else start_frame
+        end_frame = rng["end"] if end_frame is None else end_frame
+    if end_frame < start_frame:
+        raise ToolError(f"end_frame ({end_frame}) is before start_frame ({start_frame})")
+    pattern = os.path.join(output_dir, f"{filename_pattern}_{{frame}}.png")
+    try:
+        sub = await get_async_daz_client().render_animation_submit(
+            pattern, start_frame, end_frame, frame_padding=4, camera=camera or "")
+    except daz_exc.DazError as exc:
+        handle_dazpy_error(exc)
+    return {**sub, "pattern": pattern, "frames": {"start": start_frame, "end": end_frame}}
+
+
+async def _render_and_wait(params: dict[str, Any]) -> dict[str, Any]:
+    """Submit a render through dazpy and wait for it; returns request_id and result.
+
+    With a camera, the viewport is switched back to its previous camera
+    afterwards (the /render endpoint leaves it on the render camera).
+    """
+    previous = None
+    if params.get("camera"):
+        vc = await run_tool(lambda: get_scene().viewport_camera())
+        previous = vc.label if vc else None
+    try:
+        sub = await _execute_render(params)
+        result = await daz_wait_for_request(sub["request_id"], poll_interval_seconds=2.0)
+    finally:
+        if previous and previous != params.get("camera"):
+            await run_tool(lambda: get_scene().set_viewport_camera(previous))
+    return {"request_id": sub["request_id"], "result": result}
 
 
 # ---------------------------------------------------------------------------
@@ -36,10 +90,10 @@ async def daz_render(
     Returns:
       - success: true when the render was launched without error
     """
-    args: dict[str, Any] = {}
-    if output_path is not None:
-        args["outputPath"] = output_path
-    return await _execute_by_id("vangard-render", args or None)
+    path = output_path or await run_tool(_stored_output_path)
+    done = await _render_and_wait({"output_path": path})
+    return {"success": True, "outputPath": path, **done}
+
 
 
 @mcp.tool()
@@ -80,11 +134,11 @@ async def daz_render_with_camera(
         - Use for multi-camera batch renders
         - Combine with daz_orbit_camera_around() to set up camera first
     """
-    args: dict[str, Any] = {"cameraLabel": camera_label}
-    if output_path is not None:
-        args["outputPath"] = output_path
+    path = output_path or await run_tool(_stored_output_path)
+    done = await _render_and_wait({"output_path": path, "camera": camera_label})
+    return {"success": True, "camera": camera_label, "renderedFromCamera": camera_label,
+            "outputPath": path, **done}
 
-    return await _execute_by_id("vangard-render-with-camera", args)
 
 
 @mcp.tool(tags={"desktop"})
@@ -129,7 +183,31 @@ async def daz_get_render_settings() -> dict[str, Any]:
         - DS6 Engine dropdown is opts.renderType, not getActiveRenderer()
         - Use daz_set_render_engine to change engine
     """
-    return await _execute_by_id("vangard-get-render-settings", {})
+    def _run() -> dict[str, Any]:
+        rs = DazRenderSettings(get_daz_client())
+        state = rs.render_engine_state()
+        size = rs.resolution or {}
+        out = rs.output_path
+        cam = get_scene().viewport_camera()
+        engine = rs.active_engine()
+        result = {
+            "outputPath": out or None,
+            "width": size.get("width"),
+            "height": size.get("height"),
+            "engine": engine,
+            "renderTypeName": (state.get("render_type") or {}).get("name"),
+            "activeRenderer": (state.get("active_renderer") or {}).get("name"),
+            "activeRendererClass": (state.get("active_renderer") or {}).get("class_name"),
+            "currentCamera": cam.label if cam else None,
+            "engineState": state,
+        }
+        if engine == "viewport":
+            result["warning"] = ("Engine Viewport opens a filename dialog unless an output "
+                                 "path is set; the render tools always pass one.")
+        return result
+
+    return await run_tool(_run)
+
 
 
 @mcp.tool()
@@ -177,14 +255,19 @@ async def daz_batch_render_cameras(
         - Previous render camera is restored after batch completes
         - Cameras that don't exist are skipped
     """
-    return await _execute_by_id(
-        "vangard-batch-render-cameras",
-        {
-            "cameras": cameras,
-            "outputDir": output_dir,
-            "baseFilename": base_filename,
-        },
-    )
+    def _known() -> set[str]:
+        return {c.label for c in get_scene().camera_info()}
+
+    known = await run_tool(_known)
+    rendered = []
+    for cam in cameras:
+        if cam not in known:
+            continue  # unknown cameras are skipped, as before
+        path = os.path.join(output_dir, f"{base_filename}_{re.sub(r'[^a-zA-Z0-9]', '_', cam)}.png")
+        await _render_and_wait({"output_path": path, "camera": cam})
+        rendered.append({"camera": cam, "renderedFromCamera": cam, "outputPath": path})
+    return {"success": True, "rendered": rendered, "total": len(cameras)}
+
 
 
 @mcp.tool()
@@ -250,18 +333,14 @@ async def daz_render_animation(
         - Use daz_get_animation_info() to get default frame range
         - Convert to video: ffmpeg -framerate 30 -i frame_%04d.png output.mp4
     """
-    args: dict[str, Any] = {
-        "outputDir": output_dir,
-        "filenamePattern": filename_pattern,
-    }
-    if start_frame is not None:
-        args["startFrame"] = start_frame
-    if end_frame is not None:
-        args["endFrame"] = end_frame
-    if camera is not None:
-        args["camera"] = camera
+    sub = await _submit_animation(output_dir, start_frame, end_frame, filename_pattern, camera)
+    result = await daz_wait_for_request(sub["request_id"], poll_interval_seconds=2.0)
+    rendered = [{"frame": f, "outputPath": sub["pattern"].replace("{frame}", f"{f:04d}")}
+                for f in range(sub["frames"]["start"], sub["frames"]["end"] + 1)]
+    return {"success": True, "rendered": rendered, "total": len(rendered),
+            "renderedFromCamera": camera, "frames": sub["frames"],
+            "request_id": sub["request_id"], "result": result}
 
-    return await _execute_by_id("vangard-render-animation", args)
 
 
 # ---------------------------------------------------------------------------
@@ -471,17 +550,7 @@ async def daz_render_animation_async(
     Returns:
         {"request_id": "script-XXXXXXXX", "status": "queued", "submitted_at": "..."}
     """
-    args: dict[str, Any] = {
-        "outputDir": output_dir,
-        "filenamePattern": filename_pattern,
-    }
-    if start_frame is not None:
-        args["startFrame"] = start_frame
-    if end_frame is not None:
-        args["endFrame"] = end_frame
-    if camera is not None:
-        args["camera"] = camera
-    return await _execute_by_id_async("vangard-render-animation", args)
+    return await _submit_animation(output_dir, start_frame, end_frame, filename_pattern, camera)
 
 
 # ---------------------------------------------------------------------------
@@ -678,18 +747,20 @@ async def daz_set_render_quality(preset: str) -> dict[str, Any]:
         req = await daz_render_async("/final.png")
         result = await daz_get_request_result(req["request_id"], wait=True)
     """
-    _presets: dict[str, dict[str, float]] = {
-        "draft":   {"maxSamples": 100,  "renderQuality": 0.5},
-        "preview": {"maxSamples": 500,  "renderQuality": 0.75},
-        "good":    {"maxSamples": 2000, "renderQuality": 0.9},
-        "final":   {"maxSamples": 5000, "renderQuality": 1.0},
-    }
-    if preset not in _presets:
-        valid = ", ".join(f'"{k}"' for k in _presets)
-        raise ToolError(f"Unknown render quality preset: '{preset}'. Valid presets: {valid}")
+    if preset not in ("draft", "preview", "good", "final"):
+        raise ToolError(f"Unknown render quality preset: '{preset}'. "
+                        'Valid presets: "draft", "preview", "good", "final"')
 
-    args = {"preset": preset, **_presets[preset]}
-    return await _execute_by_id("vangard-set-render-quality", args)
+    def _run() -> dict[str, Any]:
+        rs = DazRenderSettings(get_daz_client())
+        rs.set_quality_preset(preset)
+        return {"preset": preset, "propertiesSet": [
+            {"property": "Max Samples", "value": rs.max_samples},
+            {"property": "Max Time", "value": rs.max_time_secs},
+            {"property": "Rendering Quality", "value": rs.quality}]}
+
+    return await run_tool(_run)
+
 
 
 # ---------------------------------------------------------------------------
@@ -778,10 +849,26 @@ async def daz_set_render_output(
         raise ToolError(
             "At least one of output_path, width, or height must be provided."
         )
-    return await _execute_by_id(
-        "vangard-set-render-output",
-        {"outputPath": output_path, "width": width, "height": height},
-    )
+
+    def _run() -> dict[str, Any]:
+        rs = DazRenderSettings(get_daz_client())
+        changed: dict[str, Any] = {}
+        if output_path:
+            rs.output_path = output_path
+            changed["output_path"] = output_path
+        if width is not None or height is not None:
+            cur = rs.resolution or {}
+            rs.set_resolution(width if width is not None else cur.get("width"),
+                              height if height is not None else cur.get("height"))
+            changed.update({k: v for k, v in (("width", width), ("height", height))
+                            if v is not None})
+        size = rs.resolution or {}
+        return {"changed": changed, "current": {"output_path": rs.output_path or None,
+                                                "width": size.get("width"),
+                                                "height": size.get("height")}}
+
+    return await run_tool(_run)
+
 
 
 @mcp.tool()
@@ -800,4 +887,21 @@ async def daz_set_render_engine(engine: str) -> dict[str, Any]:
         success, engine, renderType, renderTypeName, activeRenderer,
         activeRendererClass, and warning when engine is viewport.
     """
-    return await _execute_by_id("vangard-set-render-engine", {"engine": engine})
+    aliases = {"opengl": "multi_pass_opengl"}
+    name = aliases.get(engine.strip().lower(), engine.strip().lower())
+    if name not in ("iray", "multi_pass_opengl", "viewport"):
+        raise ToolError("engine must be iray, multi_pass_opengl (opengl) or viewport")
+
+    def _run() -> dict[str, Any]:
+        rs = DazRenderSettings(get_daz_client())
+        rs.set_active_engine(name)
+        state = rs.render_engine_state()
+        out = {"success": True, "engine": rs.active_engine(),
+               "renderTypeName": (state.get("render_type") or {}).get("name"),
+               "activeRenderer": (state.get("active_renderer") or {}).get("name"),
+               "activeRendererClass": (state.get("active_renderer") or {}).get("class_name")}
+        if name == "viewport":
+            out["warning"] = "Viewport renders need an output path (the render tools pass one)."
+        return out
+
+    return await run_tool(_run)

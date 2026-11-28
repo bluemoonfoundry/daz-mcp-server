@@ -11,14 +11,10 @@ from types import SimpleNamespace
 
 import pytest
 
+from dazpy import DazScene
+
 from daz_mcp_server._registry import _REGISTRY
 from daz_mcp_server.tools import animation
-
-
-def test_figure_info_script_uses_element_id_property():
-    script = _REGISTRY["vangard-get-figure-info"][1]
-    assert "getElementID" not in script
-    assert "fig.elementID" in script
 
 
 def test_no_registered_script_calls_get_element_id():
@@ -27,6 +23,12 @@ def test_no_registered_script_calls_get_element_id():
 
 
 class _FakeScene:
+    def __init__(self, client):
+        self.client = client
+
+    def time_step(self):
+        return DazScene(self.client).time_step()
+
     def frame(self):
         return 5
 
@@ -46,8 +48,7 @@ class _FakeClient:
 
 def _patch(monkeypatch, value):
     client = _FakeClient(value)
-    monkeypatch.setattr(animation, "get_scene", lambda: _FakeScene())
-    monkeypatch.setattr(animation, "get_daz_client", lambda: client)
+    monkeypatch.setattr(animation, "get_scene", lambda: _FakeScene(client))
     return client
 
 

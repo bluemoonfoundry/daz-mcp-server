@@ -1,12 +1,11 @@
 """Utility tools: status, script execution, script help, property inspection,
-scene validation, event waiting, and macro recording/replay.
+scene validation, event waiting, session stats and the last error.
 """
 from __future__ import annotations
 
 import asyncio
 import json
 import re
-from datetime import datetime
 from pathlib import Path
 from typing import Any
 
@@ -20,10 +19,12 @@ from .._mcp import (
     _execute_raw,
     with_args_variable,
 )
-from .._client import get_async_daz_client
-from .._errors import handle_dazpy_error
+from .._client import get_async_daz_client, get_scene
+from .._errors import handle_dazpy_error, run_tool
+from .._validation import validate_scene
 from .._guides import GUIDE_NAMES, guide_index, read_guide
 from .. import _compat
+from .. import _session_stats
 
 # ---------------------------------------------------------------------------
 # Module-level state
@@ -37,12 +38,6 @@ try:
 except (OSError, json.JSONDecodeError):
     pass
 
-# Mutable module state toggled via `global` in daz_start_recording()/
-# daz_stop_recording() below, not a real constant.
-_macro_recording: bool = False  # pylint: disable=invalid-name
-_current_macro: dict[str, Any] | None = None  # pylint: disable=invalid-name
-_macro_library: dict[str, dict[str, Any]] = {}
-_call_stats: dict[str, int] = {}
 
 
 # ---------------------------------------------------------------------------
@@ -245,6 +240,8 @@ async def daz_find_actions(
         daz_find_actions("ERC Freeze")
         daz_find_actions("DzStrandHairCreateNodeAction")
     """
+    # Stays on its registered script: dazpy has no DzActionMgr API, and this
+    # is read-only discovery (it never triggers an action).
     return await _execute_by_id(
         "vangard-find-actions",
         {"query": query, "maxResults": max_results},
@@ -298,7 +295,26 @@ async def daz_batch_set_properties(
         individually for each operation. All operations execute in a single
         script call to DAZ Studio.
     """
-    return await _execute_by_id("vangard-batch-set-properties", {"operations": operations})
+    ops = []
+    for i, op in enumerate(operations):
+        if not isinstance(op, dict) or not {"nodeLabel", "propertyName", "value"} <= op.keys():
+            raise ToolError(
+                f"operations[{i}] needs nodeLabel, propertyName and value; got {op!r}")
+        ops.append((op["nodeLabel"], op["propertyName"], op["value"]))
+
+    def _run() -> dict[str, Any]:
+        results = []
+        for (node_label, _prop, _value), r in zip(ops, get_scene().set_numeric_properties(ops)):
+            if r.ok:
+                results.append({"success": True, "node": r.node, "property": r.property,
+                                "value": r.value})
+            else:
+                results.append({"success": False, "node": node_label, "error": r.error})
+        ok = sum(1 for r in results if r["success"])
+        return {"results": results, "successCount": ok, "failureCount": len(results) - ok,
+                "total": len(results)}
+
+    return await run_tool(_run)
 
 
 @mcp.tool()
@@ -339,10 +355,18 @@ async def daz_inspect_properties(
             "count": 45
         }
     """
-    return await _execute_by_id("vangard-inspect-properties", {
-        "nodeLabel": node_label,
-        "propertyType": property_type,
-    })
+    kinds = ("all", "numeric", "transform", "morph", "bool", "string")
+    if property_type not in kinds:
+        raise ToolError(f"property_type must be one of {', '.join(kinds)}; got {property_type!r}")
+
+    def _run() -> dict[str, Any]:
+        node = get_scene().resolve_node(node_label)
+        props = [{"label": d.label, "name": d.name, "type": d.type, "value": d.value,
+                  "min": d.min, "max": d.max, "path": d.path, "is_animatable": d.is_animatable}
+                 for d in node.property_details(property_type)]
+        return {"node": node.describe().label, "properties": props, "count": len(props)}
+
+    return await run_tool(_run)
 
 
 @mcp.tool()
@@ -374,16 +398,23 @@ async def daz_get_property_metadata(
             "node": "Spotlight 1"
         }
     """
-    return await _execute_by_id("vangard-get-property-metadata", {
-        "nodeLabel": node_label,
-        "propertyName": property_name,
-    })
+    def _run() -> dict[str, Any]:
+        node = get_scene().resolve_node(node_label)
+        try:
+            d = node.property_detail(property_name)
+        except daz_exc.PropertyNotFoundError as e:
+            raise ToolError(f"Property not found: {property_name} on {node_label}") from e
+        return {"label": d.label, "name": d.name, "type": d.type, "current_value": d.value,
+                "default_value": d.default, "min": d.min, "max": d.max,
+                "is_animatable": d.is_animatable, "path": d.path,
+                "node": node.describe().label}
+
+    return await run_tool(_run)
 
 
 # ---------------------------------------------------------------------------
 # Tools — script / scene validation
 # ---------------------------------------------------------------------------
-
 
 @mcp.tool(tags={"desktop"})
 async def daz_validate_script(script: str) -> dict[str, Any]:
@@ -510,10 +541,17 @@ async def daz_validate_scene() -> dict[str, Any]:
     """Validate the current scene for common issues before rendering.
 
     Checks:
-    - Character/figure bounding box collisions (interpenetration)
-    - Lighting presence and quality
+    - Character/figure bounding box collisions (top-level figures only)
+    - Whether anything lights the render (lights, environment dome/sun, camera
+      headlamp; dazpy ``DazScene.check``), and single-light scenes
+    - Whether each figure is in the active viewport camera's frame
     - Camera presence
     - Empty scene (no figures)
+
+    Issue/warning ``type`` is ``collision``, a dazpy check code (``no_light``,
+    ``no_subject_in_frame``, ``subject_out_of_frame``,
+    ``subject_not_in_frame``), ``poor-lighting``, ``no-camera`` or
+    ``no-figures``. ``findings`` holds the raw dazpy check findings.
 
     Returns a score (0-100) and breakdown by category, plus actionable
     suggestions for any issues found.
@@ -542,11 +580,12 @@ async def daz_validate_scene() -> dict[str, Any]:
                 "figures": 2,
                 "cameras": 1,
                 "lights": 3,
-                "environment_lighting": false
-            }
+                "lit": true
+            },
+            "findings": [...]
         }
     """
-    return await _execute_by_id("vangard-validate-scene")
+    return await run_tool(lambda: validate_scene(get_scene()))
 
 
 # ---------------------------------------------------------------------------
@@ -623,251 +662,6 @@ async def daz_wait_for_scene_event(
 
 
 # ---------------------------------------------------------------------------
-# Tools — macro recording / replay
-# ---------------------------------------------------------------------------
-
-
-@mcp.tool()
-async def daz_start_recording(
-    macro_name: str,
-    description: str = "",
-) -> dict[str, Any]:
-    """Start recording a macro — all subsequent MCP tool calls will be captured.
-
-    Macros allow you to record sequences of operations and replay them later,
-    optionally with parameter substitution. This is useful for:
-    - Creating reusable workflows
-    - Batch operations
-    - Complex multi-step processes
-    - Sharing workflows across scenes
-
-    Args:
-        macro_name: Unique name for this macro (1-64 characters, letters/digits/hyphens/underscores)
-        description: Optional description of what this macro does
-
-    Returns:
-        Dict with success, macro_name, description, and started_at timestamp.
-
-    Example:
-        # Start recording a portrait setup workflow
-        daz_start_recording("portrait_setup", "Standard portrait lighting and framing")
-
-        # Perform operations (these will be recorded)
-        daz_apply_lighting_preset("three-point", "Genesis 9")
-        daz_frame_shot("Camera 1", "Genesis 9", "medium-close-up")
-
-        # Stop recording
-        daz_stop_recording()
-
-    Note:
-        - Only one macro can be recorded at a time
-        - Macros are stored in memory and lost when MCP server restarts
-        - Use daz_replay_macro() to execute saved macros
-    """
-    global _macro_recording, _current_macro  # pylint: disable=global-statement
-
-    # Validate macro name
-    if not macro_name or len(macro_name) > 64:
-        raise ToolError("Macro name must be 1-64 characters")
-    if not macro_name.replace("-", "").replace("_", "").isalnum():
-        raise ToolError("Macro name must contain only letters, digits, hyphens, and underscores")
-
-    # Check if already recording
-    if _macro_recording:
-        raise ToolError(
-            f"Already recording macro '{_current_macro['name']}'. "
-            "Stop current recording with daz_stop_recording() first."
-        )
-
-    # Initialize recording session
-    _macro_recording = True
-    _current_macro = {
-        "name": macro_name,
-        "description": description,
-        "started_at": datetime.now().isoformat(),
-        "operations": [],
-    }
-
-    return {
-        "success": True,
-        "macro_name": macro_name,
-        "description": description,
-        "started_at": _current_macro["started_at"],
-        "message": f"Recording macro '{macro_name}'. Call daz_stop_recording() when done.",
-    }
-
-
-@mcp.tool()
-async def daz_stop_recording() -> dict[str, Any]:
-    """Stop recording the current macro and save it to the macro library.
-
-    The recorded macro will be saved in memory and can be replayed using
-    daz_replay_macro(). Recording is automatically stopped.
-
-    Returns:
-        Dict with success, macro details (name, description, operation_count),
-        and saved_at timestamp.
-
-    Example:
-        # Start recording
-        daz_start_recording("my_workflow")
-
-        # ... perform operations ...
-
-        # Stop and save
-        result = daz_stop_recording()
-        print(f"Saved macro with {result['operation_count']} operations")
-
-    Note:
-        - Macros are stored in memory only (lost on MCP server restart)
-        - If macro name already exists, it will be overwritten
-        - No operations are actually recorded yet — this is placeholder for future implementation
-    """
-    global _macro_recording, _current_macro, _macro_library
-
-    # Check if recording is active
-    if not _macro_recording:
-        raise ToolError("No macro recording in progress. Use daz_start_recording() first.")
-
-    # Finalize macro
-    # pylint: disable=unsubscriptable-object,unsupported-assignment-operation
-    _current_macro["saved_at"] = datetime.now().isoformat()
-    operation_count = len(_current_macro["operations"])
-
-    # Save to library
-    macro_name = _current_macro["name"]
-    _macro_library[macro_name] = _current_macro
-
-    # Clear recording state
-    result = {
-        "success": True,
-        "macro_name": macro_name,
-        "description": _current_macro["description"],
-        "operation_count": operation_count,
-        "saved_at": _current_macro["saved_at"],
-        "message": f"Macro '{macro_name}' saved with {operation_count} operations.",
-    }
-    # pylint: enable=unsubscriptable-object,unsupported-assignment-operation
-
-    _macro_recording = False
-    _current_macro = None
-
-    return result
-
-
-@mcp.tool()
-async def daz_replay_macro(
-    macro_name: str,
-    parameters: dict[str, Any] | None = None,  # pylint: disable=unused-argument
-    # Parameter substitution not yet implemented; see docstring below.
-) -> dict[str, Any]:
-    """Replay a saved macro with optional parameter substitution.
-
-    Executes all operations recorded in a macro sequentially. Supports parameter
-    substitution to customize behavior at replay time.
-
-    Args:
-        macro_name: Name of the macro to replay (from daz_list_macros)
-        parameters: Optional dict of parameter values for substitution.
-                    Use keys like "subject", "camera", "intensity" etc.
-                    The macro will replace placeholder values with these runtime values.
-
-    Returns:
-        Dict with success, macro_name, results list (one per operation),
-        successful_count, failed_count, and duration_ms.
-
-    Example:
-        # Record a macro for one character
-        daz_start_recording("portrait_setup")
-        daz_apply_lighting_preset("three-point", "Genesis 9")
-        daz_frame_shot("Camera 1", "Genesis 9", "close-up")
-        daz_stop_recording()
-
-        # Replay for different character
-        daz_replay_macro("portrait_setup", parameters={"subject": "Alice"})
-
-    Note:
-        - Parameter substitution not yet implemented in Phase 1
-        - Operations execute sequentially; failure in one doesn't stop others
-        - Results include success/failure status for each operation
-    """
-    global _macro_library
-
-    # Look up macro
-    if macro_name not in _macro_library:
-        available = list(_macro_library.keys())
-        raise ToolError(
-            f"Macro '{macro_name}' not found. "
-            f"Available macros: {available if available else '(none)'}"
-        )
-
-    macro = _macro_library[macro_name]
-    operations = macro["operations"]
-
-    if not operations:
-        return {
-            "success": True,
-            "macro_name": macro_name,
-            "message": "Macro has no operations to replay.",
-            "results": [],
-            "successful_count": 0,
-            "failed_count": 0,
-        }
-
-    # TODO: Implement operation replay
-    # For now, return placeholder response
-    return {
-        "success": True,
-        "macro_name": macro_name,
-        "message": f"Macro '{macro_name}' replay not yet implemented (Phase 1 placeholder).",
-        "results": [],
-        "successful_count": 0,
-        "failed_count": 0,
-        "operation_count": len(operations),
-    }
-
-
-@mcp.tool()
-async def daz_list_macros() -> dict[str, Any]:
-    """List all saved macros in the macro library.
-
-    Returns all macros with their metadata. Useful for discovering available
-    workflows and checking macro details before replay.
-
-    Returns:
-        Dict with macros list (each containing name, description, operation_count,
-        saved_at), and total count.
-
-    Example:
-        result = daz_list_macros()
-        for macro in result['macros']:
-            print(f"{macro['name']}: {macro['operation_count']} operations")
-
-    Note:
-        - Macros are session-only (lost when MCP server restarts)
-        - Use daz_replay_macro() to execute a saved macro
-    """
-    global _macro_library
-
-    macros_list = []
-    for name, macro in _macro_library.items():
-        macros_list.append({
-            "name": name,
-            "description": macro.get("description", ""),
-            "operation_count": len(macro.get("operations", [])),
-            "saved_at": macro.get("saved_at", ""),
-        })
-
-    # Sort by name
-    macros_list.sort(key=lambda m: m["name"])
-
-    return {
-        "macros": macros_list,
-        "count": len(macros_list),
-    }
-
-
-# ---------------------------------------------------------------------------
 # Tools — intelligence / meta
 # ---------------------------------------------------------------------------
 
@@ -875,68 +669,46 @@ async def daz_list_macros() -> dict[str, Any]:
 @mcp.tool()
 async def daz_auto_improve_scene() -> dict[str, Any]:
     """Automatically validate the scene and attempt to fix common issues."""
-    validation = await _execute_by_id("vangard-validate-scene")
-    issues = validation.get("issues", []) if isinstance(validation, dict) else []
+    validation = await run_tool(lambda: validate_scene(get_scene()))
     fixed = []
-    for issue in issues:
-        issue_type = issue.get("type", "") if isinstance(issue, dict) else ""
-        if issue_type == "missing_lights":
-            await _execute_by_id(
-                "vangard-create-light", {"lightType": "distant", "label": "Auto Light"}
-            )
-            fixed.append("Added missing light")
+    if any(i["type"] == "no_light" for i in validation["issues"]):
+        def _add_light() -> None:
+            light = get_scene().create_light("distant")
+            light.label = "Auto Light"
+        await run_tool(_add_light)
+        fixed.append("Added missing light")
     return {"validation": validation, "fixed": fixed, "count": len(fixed)}
 
 
 @mcp.tool()
-async def daz_suggest_next_action() -> dict[str, Any]:
-    """Suggest the next action to take based on scene state."""
-    scene_info = await _execute_by_id("vangard-scene-info")
-    suggestions = []
-    if isinstance(scene_info, dict):
-        if not scene_info.get("figures"):
-            suggestions.append({
-                "action": "daz_load_file",
-                "reason": "No figures in scene - load a character",
-            })
-        if not scene_info.get("lights"):
-            suggestions.append({"action": "daz_create_light", "reason": "No lights - add lighting"})
-        if not scene_info.get("cameras"):
-            suggestions.append({
-                "action": "daz_create_camera",
-                "reason": "No cameras - add a camera",
-            })
-    if not suggestions:
-        suggestions.append({"action": "daz_render", "reason": "Scene looks ready to render"})
-    return {"suggestions": suggestions}
-
-
-@mcp.tool()
 async def daz_get_performance_stats() -> dict[str, Any]:
-    """Return session performance statistics."""
-    return {"call_stats": _call_stats, "total_calls": sum(_call_stats.values())}
+    """Tool call statistics for this MCP server session.
+
+    Returns ``tools`` (per tool: ``calls``, ``errors``, ``total_ms``, ``avg_ms``,
+    ``max_ms``), ``total_calls`` and ``total_errors``. Counts start when the MCP
+    server starts and cover every tool call except this one and
+    daz_explain_last_error.
+    """
+    return _session_stats.performance_stats()
 
 
 @mcp.tool(tags={"desktop"})
 async def daz_explain_last_error() -> dict[str, Any]:
-    """Explain common DAZ Studio errors and how to fix them."""
-    return {
-        "common_errors": [
-            {
-                "error": "Node not found",
-                "fix": "Check node label spelling; use daz_scene_info to list nodes",
-            },
-            {
-                "error": "Script execution failed",
-                "fix": "Validate script with daz_validate_script first",
-            },
-            {
-                "error": "Connection refused",
-                "fix": "Ensure DAZ Studio is running and DazScriptServer plugin is active",
-            },
-            {
-                "error": "Rate limit exceeded",
-                "fix": "Wait a moment and retry; or increase rate limit in plugin settings",
-            },
-        ]
-    }
+    """Explain the most recent tool error in this session and how to fix it.
+
+    Returns ``last_error`` (``tool``, ``error_type``, ``message``, ``arguments``
+    and ``at``, or null when no tool has failed yet) and ``hints``: fixes for
+    the kind of error it was. With no error yet, ``hints`` lists the common
+    errors and their fixes.
+    """
+    error = _session_stats.last_error()
+    if error is None:
+        return {
+            "last_error": None,
+            "hints": [hint for _, hint in _session_stats.ERROR_HINTS],
+        }
+    hints = _session_stats.hints_for(error["message"]) or [
+        "No known cause matched. Read the message: a DazScript error names the "
+        "line; a dazpy error names the node or property it couldn't use."
+    ]
+    return {"last_error": error, "hints": hints}

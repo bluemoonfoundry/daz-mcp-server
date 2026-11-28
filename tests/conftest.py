@@ -12,8 +12,12 @@ Tests that need a temporary camera or light should use `temp_camera` /
 
 Skip behaviour
 --------------
+- Live tests are opt-in: unless DAZ_LIVE_TESTS=1 is set, every test marked
+  `integration` (or using a live fixture) is skipped, even when DAZ Studio is
+  running. They change the open scene. With it set, they connect to
+  DAZ_HOST:DAZ_PORT (default localhost:18811).
 - If DAZ Studio is not reachable, every test that uses `live_client` is
-  automatically skipped.
+  skipped.
 - If no figure is loaded in the scene, `figure_label` skips the test.
 - If fewer than 2 figures are loaded, `second_figure_label` skips the test.
 """
@@ -21,19 +25,18 @@ Skip behaviour
 from __future__ import annotations
 
 import os
-import socket
 
 import pytest
 import pytest_asyncio
 from dazpy.aio import AsyncDazClient
 
-from daz_mcp_server._client import DAZ_API_TOKEN, set_async_daz_client
+from daz_mcp_server._client import DAZ_API_TOKEN, DAZ_HOST, DAZ_PORT, set_async_daz_client
 from daz_mcp_server._registry import _register_scripts
 from daz_mcp_server.tools.camera_light import daz_create_camera, daz_create_light
 from daz_mcp_server.tools.scene import daz_scene_info
 from daz_mcp_server.tools.transform import daz_delete_node
 
-BASE_URL = "http://localhost:18811"
+from _live import NOT_ENABLED_REASON, live_enabled, require_live
 
 # Module-level cache: avoids re-registering scripts and re-querying the scene
 # on every test in the same process run.
@@ -57,19 +60,17 @@ def pytest_collection_modifyitems(items):
     reachable — the runtime skip inside the fixture only fires when it
     isn't. This makes the marker filter actually reliable regardless of
     whether the file remembered to set it.
+
+    Live tests are opt-in (DAZ_LIVE_TESTS=1): without it, every
+    `integration` test is skipped here, before any fixture can reach Studio.
     """
+    enabled = live_enabled()
+    skip_live = pytest.mark.skip(reason=NOT_ENABLED_REASON)
     for item in items:
         if _LIVE_FIXTURE_NAMES & set(getattr(item, "fixturenames", ())):
             item.add_marker(pytest.mark.integration)
-
-
-def _daz_available() -> bool:
-    """Synchronous probe — True if DazScriptServer is reachable."""
-    try:
-        with socket.create_connection(("localhost", 18811), timeout=2):
-            return True
-    except OSError:
-        return False
+        if not enabled and item.get_closest_marker("integration") is not None:
+            item.add_marker(skip_live)
 
 
 # ---------------------------------------------------------------------------
@@ -80,16 +81,15 @@ def _daz_available() -> bool:
 async def live_client():
     """Real AsyncDazClient wired into the server module.
 
-    Skips automatically if DAZ Studio is not reachable.
+    Skips unless DAZ_LIVE_TESTS=1 and DAZ Studio is reachable.
     Registers all scripts once per process (cached).
     """
-    if not _daz_available():
-        pytest.skip(f"DAZ Studio not reachable at {BASE_URL}")
+    require_live()
 
     # Mirrors _mcp.py's lifespan: pass the configured token so live tests do
     # not receive 401 responses from an authenticated DazScriptServer.
     async with AsyncDazClient(
-        host="localhost", port=18811, token=DAZ_API_TOKEN or None, timeout=30.0
+        host=DAZ_HOST, port=DAZ_PORT, token=DAZ_API_TOKEN or None, timeout=30.0
     ) as client:
         set_async_daz_client(client)
         if not _cache.get("scripts_registered"):

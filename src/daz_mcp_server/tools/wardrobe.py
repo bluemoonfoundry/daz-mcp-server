@@ -3,9 +3,99 @@ from __future__ import annotations
 
 from typing import Any
 
+from dazpy.exceptions import DazError, NodeNotFoundError, PropertyNotFoundError
 from fastmcp.exceptions import ToolError
 
-from .._mcp import mcp, _execute_by_id
+from .._mcp import mcp
+from .._client import get_scene
+from .._errors import run_tool
+
+
+
+_MORPH_PATH_KEYS = ("morph", "actor", "shape", "expression", "pose")
+_GENERATION_HINTS = (("Genesis9", ("genesis 9", "genesis9", "g9f", "g9m")),
+                     ("Genesis8", ("genesis 8", "genesis8", "g8f", "g8m")),
+                     ("Genesis3", ("genesis 3", "genesis3", "g3f", "g3m")),
+                     ("Genesis2", ("genesis 2", "genesis2", "g2f", "g2m")))
+
+
+def _generation(text: str, bone_names: list[str]) -> str:
+    """Genesis generation from the figure's name/label, else its bone naming."""
+    for gen, hints in _GENERATION_HINTS:
+        if any(h in text for h in hints):
+            return gen
+    bones = set(bone_names)
+    if "l_upperarm" in bones:
+        return "Genesis9"
+    if "lShldrBend" in bones:
+        return "Genesis3/8"
+    return "Genesis" if "genesis" in text else "other"
+
+
+def _sex(text: str) -> str:
+    if any(k in text for k in ("female", "victoria", "aiko", "stephanie", "g9f", "g8f", "g3f",
+                               "g2f")):
+        return "female"
+    if any(k in text for k in ("male", "michael", "victor", "g9m", "g8m", "g3m", "g2m")):
+        return "male"
+    return "unknown"
+
+
+def _subdivision_value(node: Any) -> Any:
+    levels = node.subdivision() or {}
+    return levels.get("view") or 0
+
+
+async def _dforce_tool(fn: Any) -> dict[str, Any]:
+    """run_tool, with dazpy's dForce/transfer DazError messages as ToolError."""
+    def _wrapped() -> dict[str, Any]:
+        try:
+            return fn()
+        except (NodeNotFoundError, PropertyNotFoundError):
+            raise
+        except DazError as e:
+            raise ToolError(str(e)) from e
+    return await run_tool(_wrapped)
+
+
+async def _export(kind: str, output_path: str, node_labels: list[str] | None,
+                  include_morphs: bool, apply_current_pose: bool,
+                  scale_factor: float) -> dict[str, Any]:
+    """FBX/OBJ export of the named nodes (or the whole scene) via dazpy."""
+    if not output_path:
+        raise ToolError("output_path is required")
+
+    def _run() -> dict[str, Any]:
+        scene = get_scene()
+        exported: list[str] = []
+        if node_labels:
+            scene.select_all(False)
+            for label in node_labels:
+                try:
+                    node = scene.resolve_node(label)
+                except NodeNotFoundError:
+                    continue
+                node.select(True)
+                exported.append(node.describe().label)
+            if not exported:
+                raise ToolError("None of the specified nodes were found in the scene: "
+                                + ", ".join(node_labels))
+        options = {"Scale": float(scale_factor), "Morphs": include_morphs,
+                   "IncludeMorphs": include_morphs, "Pose": apply_current_pose,
+                   "IncludeAnimations": apply_current_pose,
+                   "SelectedRootsOnly": bool(node_labels)}
+        export = scene.export_fbx if kind == "fbx" else scene.export_obj
+        try:
+            export(output_path, selected_only=bool(node_labels), options=options)
+        except DazError as e:
+            raise ToolError(str(e)) from e
+        return {"success": True, "format": "Filmbox" if kind == "fbx" else "Wavefront Object",
+                "output_path": output_path,
+                "exported_nodes": exported or ["(whole scene)"],
+                "node_count": len(exported), "include_morphs": include_morphs,
+                "apply_current_pose": apply_current_pose, "scale_factor": scale_factor}
+
+    return await run_tool(_run)
 
 
 @mcp.tool()
@@ -30,7 +120,15 @@ async def daz_list_fitted_items(figure_label: str) -> dict[str, Any]:
         daz_list_fitted_items("Genesis 9")
         daz_list_fitted_items("Victoria 9")
     """
-    return await _execute_by_id("vangard-list-fitted-items", {"figureLabel": figure_label})
+    def _run() -> dict[str, Any]:
+        fig = get_scene().resolve_node(figure_label)
+        items = [{"label": i.label, "name": i.name, "type": i.type, "element_id": i.element_id}
+                 for i in fig.fitted_item_info()]
+        return {"figure": fig.describe().label, "fitted_count": len(items),
+                "fitted_items": items}
+
+    return await run_tool(_run)
+
 
 
 @mcp.tool()
@@ -60,10 +158,16 @@ async def daz_fit_clothing(clothing_label: str, figure_label: str) -> dict[str, 
         daz_fit_clothing("Sci-Fi Bodysuit", "Genesis 9")
         daz_fit_clothing("Leather Jacket", "Genesis 8 Female")
     """
-    return await _execute_by_id(
-        "vangard-fit-clothing",
-        {"clothingLabel": clothing_label, "figureLabel": figure_label},
-    )
+    def _run() -> dict[str, Any]:
+        scene = get_scene()
+        clothing = scene.resolve_node(clothing_label)
+        figure = scene.resolve_node(figure_label)
+        method = clothing.fit_to(figure)
+        return {"success": True, "clothing": clothing.describe().label,
+                "figure": figure.describe().label, "method": method}
+
+    return await run_tool(_run)
+
 
 
 @mcp.tool()
@@ -88,7 +192,15 @@ async def daz_unfit_item(item_label: str) -> dict[str, Any]:
         daz_unfit_item("Sci-Fi Bodysuit")
         daz_unfit_item("Hat Prop")
     """
-    return await _execute_by_id("vangard-unfit-item", {"itemLabel": item_label})
+    def _run() -> dict[str, Any]:
+        item = get_scene().resolve_node(item_label)
+        r = item.unfit()
+        return {"success": True, "item": item.describe().label,
+                "previous_figure": r.get("previous_figure"),
+                "actions": r.get("actions") or ["no fitting relationship found"]}
+
+    return await run_tool(_run)
+
 
 
 @mcp.tool()
@@ -148,21 +260,20 @@ async def daz_run_transfer_utility(
             "Genesis 8 Female", "Cape", transfer_binding=True, transfer_morphs=False
         )
     """
-    return await _execute_by_id(
-        "vangard-run-transfer-utility",
-        {
-            "sourceLabel": source_label,
-            "targetLabel": target_label,
-            "transferBinding": transfer_binding,
-            "transferMorphs": transfer_morphs,
-            "transferUVs": transfer_uvs,
-            "transferMaterialGroups": transfer_material_groups,
-            "transferFaceGroups": transfer_face_groups,
-            "fitToFigure": fit_to_figure,
-            "parentToFigure": parent_to_figure,
-            "mergeHierarchies": merge_hierarchies,
-        },
-    )
+    def _run() -> dict[str, Any]:
+        scene = get_scene()
+        source = scene.resolve_node(source_label)
+        target = scene.resolve_node(target_label)
+        scene.transfer_utility(
+            source, target, binding=transfer_binding, morphs=transfer_morphs,
+            uvs=transfer_uvs, material_groups=transfer_material_groups,
+            face_groups=transfer_face_groups, fit_to_figure=fit_to_figure,
+            parent_to_figure=parent_to_figure, merge_hierarchies=merge_hierarchies)
+        return {"success": True, "source": source.describe().label,
+                "target": target.describe().label}
+
+    return await _dforce_tool(_run)
+
 
 
 @mcp.tool()
@@ -201,9 +312,14 @@ async def daz_add_dforce_dynamic_surface(node_label: str) -> dict[str, Any]:
         daz_add_dforce_dynamic_surface("Tablecloth")
         daz_add_dforce_dynamic_surface("Custom Cape")
     """
-    return await _execute_by_id(
-        "vangard-add-dforce-dynamic-surface", {"nodeLabel": node_label}
-    )
+    def _run() -> dict[str, Any]:
+        node = get_scene().resolve_node(node_label)
+        added = node.add_dforce_dynamic_surface()
+        return {"success": True, "node": node.describe().label, "already_present": not added,
+                "modifier": "DzDForceModifier"}
+
+    return await _dforce_tool(_run)
+
 
 
 @mcp.tool()
@@ -249,10 +365,15 @@ async def daz_set_dforce_influence_weights(
         daz_set_dforce_influence_weights("Hair Strand", {0: 0.0, 1: 0.0})
         daz_set_dforce_influence_weights("Cape", default_weight=0.0)
     """
-    args: dict[str, Any] = {"nodeLabel": node_label, "defaultWeight": default_weight}
-    if vertex_weights:
-        args["vertexWeights"] = {str(k): v for k, v in vertex_weights.items()}
-    return await _execute_by_id("vangard-set-dforce-influence-weights", args)
+    def _run() -> dict[str, Any]:
+        node = get_scene().resolve_node(node_label)
+        count, overridden = node.set_dforce_influence_weights(
+            default_weight, {int(k): float(v) for k, v in (vertex_weights or {}).items()})
+        return {"success": True, "node": node.describe().label, "vertex_count": count,
+                "default_weight": default_weight, "overridden_count": overridden}
+
+    return await _dforce_tool(_run)
+
 
 
 @mcp.tool()
@@ -280,9 +401,18 @@ async def daz_get_dforce_influence_weights(node_label: str) -> dict[str, Any]:
     Examples:
         daz_get_dforce_influence_weights("Hair Strand")
     """
-    return await _execute_by_id(
-        "vangard-get-dforce-influence-weights", {"nodeLabel": node_label}
-    )
+    def _run() -> dict[str, Any]:
+        node = get_scene().resolve_node(node_label)
+        weights = node.dforce_influence_weights()
+        label = node.describe().label
+        if weights is None:
+            return {"success": True, "node": label, "has_influence_weights": False,
+                    "weights": []}
+        return {"success": True, "node": label, "has_influence_weights": True,
+                "vertex_count": len(weights), "weights": weights}
+
+    return await _dforce_tool(_run)
+
 
 
 @mcp.tool()
@@ -318,10 +448,14 @@ async def daz_run_dforce_simulation(node_label: str | None = None) -> dict[str, 
         daz_run_dforce_simulation("Outfit")
         daz_run_dforce_simulation()
     """
-    args: dict[str, Any] = {}
-    if node_label is not None:
-        args["nodeLabel"] = node_label
-    return await _execute_by_id("vangard-run-dforce-simulation", args)
+    def _run() -> dict[str, Any]:
+        scene = get_scene()
+        nodes = [scene.resolve_node(node_label)] if node_label else None
+        scene.run_dforce_simulation(nodes, wait=True)
+        return {"success": True, "node": node_label or "all simulatable nodes"}
+
+    return await run_tool(_run)
+
 
 
 @mcp.tool()
@@ -351,10 +485,20 @@ async def daz_bake_simulation(node_label: str | None = None) -> dict[str, Any]:
         daz_bake_simulation("Outfit")
         daz_bake_simulation()
     """
-    args: dict[str, Any] = {}
-    if node_label is not None:
-        args["nodeLabel"] = node_label
-    return await _execute_by_id("vangard-bake-simulation", args)
+    def _run() -> dict[str, Any]:
+        scene = get_scene()
+        if node_label is None:
+            return {"success": True, "node": "all", "method": "freeze",
+                    "modifiers_frozen": scene.freeze_dforce()}
+        node = scene.resolve_node(node_label)
+        frozen = node.freeze_dforce()
+        if not frozen:
+            raise ToolError(f"No dForce modifier on '{node_label}' to bake")
+        return {"success": True, "node": node.describe().label, "method": "freeze",
+                "modifiers_frozen": frozen}
+
+    return await _dforce_tool(_run)
+
 
 
 @mcp.tool()
@@ -398,10 +542,13 @@ async def daz_set_dforce_property(
         daz_set_dforce_property("Outfit", "Freeze Simulation", 1.0)
         daz_set_dforce_property("Hair", "Simulation Object Type", 0)
     """
-    return await _execute_by_id(
-        "vangard-set-dforce-property",
-        {"nodeLabel": node_label, "propertyName": property_name, "value": value},
-    )
+    def _run() -> dict[str, Any]:
+        node = get_scene().resolve_node(node_label)
+        r = node.set_dforce_property(property_name, value)
+        return {"success": True, "node": node.describe().label, **r}
+
+    return await _dforce_tool(_run)
+
 
 
 @mcp.tool()
@@ -436,10 +583,14 @@ async def daz_get_dforce_surface_properties(
         daz_get_dforce_surface_properties("Outfit", "Fabric")
         daz_get_dforce_surface_properties("Genesis 8 Female")
     """
-    args: dict[str, Any] = {"nodeLabel": node_label}
-    if material_name is not None:
-        args["materialName"] = material_name
-    return await _execute_by_id("vangard-get-dforce-surface-properties", args)
+    def _run() -> dict[str, Any]:
+        node = get_scene().resolve_node(node_label)
+        material, props = node.dforce_surface_properties(material_name)
+        return {"node": node.describe().label, "material": material,
+                "property_count": len(props), "properties": props}
+
+    return await _dforce_tool(_run)
+
 
 
 @mcp.tool()
@@ -480,10 +631,13 @@ async def daz_set_dforce_surface_property(
         daz_set_dforce_surface_property("Outfit", "Self Collide", 1, material_name="Fabric")
         daz_set_dforce_surface_property("Hair", "Dynamics Strength", 0.8)
     """
-    args: dict[str, Any] = {"nodeLabel": node_label, "propertyName": property_name, "value": value}
-    if material_name is not None:
-        args["materialName"] = material_name
-    return await _execute_by_id("vangard-set-dforce-surface-property", args)
+    def _run() -> dict[str, Any]:
+        node = get_scene().resolve_node(node_label)
+        r = node.set_dforce_surface_property(property_name, value, material_name)
+        return {"success": True, "node": node.describe().label, **r}
+
+    return await _dforce_tool(_run)
+
 
 
 @mcp.tool()
@@ -519,7 +673,23 @@ async def daz_get_figure_info(figure_label: str) -> dict[str, Any]:
         daz_get_figure_info("Victoria 9")
         daz_get_figure_info("Michael 8")
     """
-    return await _execute_by_id("vangard-get-figure-info", {"figureLabel": figure_label})
+    def _run() -> dict[str, Any]:
+        fig = get_scene().resolve_node(figure_label)
+        info = fig.describe()
+        text = f"{info.name} {info.label}".lower()
+        morphs = [{"name": d.name, "label": d.label, "value": d.value, "path": d.path}
+                  for d in fig.property_details("morph")
+                  if isinstance(d.value, (int, float)) and abs(d.value) > 0.0005
+                  and any(k in d.path.lower() for k in _MORPH_PATH_KEYS)]
+        return {"label": info.label, "name": info.name,
+                "generation": _generation(text, fig.bone_names()),
+                "sex": _sex(text), "active_morphs": morphs,
+                "active_morph_count": len(morphs),
+                "fitted_item_count": len(fig.fitted_item_info()),
+                "subdivision_level": _subdivision_value(fig)}
+
+    return await run_tool(_run)
+
 
 
 @mcp.tool()
@@ -554,9 +724,21 @@ async def daz_set_subdivision(node_label: str, level: int) -> dict[str, Any]:
     """
     if level < 0 or level > 4:
         raise ToolError(f"Subdivision level must be between 0 and 4, got {level}")
-    return await _execute_by_id(
-        "vangard-set-subdivision", {"nodeLabel": node_label, "level": level}
-    )
+    new_level = int(level)
+
+    def _run() -> dict[str, Any]:
+        node = get_scene().resolve_node(node_label)
+        try:
+            r = node.set_subdivision(new_level)
+        except PropertyNotFoundError as e:
+            raise ToolError(f"No subdivision property found on '{node_label}'. "
+                            "This node may not support subdivision.") from e
+        return {"success": True, "node": node.describe().label, "property": "SubDIALevel",
+                "old_level": r["previous"]["view"], "new_level": r["current"]["view"],
+                "render_level": r["current"]["render"]}
+
+    return await run_tool(_run)
+
 
 
 @mcp.tool()
@@ -604,17 +786,9 @@ async def daz_export_fbx(
         Raises ToolError if the FBX exporter is not installed.  The error message
         lists available exporters so you can choose an alternative format.
     """
-    return await _execute_by_id(
-        "vangard-export-scene",
-        {
-            "outputPath": output_path,
-            "nodeLabels": node_labels or [],
-            "format": "Filmbox",
-            "includeMorphs": include_morphs,
-            "applyCurrentPose": apply_current_pose,
-            "scaleFactor": scale_factor,
-        },
-    )
+    return await _export("fbx", output_path, node_labels, include_morphs,
+                         apply_current_pose, scale_factor)
+
 
 
 @mcp.tool()
@@ -662,14 +836,5 @@ async def daz_export_obj(
         when you need those features.  Raises ToolError if the OBJ exporter is
         not installed.
     """
-    return await _execute_by_id(
-        "vangard-export-scene",
-        {
-            "outputPath": output_path,
-            "nodeLabels": node_labels or [],
-            "format": "Wavefront Object",
-            "includeMorphs": False,
-            "applyCurrentPose": apply_current_pose,
-            "scaleFactor": scale_factor,
-        },
-    )
+    return await _export("obj", output_path, node_labels, False,
+                         apply_current_pose, scale_factor)
