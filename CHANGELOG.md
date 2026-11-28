@@ -215,6 +215,12 @@ Requires dazpy 2.17.0 or later, for the new primitives these tools use
 
 ### Fixed
 
+- Live integration tests are opt-in. They ran whenever DAZ Studio answered
+  on port 18811, so a plain `pytest tests/` changed or cleared the open scene.
+  They now run only with `DAZ_LIVE_TESTS=1`, connect to `DAZ_HOST:DAZ_PORT`
+  instead of a hard-coded `localhost:18811`, and `integration_test.py`
+  requires the same opt-in. `test_compat.py` no longer fails when `DAZ_PORT`
+  is set.
 - `daz_get_performance_stats` always returned `{}`, because nothing counted
   calls. A middleware now records every tool call, and the tool returns
   per-tool `calls`, `errors`, `total_ms`, `avg_ms` and `max_ms`.

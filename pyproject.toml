@@ -46,11 +46,12 @@ exclude = [
 packages = ["src/daz_mcp_server"]
 
 [tool.pytest.ini_options]
+testpaths = ["tests"]
 asyncio_mode = "auto"
 asyncio_default_fixture_loop_scope = "function"
 addopts = "-m 'not slow'"
 markers = [
-    "integration: tests that require a running DAZ Studio instance (skipped automatically if not reachable)",
+    "integration: tests that change a running DAZ Studio scene (skipped unless DAZ_LIVE_TESTS=1)",
     "slow: tests that trigger actual renders (time-consuming — excluded by default, run with -m slow)",
     "two_figures: tests that require at least 2 figures loaded in the scene",
 ]

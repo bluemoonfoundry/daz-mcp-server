@@ -10,6 +10,9 @@ import pytest
 from fastmcp.exceptions import ToolError
 
 from daz_mcp_server import _compat
+from daz_mcp_server._client import DAZ_HOST, DAZ_PORT
+
+TARGET = f"{DAZ_HOST}:{DAZ_PORT}"
 
 
 def _check(compatible=True, version="2.12.0", instance="i1"):
@@ -35,7 +38,7 @@ def test_summary_before_any_check():
     s = _compat.summary()
     assert s["compatible"] is None
     assert s["plugin_version"] is None
-    assert s["target"] == "localhost:18811"
+    assert s["target"] == TARGET
     assert s["min_plugin_version"] == dazpy.MIN_SERVER_VERSION
     assert s["dazpy_version"] == dazpy.__version__
 
@@ -43,7 +46,7 @@ def test_summary_before_any_check():
 def test_incompatible_note():
     _compat.record(_check(False, "2.11.0"))
     note = _compat.incompatible_note()
-    for part in ("2.11.0", dazpy.MIN_SERVER_VERSION, "localhost:18811", "daz-script-server/releases"):
+    for part in ("2.11.0", dazpy.MIN_SERVER_VERSION, TARGET, "daz-script-server/releases"):
         assert part in note
     assert _compat.summary()["compatible"] is False
 
@@ -93,7 +96,7 @@ def test_daz_status_includes_compatibility():
     with patch.object(utility, "get_async_daz_client", return_value=client):
         result = asyncio.run(utility.daz_status())
     assert result["running"] is True
-    assert result["plugin_compatibility"]["target"] == "localhost:18811"
+    assert result["plugin_compatibility"]["target"] == TARGET
 
 
 def test_inspect_scene_only_when_incompatible():

@@ -2,10 +2,11 @@
 
 Run against a live DAZ Studio + DazScriptServer instance:
 
-    uv run pytest tests/test_phase5_integration.py -v
+    DAZ_LIVE_TESTS=1 uv run pytest tests/test_phase5_integration.py -v
 
-All tests are skipped automatically if DAZ Studio is not reachable at
-localhost:18811.  No mocking is used; every call goes to the real server.
+Live tests are opt-in: set DAZ_LIVE_TESTS=1 (they change the open scene).
+They connect to DAZ_HOST:DAZ_PORT (default localhost:18811) and skip if
+Studio isn't reachable. No mocking is used; every call goes to the real server.
 
 Scene requirements
 ------------------
@@ -25,7 +26,7 @@ import pytest_asyncio
 from dazpy.aio import AsyncDazClient
 from fastmcp.exceptions import ToolError
 
-from daz_mcp_server._client import DAZ_API_TOKEN, set_async_daz_client
+from daz_mcp_server._client import DAZ_API_TOKEN, DAZ_HOST, DAZ_PORT, set_async_daz_client
 from daz_mcp_server._registry import _register_scripts
 from daz_mcp_server.tools.camera_light import (
     daz_list_lights,
@@ -50,29 +51,20 @@ from daz_mcp_server.tools.scene import (
 )
 from daz_mcp_server.tools.transform import daz_delete_node, daz_set_property
 
+from _live import require_live
+
 # pylint: disable=duplicate-code
 # This file intentionally duplicates conftest.py's live_client/figure_label
 # fixtures (see SKILL_DEVELOPMENT.md and this module's docstring) rather than
 # importing them, so it can run standalone against Phase-5 tools without
 # depending on the shared conftest's fixture set.
 
-BASE_URL = "http://localhost:18811"
 
 # ---------------------------------------------------------------------------
 # Module-level cache (avoids session-scoped async fixtures, which have
 # awkward event-loop lifecycle issues with pytest-asyncio on Windows).
 # ---------------------------------------------------------------------------
 _cache: dict = {}
-
-
-def _daz_available() -> bool:
-    """Synchronous probe — True if DazScriptServer is reachable."""
-    import socket
-    try:
-        with socket.create_connection(("localhost", 18811), timeout=2):
-            return True
-    except OSError:
-        return False
 
 
 # ---------------------------------------------------------------------------
@@ -86,13 +78,12 @@ async def live_client():
     Skips the test automatically if DAZ Studio is not reachable.
     Also registers all scripts on first use so new Phase-5 IDs are available.
     """
-    if not _daz_available():
-        pytest.skip(f"DAZ Studio not reachable at {BASE_URL}")
+    require_live()
 
     # Mirrors _mcp.py's lifespan: pass the configured token so live tests do
     # not receive 401 responses from an authenticated DazScriptServer.
     async with AsyncDazClient(
-        host="localhost", port=18811, token=DAZ_API_TOKEN or None, timeout=30.0
+        host=DAZ_HOST, port=DAZ_PORT, token=DAZ_API_TOKEN or None, timeout=30.0
     ) as client:
         set_async_daz_client(client)
 

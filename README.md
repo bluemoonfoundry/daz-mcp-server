@@ -3659,8 +3659,12 @@ Claude will:
 ### Running Tests
 
 ```bash
-# Run all tests
+# Run all tests (live DAZ Studio tests are skipped)
 uv run pytest tests/ -v
+
+# Live integration tests: opt-in, they change the open scene.
+# Connects to DAZ_HOST:DAZ_PORT (default localhost:18811).
+DAZ_LIVE_TESTS=1 uv run pytest tests/test_camera_integration.py -v
 
 # Run specific test
 uv run pytest tests/test_server.py::test_daz_status_ok -v

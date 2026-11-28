@@ -5,8 +5,9 @@ Bug-Katalog: `C:\Users\Black-Byte\Development\pinkcharakter\docs\daz-mcp-bridge-
 
 ## Primary Commands
 - `uv sync` - Install dependencies
-- `uv run pytest tests/ -m "not integration and not slow"` - Unit tests only (safe while DAZ Studio is running)
-- `uv run pytest tests/ -v` - All tests. **Integration tests run against DAZ Studio whenever it is reachable on 18811** (they render and add nodes), so close Studio or use the line above unless you mean it.
+- `uv run pytest tests/ -m "not integration and not slow"` - Unit tests only (what CI runs)
+- `uv run pytest tests/` - Unit tests; live integration tests are skipped unless `DAZ_LIVE_TESTS=1` is set, even while DAZ Studio is running
+- `DAZ_LIVE_TESTS=1 uv run pytest tests/test_<area>_integration.py` - Live tests against DAZ Studio at `DAZ_HOST:DAZ_PORT` (default `localhost:18811`). They render, add and delete nodes and change the open scene, so scope them with `-k` and use a scene you can lose. The root `integration_test.py` script uses the same opt-in.
 - `uv run daz-mcp-server` - Run the MCP server (stdio); released builds run with `uvx daz-mcp-server`
 - Release: bump `pyproject.toml`, README badge/compatibility row, `CLAUDE.md` version and `CHANGELOG.md`; merge; push tag `vX.Y.Z` → `.github/workflows/release.yml` publishes to PyPI (Trusted Publishing, environment `pypi`) and creates the GitHub release
 

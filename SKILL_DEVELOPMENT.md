@@ -46,12 +46,12 @@ The content browser (`DAZ_CONTENT_BROWSER_URL`) is a separate service, reached w
 - Tests call tool functions directly (e.g., `await daz_status()`), imported from their
   module (e.g., `from daz_mcp_server.tools.utility import daz_status`).
 - Run the unit suite the way CI does: `uv run pytest tests/ -m "not integration and not slow" -q`.
-  `addopts` only excludes `slow`, so a bare `pytest tests/` **also runs the integration
-  tests** whenever DAZ Studio is reachable. A `pytest_collection_modifyitems` hook in
-  `tests/conftest.py` auto-tags any test using a live-DAZ fixture (`live_client`,
-  `figure_label`, etc.) with `integration`, so `-m "not integration"` reliably excludes it
-  (Bug-Katalog #19). Run `-m slow` / `-m integration` explicitly and only against a scene
-  you can afford to have modified.
+  Live tests are opt-in: a `pytest_collection_modifyitems` hook in `tests/conftest.py`
+  auto-tags any test using a live-DAZ fixture (`live_client`, `figure_label`, etc.) with
+  `integration` (Bug-Katalog #19) and skips every `integration` test unless
+  `DAZ_LIVE_TESTS=1` is set, whether or not DAZ Studio is reachable. With it set, live
+  fixtures connect to `DAZ_HOST:DAZ_PORT` (see `tests/_live.py`; new live fixtures must call
+  `require_live()`). Run live tests only against a scene you can afford to have modified.
 
 ## Checkpoints & Session Stats
 - `daz_get_performance_stats` / `daz_explain_last_error`: per-tool call stats and the last tool error, recorded by `SessionStatsMiddleware` (`_session_stats.py`).
