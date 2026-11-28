@@ -137,6 +137,18 @@ async def test_daz_execute_with_args(mock_daz):
     assert result["success"] is True
 
 
+async def test_daz_execute_defines_args_on_the_first_line(mock_daz):
+    # The plugin exposes arguments only through getArguments()[0]; daz_execute
+    # documents an `args` variable, so it defines one without adding a line
+    # (error line numbers stay the same).
+    import json as _json
+    route = mock_daz.post("/execute").mock(return_value=_ok(99))
+    await daz_execute(script="(function(){ return args.x; })()", args={"x": 99})
+    body = _json.loads(route.calls.last.request.content)
+    assert body["script"] == "var args = getArguments()[0]; (function(){ return args.x; })()"
+    assert body["args"] == {"x": 99}
+
+
 async def test_daz_execute_script_failure(mock_daz):
     mock_daz.post("/execute").mock(
         return_value=_fail("ReferenceError: foo is not defined", ["line1"])

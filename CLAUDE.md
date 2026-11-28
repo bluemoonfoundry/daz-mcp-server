@@ -20,7 +20,7 @@ Bug-Katalog: `C:\Users\Black-Byte\Development\pinkcharakter\docs\daz-mcp-bridge-
 ## Architecture Summary
 - **Version:** 0.10.0 (source of truth: `pyproject.toml`; `tests/test_version_consistency.py` checks the docs and the server match it)
 - **Bridge:** Connects to DazScriptServer (port 18811)
-- **Registry:** 165 tools registered across 16 tool modules.
+- **Registry:** 167 tools registered across 16 tool modules.
 - **Structure:** Modular — `_mcp.py` holds shared FastMCP instance; `tools/__init__.py` imports all 16 modules so `@mcp.tool()` decorators fire at import time.
 - **Scene recipes:** `tools/recipe.py` — `daz_recipe_validate/plan/apply/observe/render` + `daz://recipe/schema` resources, compact profile, thin wrappers over `dazpy.recipe` (see src/daz_mcp_server/guides/recipe.md)
 - **Phase 4.8:** Lighting Animation — `daz_animate_light`, `daz_create_light_sequence`

@@ -24,6 +24,15 @@ Use a unique JSONL report file for each submission. Keep long work file-backed;
 inline scripts do not preserve the script filename or its relative includes.
 Static DazScript reference material lives at `daz://help/{topic}`.
 
+In the `desktop` profile (`DAZ_MCP_PROFILE=desktop`, for clients such as
+Claude Desktop that cannot write files on the DAZ Studio machine) the same ten
+tools are there, plus direct scripting. Use `daz_execute` for a short script
+whose result you want back, `daz_submit_script` to queue a long inline script
+as a job (observe it with `daz_observe_job`), and `daz_write_script` to have
+DAZ Studio save a `.dsa` file whose returned path you then pass to
+`daz_run_script_job`. Never pass `daz_run_script_job` a path from your own
+sandbox: the file must exist on the DAZ Studio machine.
+
 The detailed tools named later in this document require the expert profile.
 Set `DAZ_MCP_PROFILE=expert` in the MCP server environment and restart the MCP
 client when doing low-level development or one-off scene surgery. The expert

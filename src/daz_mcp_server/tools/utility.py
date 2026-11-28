@@ -18,6 +18,7 @@ from .._mcp import (
     _execution_payload,
     _execute_by_id,
     _execute_raw,
+    with_args_variable,
 )
 from .._client import get_async_daz_client
 from .._errors import handle_dazpy_error
@@ -49,7 +50,7 @@ _call_stats: dict[str, int] = {}
 # ---------------------------------------------------------------------------
 
 
-@mcp.tool()
+@mcp.tool(tags={"desktop"})
 async def daz_status() -> dict[str, Any]:
     """Check DAZ Studio connectivity. Returns server status and version, plus
     ``plugin_compatibility``: the target host:port, plugin and dazpy versions,
@@ -61,7 +62,7 @@ async def daz_status() -> dict[str, Any]:
     return {**status, "plugin_compatibility": _compat.summary()}
 
 
-@mcp.tool()
+@mcp.tool(tags={"desktop"})
 async def daz_execute(
     script: str,
     args: dict[str, Any] | None = None,
@@ -80,7 +81,8 @@ async def daz_execute(
     2. ❌ NEVER set "Point At" property for camera/light aiming.
        ✅ Use: node.aimAt(new DzVec3(x, y, z))
 
-    3. ✅ Wrap scripts returning values in IIFE:
+    3. ✅ A top-level ``return`` is a syntax error. Wrap scripts returning
+       values in an IIFE, or end with an expression (its value is the result):
        (function(){ return Scene.getNumNodes(); })()
 
     4. ✅ Environment node is ALWAYS Scene.getNode(1) - not findNodeByLabel()
@@ -94,12 +96,13 @@ async def daz_execute(
 
     Args:
         script: DazScript (JavaScript) source code to execute.
-        args: Optional JSON object accessible in script as `args` variable.
+        args: Optional JSON object, available in the script as the ``args``
+            variable (and as ``getArguments()[0]``).
 
     Returns:
         Object with keys: success, result, output (list of print() lines), error.
     """
-    return await _execute_raw(script, args)
+    return await _execute_raw(with_args_variable(script), args)
 
 
 @mcp.tool()
@@ -111,7 +114,8 @@ async def daz_execute_file(
 
     Args:
         script_file: Absolute path to the .dsa/.ds script file on the DAZ Studio machine.
-        args: Optional JSON-serialisable object accessible inside the script as `args`.
+        args: Optional JSON-serialisable object, read inside the file with
+            ``getArguments()[0]`` (a file has no ``args`` variable).
 
     Returns:
         Object with keys: success, result, output (list of print() lines), error.
@@ -158,7 +162,7 @@ async def daz_execute_file_async(
     return {"request_id": request_id, "status": "queued"}
 
 
-@mcp.tool()
+@mcp.tool(tags={"desktop"})
 async def daz_script_help(topic: str = "overview") -> str:
     """Get DazScript documentation, examples, and best practices.
 
@@ -381,7 +385,7 @@ async def daz_get_property_metadata(
 # ---------------------------------------------------------------------------
 
 
-@mcp.tool()
+@mcp.tool(tags={"desktop"})
 async def daz_validate_script(script: str) -> dict[str, Any]:
     """Check a DazScript string for known anti-patterns before execution.
 
@@ -913,7 +917,7 @@ async def daz_get_performance_stats() -> dict[str, Any]:
     return {"call_stats": _call_stats, "total_calls": sum(_call_stats.values())}
 
 
-@mcp.tool()
+@mcp.tool(tags={"desktop"})
 async def daz_explain_last_error() -> dict[str, Any]:
     """Explain common DAZ Studio errors and how to fix them."""
     return {
