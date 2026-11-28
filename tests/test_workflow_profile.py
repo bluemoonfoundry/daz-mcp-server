@@ -88,7 +88,7 @@ def test_expert_profile_preserves_detailed_surface():
     assert DEFAULT_TOOLS < set(snapshot["tools"])
     assert "daz_set_property" in snapshot["tools"]
     assert "daz_execute" in snapshot["tools"]
-    assert len(snapshot["tools"]) == 165
+    assert len(snapshot["tools"]) == 167
 
 
 async def test_run_script_job_delegates_file_job(monkeypatch):
@@ -181,3 +181,136 @@ async def test_fetch_artifact_returns_only_manifest_files(monkeypatch, tmp_path:
     assert isinstance(await workflow.daz_fetch_artifact("job-1", 1), File)
     with pytest.raises(ToolError, match="not in job"):
         await workflow.daz_fetch_artifact("job-1", str(tmp_path / "secret.txt"))
+
+
+# --- desktop profile: compact plus direct script authoring and read-only scene tools ---
+
+DESKTOP_EXTRA = {
+    "daz_execute",
+    "daz_submit_script",
+    "daz_write_script",
+    "daz_script_help",
+    "daz_validate_script",
+    "daz_explain_last_error",
+    "daz_status",
+    "daz_get_node",
+    "daz_find_nodes",
+    "daz_get_selected_nodes",
+    "daz_list_cameras",
+    "daz_list_lights",
+    "daz_get_render_settings",
+}
+
+
+def test_desktop_profile_is_compact_plus_direct_tools():
+    compact = _profile_snapshot("compact")
+    desktop = _profile_snapshot("desktop")
+    assert desktop["profile"] == "desktop"
+    assert set(compact["tools"]) <= set(desktop["tools"])  # additive: every compact tool stays
+    assert set(desktop["tools"]) == DEFAULT_TOOLS | DESKTOP_EXTRA
+    assert desktop["resources"] == compact["resources"]
+    assert desktop["templates"] == compact["templates"]
+
+
+def test_compact_profile_does_not_gain_desktop_tools():
+    assert not DESKTOP_EXTRA & set(_profile_snapshot("compact")["tools"])
+
+
+def test_expert_profile_includes_desktop_tools():
+    assert DESKTOP_EXTRA <= set(_profile_snapshot("expert")["tools"])
+
+
+def test_unknown_profile_names_every_choice():
+    env = os.environ.copy()
+    env["DAZ_MCP_PROFILE"] = "bogus"
+    result = subprocess.run(
+        [sys.executable, "-c", "import daz_mcp_server.server"],
+        capture_output=True, text=True, env=env,
+    )
+    assert result.returncode != 0
+    assert "compact, desktop, expert" in result.stderr
+
+
+def test_profiles_resource_describes_desktop():
+    text = workflow.daz_profiles_resource()
+    assert "DAZ_MCP_PROFILE=desktop" in text
+    assert "Claude Desktop" in text
+    for name in ("daz_execute", "daz_submit_script", "daz_write_script"):
+        assert f"`{name}`" in text, name
+
+
+class _FakeAsyncClient:
+    def __init__(self):
+        self.submitted = []
+
+    async def execute_async_submit(self, script, args=None, *, report_file=None):
+        self.submitted.append((script, args, report_file))
+        return "job-9"
+
+
+async def test_submit_script_queues_inline_job(monkeypatch):
+    fake = _FakeAsyncClient()
+    monkeypatch.setattr(workflow, "get_async_daz_client", lambda: fake)
+    result = await workflow.daz_submit_script(
+        "print(args.n); return args.n;", {"n": 3}, "C:/runs/job-9.jsonl")
+    assert result == {"request_id": "job-9", "status": "queued"}
+    assert fake.submitted == [("var args = getArguments()[0]; print(args.n); return args.n;",
+                               {"n": 3}, "C:/runs/job-9.jsonl")]
+
+
+async def test_submit_script_rejects_empty_script():
+    with pytest.raises(ToolError, match="script is empty"):
+        await workflow.daz_submit_script("   ")
+
+
+async def test_write_script_saves_through_studio_and_returns_path(monkeypatch):
+    calls = []
+
+    async def execute_raw(script, args=None):
+        calls.append((script, args))
+        return {"success": True, "result": {"path": "C:/Temp/DAZ/daz-mcp-scripts/pose_sweep.dsa",
+                                             "bytes": 21}, "error": None}
+
+    monkeypatch.setattr(workflow, "_execute_raw", execute_raw)
+    body = 'print("a \\ \\"quoted\\" é");'
+    result = await workflow.daz_write_script("pose_sweep", body)
+    assert result == {"path": "C:/Temp/DAZ/daz-mcp-scripts/pose_sweep.dsa", "bytes": 21}
+    (source, args), = calls
+    # the content travels as a job argument, never spliced into the source
+    assert args == {"file_name": "pose_sweep.dsa", "content": body}
+    assert body not in source
+    assert "DzFile" in source and "getTempPath" in source
+    # the plugin defines no `args` variable: the writer reads getArguments()[0]
+    assert "getArguments()[0]" in source
+
+
+@pytest.mark.parametrize("name, expected", [
+    ("pose_sweep", "pose_sweep.dsa"),
+    ("pose-sweep.dsa", "pose-sweep.dsa"),
+    ("Probe2.ds", "Probe2.ds"),
+])
+async def test_write_script_keeps_or_adds_script_suffix(monkeypatch, name, expected):
+    seen = []
+
+    async def execute_raw(script, args=None):
+        seen.append(args["file_name"])
+        return {"success": True, "result": {"path": "X/" + args["file_name"], "bytes": 1}}
+
+    monkeypatch.setattr(workflow, "_execute_raw", execute_raw)
+    await workflow.daz_write_script(name, "return 1;")
+    assert seen == [expected]
+
+
+@pytest.mark.parametrize("name", ["", "../evil", "a/b", "C:\\x", ".hidden", "x" * 80, "na me", "x.txt"])
+async def test_write_script_rejects_unsafe_names(name):
+    with pytest.raises(ToolError, match="name"):
+        await workflow.daz_write_script(name, "return 1;")
+
+
+async def test_write_script_reports_studio_failure(monkeypatch):
+    async def execute_raw(script, args=None):
+        return {"success": True, "result": {"error": "cannot open X for writing"}, "error": None}
+
+    monkeypatch.setattr(workflow, "_execute_raw", execute_raw)
+    with pytest.raises(ToolError, match="cannot open X for writing"):
+        await workflow.daz_write_script("probe", "return 1;")

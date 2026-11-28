@@ -109,7 +109,7 @@ matching dazpy; the plugin is installed separately in Daz Studio
 
 | daz-mcp-server | dazpy | Daz Studio plugin |
 |---|---|---|
-| 0.10.0 | >= 2.16.0 | >= 2.12 |
+| 0.10.0 | >= 2.17.0 | >= 2.12 |
 | 0.9.0 | >= 2.15.0 | >= 2.12 |
 | 0.8.0 | >= 2.13.0 | >= 2.12 |
 
@@ -134,7 +134,7 @@ Configure the server via environment variables:
 | `DAZ_TIMEOUT` | `30.0` | Request timeout in seconds (increase for long renders) |
 | `DAZ_API_TOKEN` | *(from file)* | API token for authentication |
 | `DAZ_CONTENT_BROWSER_URL` | `http://localhost:8080` | Content browser API URL (if using a separate content service) |
-| `DAZ_MCP_PROFILE` | `compact` | Model-facing surface: `compact` (10 workflow tools) or `expert` (all 165 registered tools) |
+| `DAZ_MCP_PROFILE` | `compact` | Model-facing surface: `compact` (10 workflow tools), `desktop` (compact plus 13 direct scripting and read-only tools, for Claude Desktop) or `expert` (all 167 registered tools) |
 
 ### Tool profiles
 
@@ -150,7 +150,21 @@ selection predictable by exposing ten task tools (five job tools and five scene-
 
 Static DazScript guidance is available as the `daz://help/{topic}` resource,
 so its large catalogue and examples do not consume the always-visible tool
-surface. Low-level primitives remain available for development and unusual
+surface.
+
+The compact job tools run `.dsa` files that already exist on the DAZ Studio
+machine, which suits clients that can write files there (Claude Code, an IDE
+agent). **Claude Desktop cannot**: a script it writes lives in its own sandbox,
+so the path it passes does not exist on your PC. Use the `desktop` profile
+there (`DAZ_MCP_PROFILE=desktop`). It keeps all ten compact tools and adds:
+
+- `daz_execute` — run inline DazScript and get its result back
+- `daz_submit_script` — queue inline DazScript as a background job (observe it with `daz_observe_job`)
+- `daz_write_script` — have DAZ Studio save a `.dsa` file and return its path, for `daz_run_script_job` (keeps `getScriptFileName()` and relative `include()` working)
+- `daz_script_help`, `daz_validate_script`, `daz_explain_last_error`, `daz_status`
+- read-only scene tools: `daz_get_node`, `daz_find_nodes`, `daz_get_selected_nodes`, `daz_list_cameras`, `daz_list_lights`, `daz_get_render_settings`
+
+Low-level primitives remain available for development and unusual
 scene surgery by setting `DAZ_MCP_PROFILE=expert` in the MCP server's `env`
 configuration and restarting the MCP client.
 
@@ -201,16 +215,19 @@ Config file location:
       "args": ["daz-mcp-server"],
       "env": {
         "DAZ_HOST": "localhost",
-        "DAZ_PORT": "18811"
+        "DAZ_PORT": "18811",
+        "DAZ_MCP_PROFILE": "desktop"
       }
     }
   }
 }
 ```
 
-After saving the config, **restart Claude Desktop**. The compact DAZ workflow
-tools will appear in Claude's tool palette. Add `"DAZ_MCP_PROFILE": "expert"`
-to `env` only when the full low-level catalogue is needed. Set `DAZ_HOST` to
+After saving the config, **restart Claude Desktop**. The `desktop` profile's
+tools will appear in Claude's tool palette: the compact workflow tools plus
+direct scripting, which Claude Desktop needs because it cannot write files on
+your PC (see [Tool profiles](#tool-profiles)). Use `"DAZ_MCP_PROFILE": "expert"`
+only when the full low-level catalogue is needed. Set `DAZ_HOST` to
 another machine's address to drive a Daz Studio running there (its plugin must
 listen on that address, and set `DAZ_API_TOKEN` since the token file is local).
 
@@ -3768,7 +3785,7 @@ daz-mcp-server/
 │   ├── dazscript_docs.json    # DazScript documentation (daz_script_help)
 │   └── tools/
 │       ├── __init__.py        # Imports all modules (registers decorators)
-│       ├── workflow.py        # Task tools in the compact default profile (5 tools)
+│       ├── workflow.py        # Compact job tools (5) and desktop inline-script tools (2) (7 tools)
 │       ├── recipe.py          # Scene recipes: validate, plan, apply, observe, render; compact profile (5 tools)
 │       ├── spatial.py         # World position, bounding box, distance, layout (7 tools)
 │       ├── transform.py       # Node properties, batch ops, visibility, selection (8 tools)
@@ -3794,8 +3811,8 @@ daz-mcp-server/
 
 ### Architecture
 
-- **FastMCP 3.x server** with stdio transport (165 tools registered; 10 visible in the default `compact` profile)
-- **Profiled model boundary**: the compact facade is selected by default; `DAZ_MCP_PROFILE=expert` reveals every detailed tool without changing their implementation
+- **FastMCP 3.x server** with stdio transport (167 tools registered; 10 visible in the default `compact` profile, 23 in `desktop`)
+- **Profiled model boundary**: the compact facade is selected by default; `DAZ_MCP_PROFILE=desktop` adds direct scripting for clients without access to the DAZ machine's files; `DAZ_MCP_PROFILE=expert` reveals every detailed tool without changing their implementation
 - **Modular tool package**: focused modules under `tools/`; decorators fire at import time via the shared `mcp` instance from `_mcp.py`, avoiding circular imports with `server.py`
 - **One DazScriptServer protocol client**: `dazpy.aio.AsyncDazClient` owns endpoint URLs, wire payloads, timeout policy, request lifecycle, SSE streams, and typed errors
 - **dazpy domain SDK**: scene/object helpers that are currently synchronous remain wrapped in `asyncio.to_thread` via `run_dazpy()`; tools never construct DazScriptServer HTTP requests

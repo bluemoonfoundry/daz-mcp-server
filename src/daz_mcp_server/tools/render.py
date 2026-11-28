@@ -141,7 +141,7 @@ async def daz_render_with_camera(
 
 
 
-@mcp.tool()
+@mcp.tool(tags={"desktop"})
 async def daz_get_render_settings() -> dict[str, Any]:
     """Get current render settings and configuration.
 

@@ -5,15 +5,19 @@ provides the stable workflow boundary advertised by the default MCP profile.
 """
 from __future__ import annotations
 
+import re
 from pathlib import Path
 from typing import Any, Literal
 
+import dazpy.exceptions as daz_exc
 from fastmcp.exceptions import ToolError
 from fastmcp.utilities.types import File, Image
 
 from .. import _compat
+from .._client import get_async_daz_client
+from .._errors import handle_dazpy_error
 from .._guides import guide_index, read_guide
-from .._mcp import mcp
+from .._mcp import _execute_raw, mcp, with_args_variable
 from .render import (
     daz_cancel_request,
     daz_get_request_result,
@@ -24,7 +28,31 @@ from .utility import daz_execute_file_async, daz_script_help
 
 
 _DEFAULT_TAG = {"default"}
+_DESKTOP_TAG = {"desktop"}
 _IMAGE_SUFFIXES = {".bmp", ".gif", ".jpeg", ".jpg", ".png", ".webp"}
+
+# A script file name: letters, digits, "_" and "-", starting with a letter or
+# digit, optionally ending in .dsa / .ds. No path separators, so a name can
+# never leave the scripts folder.
+_SCRIPT_NAME = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_-]{0,63}(\.dsa|\.ds)?$", re.IGNORECASE)
+
+# Runs inside DAZ Studio: writes args.content to <Studio temp>/daz-mcp-scripts/
+# <args.file_name>. The content arrives as a job argument, never spliced into
+# this source, so any script text is written byte for byte.
+_WRITE_SCRIPT_JS = """(function () {
+    var args = getArguments()[0];
+    var base = App.getTempPath();
+    var dir = base + "/daz-mcp-scripts";
+    if (!new DzDir(dir).exists() && !new DzDir(base).mkpath("daz-mcp-scripts"))
+        return {error: "cannot create the scripts folder " + dir};
+    var path = dir + "/" + args.file_name;
+    var file = new DzFile(path);
+    if (!file.open(DzFile.WriteOnly | DzFile.Truncate))
+        return {error: "cannot open " + path + " for writing"};
+    file.write(args.content);
+    file.close();
+    return {path: path, bytes: new DzFileInfo(path).size()};
+})()"""
 
 
 @mcp.tool(tags=_DEFAULT_TAG)
@@ -147,6 +175,65 @@ async def daz_fetch_artifact(
     return File(path=path)
 
 
+@mcp.tool(tags=_DESKTOP_TAG)
+async def daz_submit_script(
+    script: str,
+    parameters: dict[str, Any] | None = None,
+    report_file: str | None = None,
+) -> dict[str, Any]:
+    """Queue inline DazScript as a background job and return immediately.
+
+    Use this for long work (renders, simulations, sweeps) when you have the
+    script text but no file on the DAZ Studio machine. ``parameters`` is
+    available in the script as ``args`` (and ``getArguments()[0]``). A
+    top-level ``return`` is a syntax error: wrap the script in an IIFE or end
+    it with an expression, whose value becomes the job's result. Poll the
+    returned request with ``daz_observe_job``. For short calls whose result you
+    want back at once, use ``daz_execute``. A script that needs
+    ``getScriptFileName()`` or relative ``include()`` must be saved first with
+    ``daz_write_script`` and run with ``daz_run_script_job``.
+    """
+    if not script.strip():
+        raise ToolError("The script is empty")
+    try:
+        request_id = await get_async_daz_client().execute_async_submit(
+            with_args_variable(script), parameters, report_file=report_file
+        )
+    except daz_exc.DazError as exc:
+        handle_dazpy_error(exc)
+    return {"request_id": request_id, "status": "queued"}
+
+
+@mcp.tool(tags=_DESKTOP_TAG)
+async def daz_write_script(name: str, script: str) -> dict[str, Any]:
+    """Save DazScript as a file on the DAZ Studio machine and return its path.
+
+    DAZ Studio itself writes the file, into ``daz-mcp-scripts`` under its temp
+    folder, so this works even when you cannot write files on that machine
+    (for example from Claude Desktop). Pass the returned ``path`` to
+    ``daz_run_script_job`` or ``daz_submit_job``. ``name`` is a plain file name
+    (letters, digits, ``_`` and ``-``, up to 64 characters); ``.dsa`` is added
+    unless it ends in ``.dsa`` or ``.ds``. Writing the same name again replaces
+    the file. The file is saved exactly as given: inside it, read job
+    parameters with ``getArguments()[0]`` (a file has no ``args`` variable),
+    and end with an expression rather than a top-level ``return``.
+    """
+    if not _SCRIPT_NAME.match(name or ""):
+        raise ToolError(
+            "The script name must be 1-64 letters, digits, '_' or '-' (starting "
+            "with a letter or digit), optionally ending in .dsa or .ds; got "
+            f"{name!r}"
+        )
+    file_name = name if name.lower().endswith((".dsa", ".ds")) else f"{name}.dsa"
+    payload = await _execute_raw(_WRITE_SCRIPT_JS, {"file_name": file_name, "content": script})
+    result = payload.get("result")
+    if not payload.get("success") or not isinstance(result, dict):
+        raise ToolError(f"DAZ Studio could not write {file_name}: {payload.get('error')}")
+    if result.get("error"):
+        raise ToolError(f"DAZ Studio could not write {file_name}: {result['error']}")
+    return {"path": result.get("path"), "bytes": result.get("bytes")}
+
+
 @mcp.resource("daz://help/{topic}")
 async def daz_help_resource(topic: str) -> str:
     """Read static DazScript guidance without adding another visible tool."""
@@ -167,13 +254,22 @@ def daz_guide_resource(name: str) -> str:
 
 @mcp.resource("daz://profiles")
 def daz_profiles_resource() -> str:
-    """Describe the compact and expert MCP profiles."""
+    """Describe the compact, desktop and expert MCP profiles."""
     return (
         "The default compact profile exposes ten tools. Five job tools: inspect "
         "scene, submit job, observe job, run script job, and fetch artifact. Five "
         "scene recipe tools: recipe validate, plan, apply, observe, and render "
         "(the declarative way to build a scene; see daz://guide/recipe and the "
-        "daz://recipe/schema resource). Set DAZ_MCP_PROFILE=expert in the MCP "
-        "server environment to expose the full low-level DAZ operation catalogue "
-        "as well."
+        "daz://recipe/schema resource).\n\n"
+        "Set DAZ_MCP_PROFILE=desktop for clients that cannot write files on the "
+        "DAZ Studio machine, such as Claude Desktop. It keeps every compact tool "
+        "and adds direct scripting: `daz_execute` runs DazScript and returns its "
+        "result, `daz_submit_script` queues inline DazScript as a job, and "
+        "`daz_write_script` has DAZ Studio save a .dsa file and returns its path "
+        "for `daz_run_script_job`. It also adds `daz_script_help`, "
+        "`daz_validate_script`, `daz_explain_last_error`, `daz_status` and "
+        "read-only scene tools (nodes, selection, cameras, lights, render "
+        "settings).\n\n"
+        "Set DAZ_MCP_PROFILE=expert to expose the full low-level DAZ operation "
+        "catalogue as well."
     )

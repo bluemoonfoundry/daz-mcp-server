@@ -8,6 +8,25 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 Requires dazpy 2.17.0 or later, for the new primitives these tools use
 (node references, property search, material, keyframe and pose helpers).
 
+### Added
+
+- **`desktop` tool profile** (`DAZ_MCP_PROFILE=desktop`) for Claude Desktop and
+  other clients that cannot write files on the DAZ Studio machine. The compact
+  job tools need a `.dsa` file that already exists there, so in Claude Desktop
+  (whose scripts live in its own sandbox) `daz_run_script_job` failed with a
+  path DAZ Studio could not see. `desktop` keeps every compact tool and adds
+  `daz_execute`, two new tools, `daz_submit_script` (queue inline DazScript as
+  a job) and `daz_write_script` (DAZ Studio saves a `.dsa` under its temp
+  folder and returns the path for `daz_run_script_job`), plus
+  `daz_script_help`, `daz_validate_script`, `daz_explain_last_error`,
+  `daz_status` and read-only scene tools. `compact` is unchanged; `expert` now
+  lists 167 tools. The README's Claude Desktop config uses `desktop`.
+- Scene recipe v2 in the recipe tools: asset references (`path`, `product`,
+  `sku`, `find`, `file`, `type`, `resolved`), actor `node` take-over,
+  `presets` and `wearing`. `daz://recipe/schema` now serves the v2 schema
+  (`daz://recipe/schema/1` still serves v1). `find` uses the content browser
+  when `DAZ_BROWSER_URL` is set and reachable, otherwise Studio's search.
+
 ### Changed
 
 - `daz_set_emotion`, `daz_set_body_language` and `daz_direct_gaze` are built
@@ -186,6 +205,15 @@ Requires dazpy 2.17.0 or later, for the new primitives these tools use
   registered script is no longer called by a tool.
 
 ### Fixed
+
+- **`daz_execute`'s `args` did not exist in the script.** The tool documented
+  its `args` as an `args` variable, but the plugin passes arguments only through
+  `getArguments()[0]`, so any script reading `args` failed with
+  `ReferenceError: Can't find variable: args`. `daz_execute` (and the new
+  `daz_submit_script`) now define `args` on the script's first line, so error
+  line numbers are unchanged. The descriptions also say that a top-level
+  `return` is a syntax error (wrap the script in an IIFE or end with an
+  expression), and `daz_execute_file` says a file reads `getArguments()[0]`.
 
 - `daz_set_emotion` did almost nothing on stock Genesis 8 and 9: its morph
   names matched no dial on either figure, and its body adjustment never found

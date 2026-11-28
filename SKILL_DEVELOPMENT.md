@@ -20,7 +20,7 @@ The content browser (`DAZ_CONTENT_BROWSER_URL`) is a separate service, reached w
 - `_shots.py` — scene lookups and result helpers for the cinematic tools (shots themselves come from `dazpy.shot_library`)
 - `_emotions.py`, `genesis_bones.json` — emotion definitions and per-generation bone names
 - `_ui_automation.py` — Windows UI Automation for `daz_save_wearable_preset`
-- `tools/__init__.py` — imports all 16 tool modules (165 tools total)
+- `tools/__init__.py` — imports all 16 tool modules (167 tools total)
 - `tools/<module>.py` — each module imports `mcp` from `_mcp` and registers `@mcp.tool()` functions
 
 ## Adding a New Tool

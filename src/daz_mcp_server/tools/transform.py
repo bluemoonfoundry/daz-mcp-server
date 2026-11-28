@@ -18,7 +18,7 @@ def _node_info(info: NodeInfo) -> dict[str, Any]:
 
 
 
-@mcp.tool()
+@mcp.tool(tags={"desktop"})
 async def daz_get_node(node_label: str) -> dict[str, Any]:
     """Return all numeric properties of a scene node.
 
@@ -54,7 +54,7 @@ async def daz_get_node(node_label: str) -> dict[str, Any]:
     return await _run_tool(_run)
 
 
-@mcp.tool()
+@mcp.tool(tags={"desktop"})
 async def daz_find_nodes(query: str) -> dict[str, Any]:
     """List every scene node whose label or internal name equals ``query``.
 

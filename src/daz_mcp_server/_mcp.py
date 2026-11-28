@@ -45,6 +45,18 @@ def _execution_payload(result: Any) -> dict[str, Any]:
     }
 
 
+# The plugin passes a request's ``args`` only through ``getArguments()[0]``; it
+# defines no ``args`` variable. Model-facing script tools document one, so they
+# prepend this on the script's first line (no newline: error line numbers in a
+# script stay where the model wrote them).
+ARGS_PRELUDE = "var args = getArguments()[0]; "
+
+
+def with_args_variable(script: str) -> str:
+    """``script`` with an ``args`` variable bound to its arguments."""
+    return ARGS_PRELUDE + script
+
+
 async def _execute_raw(script: str, args: dict[str, Any] | None = None) -> dict[str, Any]:
     """Execute inline source through dazpy and preserve the diagnostic shape."""
     try:
